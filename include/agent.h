@@ -33,6 +33,7 @@ void add_message(char *text, char *raw_text, MessageRole role);
 int message_add_image(Message *message, const char *mime_type,
                       const char *base64_data);
 void append_to_last_message(const char *text, MessageRole role);
+void append_to_last_message_ui(const char *text, MessageRole role);
 Messages *get_messages(void);
 void clear_messages(void);
 unsigned long agent_messages_revision(void);

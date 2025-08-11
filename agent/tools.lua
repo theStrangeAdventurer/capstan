@@ -5,6 +5,7 @@ local mcp_client = require("agent.mcp")
 local workspace = require("agent.workspace")
 local redact = require("agent.redact")
 local utf8_sanitize = require("agent.utf8")
+local ui = require("agent.ui")
 
 local M = {}
 
@@ -584,11 +585,11 @@ local function run_subagents(args, run_ctx)
     local max_attempts = subagent_max_attempts()
     local max_result_bytes = subagent_max_result_bytes()
 
-    agent.append(string.format("\n\n⚙ subagents: running %d concurrent, %d total\n", max_concurrent, #args.tasks), "agent")
+    ui.append(string.format("\n\n⚙ subagents: running %d concurrent, %d total\n", max_concurrent, #args.tasks), "agent")
     for _, task in ipairs(args.tasks) do
-        agent.append("  " .. task_label(task) .. "\n", "agent")
+        ui.append("  " .. task_label(task) .. "\n", "agent")
     end
-    agent.append("\n", "agent")
+    ui.append("\n", "agent")
 
     local function start_one(index, attempt)
         attempt = attempt or 1
@@ -643,7 +644,7 @@ local function run_subagents(args, run_ctx)
                 max_attempts,
                 safe_error
             ))
-            agent.append(string.format("  %s - retry %d/%d after %s\n",
+            ui.append(string.format("  %s - retry %d/%d after %s\n",
                 state.result.id,
                 attempt + 1,
                 max_attempts,
@@ -742,15 +743,15 @@ local function run_subagents(args, run_ctx)
     local group_finished_at = now_ms()
     local group_duration_ms = math.max(0, math.floor(group_finished_at - group_started_at))
 
-    agent.append(string.format("\n\n⚙ subagents: done %d/%d, error %d/%d, %.1fs\n",
+    ui.append(string.format("\n\n⚙ subagents: done %d/%d, error %d/%d, %.1fs\n",
         done_count, #results, error_count, #results, group_duration_ms / 1000.0), "agent")
     for _, result in ipairs(results) do
         local status = result.ok and "done" or "error"
         local turns_label = result.turns == 1 and "turn" or "turns"
-        agent.append(string.format("  %s - %s, %d %s, %.1fs\n",
+        ui.append(string.format("  %s - %s, %d %s, %.1fs\n",
             result.id, status, result.turns or 0, turns_label, (result.duration_ms or 0) / 1000.0), "agent")
     end
-    agent.append("\n", "agent")
+    ui.append("\n", "agent")
 
     local output = {
         ok = error_count == 0,
@@ -1298,7 +1299,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
     ))
     local function append_status(text)
         if run_ctx and run_ctx.silent_tools then return end
-        agent.append(text, "agent")
+        ui.append(text, "agent")
     end
     local openai_tool_calls = {}
     for _, tc in ipairs(tool_calls) do
@@ -1351,7 +1352,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
             if decode_err then
                 result_content = decode_err
                 logging.runtime_log("tool", string.format("invalid_args name=%s error=%s", tc.name, logging.compact(decode_err, 240)))
-                append_status(string.format("\n\n⚙ %s: invalid arguments — error\n\n", tc.name))
+                append_status(string.format("\n\n⚙ %s: invalid arguments — error: %s\n\n", tc.name, logging.compact(decode_err, 160)))
             else
                 local target = tool_call_target(tc.name, args)
                 local permission_tool = tool_permission_name(tc.name, run_ctx)

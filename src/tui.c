@@ -1,6 +1,7 @@
 #include "tui.h"
 #include "agent.h"
 #include "app_config.h"
+#include "clipboard.h"
 #include "curses.h"
 #include "dispatch.h"
 #include "diff_highlight.h"
@@ -12,6 +13,8 @@
 #include "popup.h"
 #include "scroll.h"
 #include "start_screen.h"
+#include "tool_status.h"
+#include "tui_layout.h"
 #include "utils.h"
 #include "visual.h"
 #include <stdio.h>
@@ -64,11 +67,11 @@ void init_tui(void) {
     init_pair(10, COLOR_BLUE, -1);
     init_pair(11, COLOR_BLACK, COLOR_WHITE);
     if (COLORS >= 256) {
-      init_pair(12, 71, 22);
-      init_pair(13, 131, 52);
+      init_pair(12, 65, -1);
+      init_pair(13, 95, -1);
     } else {
-      init_pair(12, COLOR_BLACK, COLOR_GREEN);
-      init_pair(13, COLOR_BLACK, COLOR_RED);
+      init_pair(12, COLOR_GREEN, -1);
+      init_pair(13, COLOR_RED, -1);
     }
     g_diff_add_color_pair = 12;
     g_diff_del_color_pair = 13;
@@ -228,11 +231,6 @@ static int update_diff_state(int state, const char *line, int len) {
     }
   }
   return 0;
-}
-
-static int starts_tool_status_line(const char *line) {
-  return strncmp(line, "⚙", strlen("⚙")) == 0 ||
-         strncmp(line, "  $ ", 4) == 0;
 }
 
 static void render_status_pair(WINDOW *win, int y, int x, const char *label,
@@ -544,12 +542,11 @@ void render_all(void) {
             (int)(line_end - logical_line_start));
       }
 
-      if (!is_user && p == logical_line_start) {
-        if (line_end == logical_line_start) {
-          in_tool_status_block = 0;
-        } else if (starts_tool_status_line(logical_line_start)) {
-          in_tool_status_block = 1;
-        }
+      int logical_line_complete = *line_end == '\n' || *line_end == '\0';
+      int logical_line_len = (int)(line_end - logical_line_start);
+      if (!is_user && p == logical_line_start &&
+          tool_status_starts_line(logical_line_start, logical_line_len)) {
+        in_tool_status_block = 1;
       }
 
       if (global_line >= top_line && win_row < msg_h) {
@@ -558,15 +555,15 @@ void render_all(void) {
             !is_user && (current_diff_state == 3 || current_diff_state == 4)
                 ? diff_line_color_pair(logical_line_start)
                 : 0;
-        int tool_status_attrs = A_DIM | A_ITALIC;
+        int tool_status_attrs = A_ITALIC;
         if (g_tool_status_color_pair)
           tool_status_attrs |= COLOR_PAIR(g_tool_status_color_pair);
         if (is_tool_status) {
+          wattroff(msg_win, A_DIM);
           wattron(msg_win, tool_status_attrs);
         }
         if (diff_pair) {
-          wattroff(msg_win, A_DIM);
-          wattron(msg_win, COLOR_PAIR(diff_pair));
+          wattron(msg_win, A_DIM | COLOR_PAIR(diff_pair));
           mvwhline(msg_win, win_row, 0, ' ', inner_w);
         }
 
@@ -574,12 +571,11 @@ void render_all(void) {
           mvwhline(msg_win, win_row, 0, ' ', inner_w);
         mvwaddnstr(msg_win, win_row, MSG_PAD_H, p, line_end - p);
 
-        if (diff_pair) {
+        if (diff_pair)
           wattroff(msg_win, COLOR_PAIR(diff_pair));
-          wattron(msg_win, A_DIM);
-        }
         if (is_tool_status) {
           wattroff(msg_win, tool_status_attrs);
+          wattron(msg_win, A_DIM);
         }
 
         if (visual_is_active() && global_line >= sel_sl &&
@@ -603,6 +599,11 @@ void render_all(void) {
         }
 
         win_row++;
+      }
+
+      if (!is_user && in_tool_status_block && logical_line_complete &&
+          tool_status_ends_line(logical_line_start, logical_line_len)) {
+        in_tool_status_block = 0;
       }
 
       if (*line_end == '\n') {
@@ -946,6 +947,58 @@ void render_all(void) {
   delwin(input_win);
 }
 
+void tui_paste_clipboard_image(void) {
+  char error[256];
+  size_t size = 0;
+  unsigned char *data = clipboard_read_image(&size, error, sizeof(error));
+  if (!data) {
+    popup_show_message_ms("Clipboard", error[0] ? error : "No image found", 1,
+                          1600);
+    return;
+  }
+  if (size > CLIPBOARD_IMAGE_MAX_BYTES) {
+    free(data);
+    popup_show_message_ms("Clipboard", "Image exceeds the 10 MiB limit", 1,
+                          1600);
+    return;
+  }
+  char *base64 = clipboard_base64_encode(data, size);
+  free(data);
+  if (!base64 || !input_add_image("image/png", base64)) {
+    free(base64);
+    popup_show_message_ms("Clipboard", "Could not attach image", 1, 1600);
+    return;
+  }
+  free(base64);
+  char message[64];
+  snprintf(message, sizeof(message), "Image %zu attached", input_image_count());
+  popup_show_message_ms("Clipboard", message, 0, 700);
+}
+
+int tui_handle_input_shortcut(int ch) {
+  if (ch == TUI_KEY_CTRL_V) {
+    tui_paste_clipboard_image();
+    return 1;
+  }
+  if (ch == TUI_KEY_CTRL_W) {
+    input_delete_word_backward();
+    return 1;
+  }
+  if (ch == TUI_KEY_CTRL_U) {
+    input_delete_to_line_start();
+    return 1;
+  }
+  return 0;
+}
+
+int tui_focus_input_at_point(int rows, int cols, int y, int x) {
+  if (!tui_layout_point_in_input(rows, cols, y, x))
+    return 0;
+  mode_set(FOCUS_INPUT);
+  visual_exit();
+  return 1;
+}
+
 void tui_pump_blocking(void) {
   if (!stdscr)
     return;
@@ -957,13 +1010,23 @@ void tui_pump_blocking(void) {
       continue;
     }
 
+    if (mode_get() == FOCUS_INPUT && tui_handle_input_shortcut(ch))
+      continue;
+
     if (ch == KEY_MOUSE) {
       MEVENT event;
       if (getmouse(&event) == OK) {
-        if (event.bstate & BUTTON4_PRESSED)
+        int rows, cols;
+        getmaxyx(stdscr, rows, cols);
+        if ((event.bstate &
+             (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) &&
+            tui_focus_input_at_point(rows, cols, event.y, event.x)) {
+          continue;
+        } else if (event.bstate & BUTTON4_PRESSED) {
           scroll_up(3);
-        else if (event.bstate & BUTTON5_PRESSED)
+        } else if (event.bstate & BUTTON5_PRESSED) {
           scroll_down(3);
+        }
       }
       continue;
     }

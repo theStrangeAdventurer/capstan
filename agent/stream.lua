@@ -187,6 +187,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local accumulated_text = ""
     local accumulated_reasoning = ""
     local accumulated_reasoning_details = {}
+    local reasoning_detail_positions = {}
     local reasoning_active = false
     local leaked_think_pending = ""
     local leaked_think_active = false
@@ -265,6 +266,34 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
         return table.concat(out)
     end
 
+    local function merge_reasoning_detail(detail)
+        if type(detail) ~= "table" then return end
+        local index = tonumber(detail.index)
+        if index == nil then
+            table.insert(accumulated_reasoning_details, detail)
+            return
+        end
+
+        local position = reasoning_detail_positions[index]
+        if not position then
+            local copy = {}
+            for key, value in pairs(detail) do copy[key] = value end
+            table.insert(accumulated_reasoning_details, copy)
+            reasoning_detail_positions[index] = #accumulated_reasoning_details
+            return
+        end
+
+        local merged = accumulated_reasoning_details[position]
+        for key, value in pairs(detail) do
+            if (key == "text" or key == "summary" or key == "data") and
+               type(value) == "string" then
+                merged[key] = tostring(merged[key] or "") .. value
+            elseif value ~= nil then
+                merged[key] = value
+            end
+        end
+    end
+
     local function process_chunk(chunk)
         if chunk.type == "provider_error" then
             provider_error = provider_error or logging.safe_error(chunk.error, 500)
@@ -275,7 +304,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             accumulated_reasoning = accumulated_reasoning .. reasoning_content
             reasoning_token_estimate = reasoning_token_estimate + tokens.estimate_text_tokens(reasoning_content)
             for _, detail in ipairs(chunk.reasoning_details or {}) do
-                table.insert(accumulated_reasoning_details, detail)
+                merge_reasoning_detail(detail)
             end
             if not provider.suppress_agent_state and provider.context_limit and provider.context_limit > 0 then
                 local completion_estimate = text_token_estimate + reasoning_token_estimate

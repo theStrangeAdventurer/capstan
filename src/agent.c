@@ -157,6 +157,21 @@ static Message *find_last_message_by_role(MessageRole role) {
   return NULL;
 }
 
+static char *appended_copy(const char *existing, const char *suffix) {
+  size_t old_len = existing ? strlen(existing) : 0;
+  size_t add_len = strlen(suffix);
+  if (add_len > ((size_t)-1) - old_len - 1)
+    return NULL;
+
+  char *result = malloc(old_len + add_len + 1);
+  if (!result)
+    return NULL;
+  if (old_len > 0)
+    memcpy(result, existing, old_len);
+  memcpy(result + old_len, suffix, add_len + 1);
+  return result;
+}
+
 void append_to_last_message(const char *text, MessageRole role) {
   if (!text)
     return;
@@ -164,30 +179,63 @@ void append_to_last_message(const char *text, MessageRole role) {
   Message *m = find_last_message_by_role(role);
 
   if (!m) {
-    size_t len = strlen(text);
-    char *copy = malloc(len + 1);
+    char *copy = appended_copy(NULL, text);
     if (!copy)
       return;
-    memcpy(copy, text, len + 1);
     add_message(copy, copy, role);
     return;
   }
 
-  size_t old_len = m->raw_text ? strlen(m->raw_text) : 0;
-  size_t add_len = strlen(text);
+  if (m->text == m->raw_text) {
+    size_t old_len = m->raw_text ? strlen(m->raw_text) : 0;
+    size_t add_len = strlen(text);
+    if (add_len > ((size_t)-1) - old_len - 1)
+      return;
+    char *combined = realloc(m->raw_text, old_len + add_len + 1);
+    if (!combined)
+      return;
+    memcpy(combined + old_len, text, add_len + 1);
+    m->raw_text = combined;
+    m->text = combined;
+  } else {
+    char *new_raw = appended_copy(m->raw_text, text);
+    char *new_ui = appended_copy(m->text, text);
+    if (!new_raw || !new_ui) {
+      free(new_raw);
+      free(new_ui);
+      return;
+    }
+    free(m->raw_text);
+    free(m->text);
+    m->raw_text = new_raw;
+    m->text = new_ui;
+  }
+  g_messages_revision++;
+}
 
-  if (add_len > ((size_t)-1) - old_len - 1)
+void append_to_last_message_ui(const char *text, MessageRole role) {
+  if (!text)
     return;
 
-  char *new_ptr = realloc(m->raw_text, old_len + add_len + 1);
-
-  if (!new_ptr)
+  Message *m = find_last_message_by_role(role);
+  if (!m) {
+    char *ui = appended_copy(NULL, text);
+    char *raw = appended_copy(NULL, "");
+    if (!ui || !raw) {
+      free(ui);
+      free(raw);
+      return;
+    }
+    add_message(ui, raw, role);
     return;
+  }
 
-  m->raw_text = new_ptr;
-  m->text = new_ptr;
-  memcpy(m->raw_text + old_len, text, add_len);
-  m->raw_text[old_len + add_len] = '\0';
+  char *new_ui = appended_copy(m->text, text);
+  if (!new_ui)
+    return;
+  if (m->text != m->raw_text)
+    free(m->text);
+  m->text = new_ui;
   g_messages_revision++;
 }
 
@@ -279,17 +327,24 @@ static int l_agent_replace_compacted_context(lua_State *L) {
   return 0;
 }
 
+static MessageRole l_agent_message_role(lua_State *L) {
+  if (lua_gettop(L) >= 2) {
+    const char *role = luaL_checkstring(L, 2);
+    if (strcmp(role, "agent") == 0)
+      return MSG_AGENT;
+  }
+  return MSG_USER;
+}
+
 static int l_agent_append(lua_State *L) {
   const char *text = luaL_checkstring(L, 1);
-  MessageRole role = MSG_USER;
+  append_to_last_message(text, l_agent_message_role(L));
+  return 0;
+}
 
-  if (lua_gettop(L) >= 2) {
-    const char *role_str = luaL_checkstring(L, 2);
-    if (strcmp(role_str, "agent") == 0)
-      role = MSG_AGENT;
-  }
-
-  append_to_last_message(text, role);
+static int l_agent_append_ui(lua_State *L) {
+  const char *text = luaL_checkstring(L, 1);
+  append_to_last_message_ui(text, l_agent_message_role(L));
   return 0;
 }
 
@@ -297,6 +352,8 @@ void agent_init(lua_State *L) {
   lua_newtable(L);
   lua_pushcfunction(L, l_agent_append);
   lua_setfield(L, -2, "append");
+  lua_pushcfunction(L, l_agent_append_ui);
+  lua_setfield(L, -2, "append_ui");
   lua_pushcfunction(L, l_agent_set_provider_info);
   lua_setfield(L, -2, "set_info");
   lua_pushcfunction(L, l_agent_set_profile_info);

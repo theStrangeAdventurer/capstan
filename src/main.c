@@ -47,8 +47,6 @@ static int g_mouse_selecting_messages = 0;
 #define ACTIVE_RENDER_INTERVAL_MS 16
 #define IDLE_RENDER_INTERVAL_MS 50
 #define KEY_CTRL_D 0x04
-#define KEY_CTRL_U 0x15
-#define KEY_CTRL_V 0x16
 
 static long long main_now_ms(void) {
   struct timeval tv;
@@ -107,6 +105,16 @@ static int read_exact_after_escape(const char *suffix) {
     }
   }
   return 1;
+}
+
+static int read_backspace_after_escape(void) {
+  int ch;
+  if (!getch_wait_ms(&ch, 20))
+    return 0;
+  if (ch == 127 || ch == 8 || ch == KEY_BACKSPACE)
+    return 1;
+  ungetch(ch);
+  return 0;
 }
 
 static int read_bracketed_paste(void) {
@@ -269,34 +277,6 @@ static void flash_copy_active_selection(void) {
   popup_show_message_ms("Copied", "Text copied", 0, 500);
 }
 
-static void paste_clipboard_image(void) {
-  char error[256];
-  size_t size = 0;
-  unsigned char *data = clipboard_read_image(&size, error, sizeof(error));
-  if (!data) {
-    popup_show_message_ms("Clipboard", error[0] ? error : "No image found", 1,
-                          1600);
-    return;
-  }
-  if (size > CLIPBOARD_IMAGE_MAX_BYTES) {
-    free(data);
-    popup_show_message_ms("Clipboard", "Image exceeds the 10 MiB limit", 1,
-                          1600);
-    return;
-  }
-  char *base64 = clipboard_base64_encode(data, size);
-  free(data);
-  if (!base64 || !input_add_image("image/png", base64)) {
-    free(base64);
-    popup_show_message_ms("Clipboard", "Could not attach image", 1, 1600);
-    return;
-  }
-  free(base64);
-  char message[64];
-  snprintf(message, sizeof(message), "Image %zu attached", input_image_count());
-  popup_show_message_ms("Clipboard", message, 0, 700);
-}
-
 static int stop_active_stream(void) {
   if (!http_is_loading())
     return 0;
@@ -318,6 +298,15 @@ static void handle_mouse_event(MEVENT *event) {
   }
   if (event->bstate & BUTTON5_PRESSED) {
     scroll_down(3);
+    return;
+  }
+
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+  if ((event->bstate &
+       (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) &&
+      tui_focus_input_at_point(rows, cols, event->y, event->x)) {
+    g_mouse_selecting_messages = 0;
     return;
   }
 
@@ -1008,6 +997,8 @@ int main(int argc, char *argv[]) {
 
   set_escdelay(50);
   initscr();
+  /* Deliver control keys immediately instead of waiting for a cooked line. */
+  cbreak();
   noecho();
   timeout(0);
   keypad(stdscr, TRUE);
@@ -1106,15 +1097,19 @@ int main(int argc, char *argv[]) {
     }
 
     if (ch == APP_KEY_ESCAPE && mode_get() == FOCUS_INPUT) {
+      if (read_backspace_after_escape()) {
+        input_delete_word_backward();
+        render_all();
+        continue;
+      }
       if (read_exact_after_escape("[200~")) {
         read_bracketed_paste();
         render_all();
         continue;
-      } else {
-        stop_active_stream();
-        render_all();
-        continue;
       }
+      stop_active_stream();
+      render_all();
+      continue;
     }
 
     if (ch == '\t') {
@@ -1135,7 +1130,7 @@ int main(int argc, char *argv[]) {
         int vc_line;
         visual_get_cursor(&vc_line, NULL);
         visual_set_cursor_line(vc_line - 5);
-      } else if (ch == KEY_CTRL_U) {
+      } else if (ch == TUI_KEY_CTRL_U) {
         int half_page = message_half_page_lines();
         scroll_up(half_page);
         int vc_line;
@@ -1188,8 +1183,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    if (ch == KEY_CTRL_V) {
-      paste_clipboard_image();
+    if (tui_handle_input_shortcut(ch)) {
       render_all();
       continue;
     }

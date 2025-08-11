@@ -500,7 +500,12 @@ local function async_rpc_poll(server)
     if err then
       return false, tostring(err) .. (err_body and (": " .. logging.compact(err_body, 500)) or "")
     end
-    return decode_http_rpc_response(server, pending.method, pending.id, response)
+    local result, decode_err = decode_http_rpc_response(server, pending.method,
+                                                        pending.id, response)
+    if decode_err then
+      return false, decode_err
+    end
+    return result
   end
 
   for _ = 1, 8 do

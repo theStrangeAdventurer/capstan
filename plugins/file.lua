@@ -220,17 +220,15 @@ plugin.tool = {
 	parameters = {
 		type = "object",
 		properties = {
-			path = { type = "string", description = "Path to one file or directory to read" },
+			path = { type = "string", description = "Path to one file or directory to read. Either path or paths must be provided." },
 			paths = {
 				type = "array",
 				items = { type = "string" },
-				description = "Several non-sensitive paths inside the workspace to read together"
+				description = "Several non-sensitive paths inside the workspace to read together. Either path or paths must be provided."
 			}
 		},
-		anyOf = {
-			{ required = { "path" } },
-			{ required = { "paths" } }
-		}
+		minProperties = 1,
+		additionalProperties = false,
 	},
 	permission = "file_read"
 }

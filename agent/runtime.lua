@@ -9,6 +9,7 @@ local utf8_sanitize = require("agent.utf8")
 local stream = require("agent.stream")
 local tokens = require("agent.tokens")
 local tools_runtime = require("agent.tools")
+local ui = require("agent.ui")
 local workspace = require("agent.workspace")
 
 local M = provider_config.build()
@@ -518,7 +519,7 @@ function M.run(opts, callbacks)
         finished = true
         logging.runtime_log("tool_guard", logging.compact(message, 500))
         if agent and type(agent.append) == "function" and opts.silent_tools ~= true then
-            agent.append("\n[stopped: " .. message .. "]\n", "agent")
+            ui.append("\n[stopped: " .. message .. "]\n")
         end
         if callbacks.on_error then callbacks.on_error(message) end
         finish({ok = false, error = message, text = "", messages = current_msgs or {}, turns = turns})
@@ -562,7 +563,7 @@ function M.run(opts, callbacks)
         local function publish_status(text)
             if opts.silent_tools == true or text == "" then return end
             if agent and type(agent.append) == "function" then
-                agent.append(text, "agent")
+                ui.append(text)
             end
         end
 
