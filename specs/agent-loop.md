@@ -384,7 +384,7 @@ must be opt-in with a cheap no-hook fast path.
 ## Performance Constraints
 
 - SSE parsing stays in Lua because provider semantics are policy, not mechanics.
-- Raw SSE logging remains opt-in via `LOG_LEVEL=trace` because stream payloads
+- Raw SSE logging remains opt-in via `CAPSTAN_LOG_LEVEL=trace` because stream payloads
   can be large and sensitive.
 - Per-chunk work must stay bounded. Token accounting should avoid rescanning the
   full accumulated answer on every chunk.

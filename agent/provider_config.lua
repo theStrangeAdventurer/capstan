@@ -15,8 +15,11 @@ local function env_context_limit(...)
 end
 
 function M.build()
-    local env_provider = os.getenv("AI_PROVIDER")
-    local env_openrouter_model = os.getenv("OPENROUTER_MODEL")
+    local env_provider = os.getenv("CAPSTAN_PROVIDER")
+    if env_provider == "" then env_provider = nil end
+    local env_model = os.getenv("CAPSTAN_MODEL")
+    if env_model == "" then env_model = nil end
+    local env_context_limit_value = env_context_limit("CAPSTAN_CONTEXT_LIMIT")
     local config = (_G.capstan and _G.capstan.config) or {}
     local runtime = {
         provider = env_provider or state.provider() or config.provider or "deepseek",
@@ -33,21 +36,17 @@ function M.build()
                     ["deepseek-v4-flash"] = {"minimal", "low", "medium", "high", "max"},
                     ["deepseek-v4-pro"] = {"minimal", "low", "medium", "high", "max"},
                 },
-                context_limit = env_context_limit("DEEPSEEK_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT"),
+                context_limit = 0,
             },
             openrouter = {
                 api_key = os.getenv("OPENROUTER_API_KEY"),
                 endpoint = "https://openrouter.ai/api/v1/chat/completions",
-                model = env_openrouter_model or "minimax/minimax-m3",
+                model = "minimax/minimax-m3",
                 default_reasoning_efforts = {"low", "medium", "high"},
-                context_limit = env_context_limit("OPENROUTER_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT"),
+                context_limit = 0,
             },
         },
     }
-    if env_openrouter_model and env_openrouter_model ~= "" then
-        runtime.env_model_overrides.openrouter = true
-    end
-
     if type(config.providers) == "table" then
         for name, overrides in pairs(config.providers) do
             if type(name) == "string" and type(overrides) == "table" then
@@ -57,6 +56,10 @@ function M.build()
                 end
             end
         end
+    end
+
+    if env_model and env_model ~= "" and runtime.providers[runtime.provider] then
+        runtime.env_model_overrides[runtime.provider] = true
     end
 
     runtime.profile_models = {}
@@ -119,17 +122,12 @@ function M.build()
     if os.getenv("OPENROUTER_API_KEY") and runtime.providers.openrouter then
         runtime.providers.openrouter.api_key = os.getenv("OPENROUTER_API_KEY")
     end
-    if env_openrouter_model and runtime.providers.openrouter then
-        runtime.providers.openrouter.model = env_openrouter_model
+    local active_provider = runtime.providers[runtime.provider]
+    if active_provider and env_model and env_model ~= "" then
+        active_provider.model = env_model
     end
-
-    local deepseek_context_limit = env_context_limit("DEEPSEEK_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT")
-    if deepseek_context_limit > 0 and runtime.providers.deepseek then
-        runtime.providers.deepseek.context_limit = deepseek_context_limit
-    end
-    local openrouter_context_limit = env_context_limit("OPENROUTER_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT")
-    if openrouter_context_limit > 0 and runtime.providers.openrouter then
-        runtime.providers.openrouter.context_limit = openrouter_context_limit
+    if active_provider and env_context_limit_value > 0 then
+        active_provider.context_limit = env_context_limit_value
     end
 
     return runtime

@@ -35,7 +35,7 @@ The same plugin exposes a `logs` model tool so the agent can inspect recent
 runtime events when debugging failed tools, plugins, hooks, or API calls. If
 `n` or `limit` is omitted, it shows the last 80 lines. The maximum is 500 lines.
 
-Runtime logging honors `LOG_LEVEL`. Supported values are `error`, `warn`,
+Runtime logging honors `CAPSTAN_LOG_LEVEL`. Supported values are `error`, `warn`,
 `info`, `debug`, and `trace`. The default is `info`, which keeps high-signal
 lifecycle, tool, permission, and error events. `debug` adds low-level
 stream/tool-call reconstruction events. `trace` also enables raw SSE/event
@@ -108,7 +108,7 @@ checks should print only boolean/status information.
 - Continuation after tool results
 - [Hook](hooks.md) errors with stage and source
 
-Set `LOG_LEVEL=trace` to include raw SSE chunks and parsed SSE event payloads
+Set `CAPSTAN_LOG_LEVEL=trace` to include raw SSE chunks and parsed SSE event payloads
 in the log. This is intentionally opt-in because raw stream logs can become
 large and may include full model output. Raw stream logs still pass through the
 best-effort redactor, but this mode should be treated as sensitive debug output.

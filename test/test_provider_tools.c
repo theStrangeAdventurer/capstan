@@ -2234,7 +2234,7 @@ static MunitResult test_provider_env_provider_overrides_state_provider(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
-  setenv("AI_PROVIDER", "openrouter", 1);
+  setenv("CAPSTAN_PROVIDER", "openrouter", 1);
   lua_State *L = new_provider_state();
   reset_captures(L);
   set_capstan_provider_config(L);
@@ -2248,7 +2248,7 @@ static MunitResult test_provider_env_provider_overrides_state_provider(
 
   munit_assert_true(strstr(captured_body, "\"model\":\"config/model\"") != NULL);
 
-  unsetenv("AI_PROVIDER");
+  unsetenv("CAPSTAN_PROVIDER");
   reset_captures(L);
   lua_close(L);
   return MUNIT_OK;
@@ -2258,7 +2258,8 @@ static MunitResult test_provider_env_model_overrides_state_model(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
-  setenv("OPENROUTER_MODEL", "env/model", 1);
+  setenv("CAPSTAN_PROVIDER", "openrouter", 1);
+  setenv("CAPSTAN_MODEL", "env/model", 1);
   lua_State *L = new_provider_state();
   reset_captures(L);
   set_capstan_provider_config(L);
@@ -2272,7 +2273,34 @@ static MunitResult test_provider_env_model_overrides_state_model(
 
   munit_assert_true(strstr(captured_body, "\"model\":\"env/model\"") != NULL);
 
-  unsetenv("OPENROUTER_MODEL");
+  unsetenv("CAPSTAN_MODEL");
+  unsetenv("CAPSTAN_PROVIDER");
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_provider_env_context_limit_applies_to_active_provider(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  setenv("CAPSTAN_PROVIDER", "openrouter", 1);
+  setenv("CAPSTAN_CONTEXT_LIMIT", "4242", 1);
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dostring(
+      L,
+      "local runtime = require('agent.provider_config').build()\n"
+      "env_context_limit = runtime.providers.openrouter.context_limit\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "env_context_limit");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 4242);
+  lua_pop(L, 1);
+
+  unsetenv("CAPSTAN_CONTEXT_LIMIT");
+  unsetenv("CAPSTAN_PROVIDER");
   reset_captures(L);
   lua_close(L);
   return MUNIT_OK;
@@ -3620,7 +3648,7 @@ static MunitResult test_stream_tool_delta_logs_only_at_debug(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
-  munit_assert_int(setenv("LOG_LEVEL", "debug", 1), ==, 0);
+  munit_assert_int(setenv("CAPSTAN_LOG_LEVEL", "debug", 1), ==, 0);
 
   lua_State *L = new_provider_state();
   reset_captures(L);
@@ -3645,7 +3673,7 @@ static MunitResult test_stream_tool_delta_logs_only_at_debug(
 
   reset_captures(L);
   lua_close(L);
-  unsetenv("LOG_LEVEL");
+  unsetenv("CAPSTAN_LOG_LEVEL");
   return MUNIT_OK;
 }
 
@@ -6125,6 +6153,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_env_model_overrides_state_model",
      test_provider_env_model_overrides_state_model, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_env_context_limit_applies_to_active_provider",
+     test_provider_env_context_limit_applies_to_active_provider, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_set_for_persists_active_provider",
      test_provider_models_set_for_persists_active_provider, NULL, NULL,

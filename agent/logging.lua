@@ -30,7 +30,7 @@ local function normalize_level(value)
 end
 
 function M.level()
-    return normalize_level(os.getenv("LOG_LEVEL")) or "info"
+    return normalize_level(os.getenv("CAPSTAN_LOG_LEVEL")) or "info"
 end
 
 function M.enabled(level)

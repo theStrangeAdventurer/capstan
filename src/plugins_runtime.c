@@ -8,6 +8,7 @@
 #include "log.h"
 #include "permit.h"
 #include "popup.h"
+#include "project_instructions.h"
 #include "skills.h"
 #include "wiki.h"
 #include <errno.h>
@@ -260,49 +261,27 @@ static void load_system_prompt(const PluginsInitOptions *options) {
   char *wiki_prompt = disable_wiki ? NULL : wiki_build_prompt(wiki_path);
   char *wiki_summary = disable_wiki ? NULL : wiki_build_summary(wiki_path);
 
-  char agents_path[512];
-  char *agents_content = NULL;
-  size_t agents_content_size = 0;
-  int agents_n =
-      snprintf(agents_path, sizeof(agents_path), "%s/AGENTS.md",
-               app_workspace_root());
-  if (!isolated && agents_n > 0 && (size_t)agents_n < sizeof(agents_path))
-    agents_content = plugins_read_file(agents_path, &agents_content_size);
-
-  char *agents_prompt = NULL;
-  size_t agents_prompt_size = 0;
-  if (agents_content) {
-    const char *prefix = "\n\n# Project Instructions\nPath: ";
-    const char *middle = "\n\n";
-    agents_prompt_size = strlen(prefix) + strlen(agents_path) +
-                         strlen(middle) + agents_content_size;
-    agents_prompt = malloc(agents_prompt_size + 1);
-    if (agents_prompt) {
-      size_t pos = 0;
-      memcpy(agents_prompt + pos, prefix, strlen(prefix));
-      pos += strlen(prefix);
-      memcpy(agents_prompt + pos, agents_path, strlen(agents_path));
-      pos += strlen(agents_path);
-      memcpy(agents_prompt + pos, middle, strlen(middle));
-      pos += strlen(middle);
-      memcpy(agents_prompt + pos, agents_content, agents_content_size);
-      pos += agents_content_size;
-      agents_prompt[pos] = '\0';
-    } else {
-      agents_prompt_size = 0;
-    }
-  }
+  char config_dir[512];
+  const char *instruction_config_dir =
+      app_config_dir(config_dir, sizeof(config_dir)) == 0 ? config_dir : NULL;
+  char *instructions_prompt = isolated
+      ? NULL
+      : project_instructions_build_prompt(app_workspace_root(),
+                                          instruction_config_dir, home);
+  size_t instructions_size =
+      instructions_prompt ? strlen(instructions_prompt) : 0;
 
   size_t skills_size = skills_prompt ? strlen(skills_prompt) : 0;
   size_t wiki_size = wiki_prompt ? strlen(wiki_prompt) : 0;
-  char *combined = malloc(size + agents_prompt_size + skills_size + wiki_size + 1);
+  char *combined =
+      malloc(size + instructions_size + skills_size + wiki_size + 1);
   if (combined) {
     size_t pos = 0;
     memcpy(combined + pos, data, size);
     pos += size;
-    if (agents_prompt_size) {
-      memcpy(combined + pos, agents_prompt, agents_prompt_size);
-      pos += agents_prompt_size;
+    if (instructions_size) {
+      memcpy(combined + pos, instructions_prompt, instructions_size);
+      pos += instructions_size;
     }
     if (skills_size) {
       memcpy(combined + pos, skills_prompt, skills_size);
@@ -353,8 +332,7 @@ static void load_system_prompt(const PluginsInitOptions *options) {
   lua_pop(L, 1);
 
   free(combined);
-  free(agents_prompt);
-  free(agents_content);
+  free(instructions_prompt);
   free(wiki_summary);
   free(wiki_prompt);
   free(skills_summary);

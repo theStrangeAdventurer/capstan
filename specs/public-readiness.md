@@ -37,7 +37,7 @@ make test-build
 Binary-size numbers are platform/build specific. Treat a local macOS size as a
 local data point, not as a universal release guarantee.
 
-The repository also contains [the Capstan vs opencode benchmark](../BENCHMARK_REPORT.md).
+The repository also contains [the Capstan vs OpenCode benchmark](../benchmarks/REPORT.md).
 Public summaries may quote its exact results when they:
 
 - identify it as the recorded 12-task Aider Polyglot mini-v2 benchmark with

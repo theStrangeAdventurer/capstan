@@ -9,11 +9,15 @@ provider configuration are ignored by Git.
   `./benchmarks/polyglot/bootstrap.sh`.
 - [`footprint/`](footprint/README.md) — local executable-size, startup, and
   repeated-prompt overhead benchmark. It is not a correctness benchmark.
+- [`REPORT.md`](REPORT.md) — current Capstan/OpenCode comparison, methodology,
+  and limitations.
+- [`polyglot-openrouter-medium-20260809.csv`](polyglot-openrouter-medium-20260809.csv)
+  — all 72 attempts behind the current report.
 - [`polyglot-mini-v2-20260731.csv`](polyglot-mini-v2-20260731.csv) and
   [`runtime-footprint-20260628.csv`](runtime-footprint-20260628.csv) — compact
-  raw tables behind the historical public report.
-- [`historical/`](historical/README.md) — sanitized full result export and
-  runner data for those historical comparisons.
+  historical tables retained for auditability.
+- [`historical/`](historical/README.md) — sanitized exports and runner metadata
+  for the historical comparisons.
 
 Benchmark runs require external toolchains, a provider credential, and can
 consume model time. They are intentionally separate from `make test`. Read the

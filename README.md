@@ -1,165 +1,127 @@
 # Capstan
 
-Capstan is a compact terminal coding agent built in C with an embedded Lua
-agent runtime. It combines a native ncurses TUI, headless automation, explicit
-tool permissions, and an extension model based on plain Lua and Markdown.
+**A lightweight, extensible terminal coding agent built in C with an embedded Lua runtime.**
 
-Capstan is designed to stay local, inspectable, fast to start, and easy to
-extend without rebuilding the binary.
+Capstan combines a native ncurses interface, headless automation, explicit tool
+permissions, profiles, skills, ACP, MCP, and parallel subagents in one compact
+executable. It is designed to stay inspectable, fast to start, and easy to adapt
+without rebuilding the core.
+
+<!-- Add the public hero screenshot or GIF here. -->
 
 ## Highlights
 
-- **Compact native executable.** ncurses, Lua, the agent runtime, and built-in
-  plugins are embedded into one executable. A current local Apple Silicon
-  macOS build is 1,160,872 bytes (about 1.1 MiB).
-- **Interactive and headless.** Use the full terminal UI or run one-shot tasks
-  with `capstan run`, including structured JSON output for scripts and CI.
-- **Controlled autonomy.** Model tools pass through profile availability,
-  workspace boundaries, sensitive-file checks, and explicit permission rules.
-- **Three workflow profiles.** `fast`, `implement`, and a model-tool read-only
-  `plan` profile can use different models and reasoning effort.
-- **Persistent project sessions.** TUI conversations, generated titles, prompt
-  history, and explicitly named headless runs are stored per workspace.
-- **Extensible without recompilation.** Lua plugins can add slash commands,
-  autocomplete, model tools, and lifecycle hooks. TUI plugin changes are
-  hot-reloaded.
-- **Open local context.** Capstan loads project `AGENTS.md`, discovers reusable
-  skills, and provides a portable Markdown Wiki instead of opaque hidden
-  memory.
-- **MCP and multimodal tools.** Connect stdio or Streamable HTTP MCP servers and
-  pass validated local or MCP-provided images to vision-capable models.
-- **Parallel subagents.** The orchestrator can run several focused internal
-  agent tasks concurrently with bounded tools, turns, and result sizes.
+- **Native and lightweight.** C hosts the terminal/runtime boundary; embedded
+  Lua owns agent policy and extension behavior.
+- **Interactive and headless.** Use the ncurses TUI, `capstan run` in scripts or
+  CI, or `capstan acp` from an ACP-compatible editor.
+- **Controlled autonomy.** Workspace boundaries, sensitive-path checks,
+  permission rules, profiles, and `--yolo` remain explicit.
+- **Profiles and subagents.** Switch between fast, implementation, and read-only
+  planning workflows; delegate focused tasks concurrently with bounded tools
+  and turns.
+- **Skills and project instructions.** Reusable Markdown skills and layered
+  `AGENTS.md` files teach workflows without hiding policy in the binary.
+- **Extensible in Lua.** Plugins can add slash commands, autocomplete, model
+  tools, OAuth providers, and lifecycle hooks with TUI hot reload.
+- **Open integrations.** Connect MCP servers, local OpenAI-compatible models,
+  remote providers, and vision-capable models.
+- **Persistent local context.** Workspace sessions, input history, runtime logs,
+  and the optional Markdown Wiki stay inspectable on disk.
 
 ## Quick Start
 
-Build and start with the default DeepSeek provider:
+### Install a prebuilt binary
+
+The installer requires `curl`, `tar`, and either `sha256sum` or `shasum`, and supports:
+
+| Platform | Architecture |
+|---|---|
+| macOS | Apple Silicon (`arm64`) |
+| Linux | `x86_64` |
+| Linux | `arm64` / `aarch64` |
+
+Check the prerequisite and install the latest published release:
 
 ```sh
-./build.sh
-DEEPSEEK_API_KEY=... ./build/capstan
-```
-
-Or use OpenRouter:
-
-```sh
-OPENROUTER_API_KEY=... AI_PROVIDER=openrouter ./build/capstan
-```
-
-Headless one-shot mode:
-
-```sh
-./build/capstan run --prompt "Inspect this repository"
-./build/capstan run --profile plan --prompt-file task.md
-./build/capstan run --prompt-file task.md --json
-```
-
-DeepSeek and OpenRouter are built in. Other OpenAI-compatible providers can be
-added in `~/.config/capstan/config.lua`.
-
-## Benchmark: Capstan vs OpenCode
-
-The canonical Aider Polyglot `mini-v2` suite was run three times per agent on
-Apple Silicon macOS: 12 fixed tasks per run across C++, Go, Java, JavaScript,
-Python, and Rust. Both agents used the direct DeepSeek provider, V4 Pro with
-medium reasoning, a 240-second per-task timeout, sequential execution, and no
-Promptfoo cache.
-
-| Agent | Canonical passes | Median agent time | Total agent time |
-|---|---:|---:|---:|
-| **Capstan** (`b7a664ef`, dirty worktree) | **36/36 (100%)** | **64.3s** | **53m 19s** |
-| OpenCode 1.18.2 | 35/36 (97.2%) | 79.0s | 58m 09s |
-
-Capstan completed every attempt, led by one canonical pass, used 18.7% less
-median agent time, and finished its 36 agent runs 4m 50s sooner. In a separate
-15-run local runtime-footprint benchmark, Capstan's median peak RSS was
-14.7 MiB versus 555.0 MiB for OpenCode (37.8x lower), and median local CPU time
-was 0.19s versus 2.97s (15.6x lower). The footprint test used the same model but
-a smaller three-task workload, so it is reported separately rather than mixed
-into the Polyglot score.
-
-See the [standalone visual report](BENCHMARK_REPORT.html) for all 72 Polyglot
-attempts, resource charts, methodology, and limitations, or read the
-[Markdown report](BENCHMARK_REPORT.md). Run a comparable update with the
-checked-in [benchmark tooling](benchmarks/README.md); it clones the pinned
-external corpus locally and keeps generated results out of Git. The historical
-quality result itself used a dirty Capstan worktree, as documented in the report.
-
-## Install
-
-Prebuilt binaries are available for Apple Silicon macOS, x86-64 Linux, and
-ARM64 Linux. The installer detects the platform, downloads the latest release,
-verifies its SHA-256 checksum, and installs `capstan` into `~/.local/bin`:
-
-```sh
+command -v curl
+command -v tar
+command -v sha256sum || command -v shasum
 curl -fsSL https://raw.githubusercontent.com/theStrangeAdventurer/capstan/main/install.sh | sh
-```
-
-If `~/.local/bin` is not already on `PATH`:
-
-```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Choose another install directory:
+The installer downloads the matching GitHub Release archive, verifies its
+SHA-256 checksum, and installs `capstan` into `~/.local/bin`. For a different
+platform or architecture, use [Build From Source](#build-from-source).
+
+### Choose a provider
+
+DeepSeek is the built-in default:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/theStrangeAdventurer/capstan/main/install.sh |
-  CAPSTAN_INSTALL_DIR="$HOME/bin" sh
+export DEEPSEEK_API_KEY=...
+capstan
 ```
 
-Install a specific release:
+OpenRouter:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/theStrangeAdventurer/capstan/main/install.sh |
-  CAPSTAN_VERSION=v0.1.0 sh
+export OPENROUTER_API_KEY=...
+export CAPSTAN_PROVIDER=openrouter
+export CAPSTAN_MODEL=anthropic/claude-sonnet-4
+capstan
 ```
 
-For manual installation, download the archive from
-[GitHub Releases](https://github.com/theStrangeAdventurer/capstan/releases),
-verify it against `SHA256SUMS`, extract it, and move `capstan` to a directory on
-your `PATH`. Release archives also contain `LICENSE`, `NOTICE`, and
-`THIRD_PARTY_NOTICES`.
-
-## Build From Source
+Headless mode uses the same runtime and tools:
 
 ```sh
-./build.sh
+capstan run --prompt "Inspect this repository"
+capstan run --profile plan --prompt-file task.md
+capstan run --prompt-file task.md --json
 ```
 
-The script checks system dependencies, builds vendored ncurses and Lua, embeds
-the Lua runtime and built-in plugins, and writes `build/capstan`.
+## Benchmark: Capstan vs OpenCode
 
-Binary size is platform- and build-specific. Measure your build with:
+The latest 72-attempt Aider Polyglot comparison used the same OpenRouter route,
+DeepSeek V4 Pro model, medium reasoning, public prompts, upstream tests, and
+240-second timeout for both agents.
 
-```sh
-ls -lh build/capstan
-file build/capstan
-```
+| Metric | Capstan | OpenCode |
+|---|---:|---:|
+| Upstream tests passed | 32/36 (88.9%) | 33/36 (91.7%) |
+| Median agent wall time | **83.2s** | 83.4s |
+| Median local CPU time | **1.38s** | 20.96s |
+| Median inclusive peak RSS | **123.8 MiB** | 1044.6 MiB |
 
-### System Dependencies
+On this workload, solution quality and median wall time are effectively at
+parity. Capstan used about **15x less local CPU** and **8.4x less inclusive peak
+RSS**. The RSS metric can include compiler and test-runner child processes on
+macOS; it is not the idle memory of the executable alone.
 
-macOS:
+See the [full report](benchmarks/REPORT.md),
+[raw attempt data](benchmarks/polyglot-openrouter-medium-20260809.csv), and
+[reproducible harness](benchmarks/README.md). Benchmark results are
+workload-, provider-, model-, and machine-specific.
 
-```sh
-xcode-select --install
-```
+## Profiles
 
-Debian/Ubuntu:
+| Profile | Purpose | Default reasoning | Model tools |
+|---|---|---|---|
+| `fast` | Simple, low-overhead work | `low` | Normal tools |
+| `implement` | Focused code changes and verification | `medium` | Normal tools |
+| `plan` | Investigation and planning | `high` | Read-only tools |
 
-```sh
-sudo apt install build-essential libcurl4-openssl-dev ncurses-bin
-```
+Controls:
 
-Fedora:
+- press **Shift-Tab** to cycle profiles in the TUI;
+- run `/fast`, `/implement`, or `/plan` directly;
+- use `capstan run --profile <name>` in headless mode;
+- use `/models` to assign models and reasoning effort globally or per profile.
 
-```sh
-sudo dnf install gcc make libcurl-devel ncurses
-```
-
-ncurses and Lua are linked from vendored static archives. `libcurl` is the only
-non-system runtime library expected from the host; the executable still uses
-the platform's normal system libraries.
+The `plan` restriction is enforced before plugin and permission handling: write
+and shell tools are not sent to the model. Manual slash commands remain direct
+user actions.
 
 ## Configuration
 
@@ -169,7 +131,7 @@ Capstan loads:
 ~/.config/capstan/config.lua
 ```
 
-Example:
+A minimal OpenRouter configuration:
 
 ```lua
 return {
@@ -183,319 +145,254 @@ return {
   },
   agent = {
     profile = "implement",
-    profile_models = {
-      fast = {provider = "openrouter", model = "minimax/minimax-m3"},
-      plan = {provider = "openrouter", model = "anthropic/claude-sonnet-4"},
+  },
+}
+```
+
+Runtime environment overrides use Capstan-specific names:
+
+| Variable | Purpose |
+|---|---|
+| `CAPSTAN_PROVIDER` | Active configured provider |
+| `CAPSTAN_MODEL` | Model for the active provider |
+| `CAPSTAN_CONTEXT_LIMIT` | Explicit context-window size |
+| `CAPSTAN_WORKDIR` | Working directory for relative operations |
+| `CAPSTAN_WORKSPACE` | Workspace boundary |
+| `CAPSTAN_LOG_LEVEL` | `error`, `warn`, `info`, `debug`, or `trace` |
+
+Provider credential variables remain provider-native, such as
+`DEEPSEEK_API_KEY` and `OPENROUTER_API_KEY`. CLI flags (`--provider`, `--model`,
+`--reasoning-effort`) override normal runtime choices for one headless run.
+
+### Local models with Ollama
+
+Capstan can use any OpenAI-compatible endpoint. This configuration was tested
+against a local Ollama server and `gemma4:latest`:
+
+```lua
+return {
+  provider = "ollama",
+  providers = {
+    ollama = {
+      endpoint = "http://127.0.0.1:11434/v1/chat/completions",
+      models_endpoint = "http://127.0.0.1:11434/v1/models",
+      model = "gemma4:latest",
+      context_limit = 32768,
     },
   },
+}
+```
+
+Start Ollama, verify the model, then run Capstan:
+
+```sh
+ollama list
+CAPSTAN_PROVIDER=ollama CAPSTAN_MODEL=gemma4:latest capstan
+```
+
+Local model quality and tool-calling support depend on the chosen model.
+
+### Project instructions
+
+Capstan loads instructions in this order:
+
+1. `~/.config/capstan/AGENTS.md`;
+2. `~/.agents/AGENTS.md` only when the Capstan-specific file is absent;
+3. `<workspace>/AGENTS.md`.
+
+User instructions are followed by project instructions, so repository policy
+can add project-specific constraints. Instruction files are loaded once at
+startup. `capstan run --benchmark` excludes them for isolated evaluations.
+
+### Permissions and `--yolo`
+
+Durable allow/deny rules belong in `config.lua`:
+
+```lua
+return {
   permissions = {
     {tool = "file_read", pattern = "~/code/project/*", allow = true},
-    {tool = "fetch", pattern = "https://api.github.com/*", allow = true},
-  },
-  capabilities = {
-    self_improvement = false,
-    subagents = true,
+    {tool = "file_write", pattern = "~/code/project/*", allow = true},
+    {tool = "file_read", pattern = "~/code/project/.env*", allow = false},
   },
 }
 ```
 
-Environment variables and explicit run flags take precedence where supported.
-Model choices made through `/models` are persisted as runtime state rather than
-rewritten into `config.lua`.
-
-### Agent Limits And Subagents
-
-A **turn** is one model response. One response may contain several tool calls;
-a later response that receives their results consumes the next turn. Configure
-root-agent and delegated-agent limits independently:
-
-```lua
-return {
-  agent = {
-    max_turns = 80, -- root agent; positive values only
-    max_duration_sec = 2700,
-    max_tool_calls = 0,          -- 0 disables this guard
-    max_same_tool_call = 0,      -- 0 disables this guard
-    max_same_shell_command = 0,  -- 0 disables this guard
-  },
-  subagents = {
-    max_concurrent = 3,      -- default child batch concurrency
-    max_concurrent_cap = 4,  -- upper bound for a model-requested concurrency
-    max_tasks = 8,           -- maximum tasks in one subagents call
-    max_turns = 6,           -- default turns per child task
-    max_turns_cap = 24,      -- upper bound for a model-requested child budget
-    max_attempts = 3,        -- total transient-request attempts per child
-  },
-}
-```
-
-`subagents.max_turns_cap` is the upper bound you asked about: if the
-orchestrator requests `max_turns = 200` for a child, the child receives at most
-the configured cap (24 in this example). Omitted child budgets use
-`subagents.max_turns`. The built-in defaults are 6 turns per child and a cap of
-200. `capstan run --max-turns N` overrides the root run only; child budgets
-continue to use the `subagents` configuration. See [configuration details](specs/config.md)
-and [subagent behavior](specs/subagents.md).
-
-### Permissions And `--yolo`
-
-Permissions apply to model-initiated tools; slash commands you type yourself
-are direct user actions. Add durable allow or deny rules to the same config:
-
-```lua
-return {
-  permissions = {
-    { tool = "file_read", pattern = "~/code/project/*", allow = true },
-    { tool = "file_write", pattern = "~/code/project/*", allow = true },
-    { tool = "fetch", pattern = "https://api.github.com/*", allow = true },
-    -- Put specific denies after broad allows: later matching rules win.
-    { tool = "file_read", pattern = "~/code/project/.env*", allow = false },
-  },
-}
-```
-
-Rules use `tool`, glob-style `pattern`, and `allow`. An explicit deny always
-wins over `--yolo`; use it to protect sensitive files. Start a trusted local
-session without confirmation prompts with:
+Later matching rules win. Explicit denies also win over `--yolo`.
 
 ```sh
 capstan --yolo
-capstan run --yolo --prompt "Run the project test suite"
+capstan run --yolo --prompt "Run the test suite and fix the failure"
 ```
 
-`--yolo` auto-allows only otherwise-`ask` model tool calls for that process. It
-does not persist permissions and should be used only in a trusted workspace.
-For matching, session grants, sensitive-file handling, and the default policy,
-see [Permissions](specs/permissions.md).
+`--yolo` is process-local and should only be used in a trusted workspace. See
+[Permissions](specs/permissions.md) and the full [Config](specs/config.md).
 
-## Agent Profiles
+## Built-In Tools
 
-| Profile | Purpose | Default reasoning | Model-tool policy |
-|---|---|---|---|
-| `fast` | Low-overhead simple work | `low` | Normal tools |
-| `implement` | Focused code changes | `medium` | Normal tools |
-| `plan` | Exploration and planning | `high` | Read-only inspection tools |
+Model-initiated tools pass through profile availability and permissions:
 
-Use `/fast`, `/implement`, or `/plan` in the TUI, cycle profiles with
-Shift-Tab, or pass `--profile` to `capstan run`.
+- `file_read` — read files or list directories, including batched reads;
+- `file_write` — create or overwrite a file;
+- `file_edit` — replace an exact fragment safely;
+- `shell` — execute a bounded non-interactive subprocess;
+- `fetch` — fetch an HTTP or HTTPS URL;
+- `logs` — inspect recent Capstan runtime logs;
+- `subagents` — run focused internal agents concurrently;
+- Wiki tools — read or ingest portable Markdown context;
+- MCP tools — dynamically exposed by configured MCP servers.
 
-The `plan` restriction is enforced in the runtime: write and shell tools are
-removed from the model's available tool list, and unavailable calls are
-rejected before plugin or permission handling. Manual slash commands remain
-direct user actions and are not disabled by the profile.
+Type `/` and press Tab to browse user-facing commands such as `/file`, `/edit`,
+`/shell`, `/models`, `/sessions`, `/skills`, `/wiki`, `/mcp`, `/info`, and
+`/logs`.
 
-## Sessions And Context
+## Extensibility
 
-The TUI automatically saves and restores conversations per workspace:
-
-- `/new` creates a new session;
-- `/sessions` opens the searchable session list;
-- a weak model can generate concise session titles in the background;
-- prompt-entry history persists independently of conversation history;
-- `/compact` replaces a long conversation with a compact operational handoff,
-  and the TUI automatically does the same before an ordinary submission reaches
-  80% of the active model context (`agent.auto_compact_percent`, `0` disables);
-- ordinary messages submitted during an active run enter a bounded FIFO queue.
-
-Session files are written atomically under the XDG state directory with private
-Unix permissions. Headless runs remain ephemeral by default; pass
-`--session-id "my bench"` to persist a run under an immutable title and write
-its runtime events to a session-specific log directory.
-
-## Project Instructions, Skills, And Wiki
-
-Capstan automatically loads `AGENTS.md` from the workspace root.
-
-Reusable skills are discovered from project, shared-home, user, and gated
-built-in skill directories. Only compact FrontMatter metadata is placed in the
-system prompt; the full `SKILL.md` is read only when the task matches it.
-
-Capstan Wiki is a portable, inspectable Markdown knowledge directory:
-
-- `profile/core.md` can provide a small stable owner profile;
-- larger documents are exposed through a metadata-only index;
-- full documents are read only when relevant;
-- external Markdown roots can be indexed without modifying or copying them;
-- copy mode can materialize selected Markdown into the Wiki;
-- the directory can be edited normally and versioned with Git.
-
-Use `/wiki` for status and onboarding, `/wiki read <path>` to read a document,
-and `/wiki ingest [--copy] <path>` to index a Markdown source.
-
-## MCP, Images, And Subagents
-
-Capstan acts as an MCP client for configured external servers:
-
-- local servers over stdio;
-- remote servers over Streamable HTTP;
-- background tool discovery so TUI startup is not blocked;
-- per-tool permission checks and `/mcp` status/restart controls.
-
-The current MCP client exposes tools; MCP resources, prompts, and sampling are
-not supported yet. MCP servers are trusted integrations and are not sandboxed.
-
-Local PNG, JPEG, GIF, and WebP files, plus validated MCP image results, can be
-passed to vision-capable OpenAI-compatible models. In the TUI, press `Ctrl+V`
-to attach an image from the system clipboard directly to the current prompt.
-Formats are checked or normalized, decoded images are limited to 10 MiB each,
-and image base64 is not written to runtime logs.
-
-The `subagents` model tool can run focused internal tasks concurrently. Child
-agents can receive narrower model, turn, concurrency, and tool limits. Network
-waits are parallel; Lua callbacks and tool handlers remain single-threaded.
-
-## Permissions And Safety
-
-Permissioned model-initiated tools go through Capstan's permission policy.
-Rules may allow, deny, or ask. The TUI offers allow once, allow the exact target
-for the current session, allow the tool for every target in the session, and
-reject. ACP exposes its client-defined equivalents: allow once, allow the exact
-target for the session, and reject.
-
-Additional safeguards include:
-
-- normalized workspace boundaries for file and shell tools;
-- real-path checks that reject symlink escapes;
-- extra prompts for sensitive names such as `.env`, `secret`, `token`, and
-  `credential` unless explicitly allowed;
-- exact-fragment matching for file edits;
-- bounded HTTP responses, image payloads, session rows, and subagent results;
-- redaction of common secret shapes from logs and model-visible continuations;
-- tool, turn, retry, and timeout limits.
-
-Manual slash commands are treated as direct user intent and do not show the
-model-tool permission prompt. Wiki reads are constrained to Capstan's Wiki
-root; external Wiki ingest requires explicit file-read consent.
-
-Session permission grants are not persisted. Permanent owner rules belong in
-`~/.config/capstan/config.lua`. Explicit runtime workflows and older Capstan
-versions may still have rules in
-`$XDG_STATE_HOME/capstan/permissions.lua` (or
-`~/.local/state/capstan/permissions.lua`).
-
-## Built-In Commands
-
-Type `/` and press Tab in the TUI to browse available commands.
-
-- Files and execution: `/file`, `/write`, `/edit`, `/shell`, `/fetch`
-- Sessions and context: `/new`, `/sessions`, `/compact`, `/editor`
-- Profiles and models: `/fast`, `/implement`, `/plan`, `/models`
-- Context and integrations: `/skills`, `/wiki`, `/mcp`
-- Diagnostics: `/info`, `/logs`
-- Plugin-provided OAuth flows: `/connect`, `/auth`, `/logout`
-
-OAuth commands operate on providers supplied by compatible plugins; Capstan
-does not promise a built-in OAuth provider.
-
-## CLI Run Mode
-
-`capstan run` uses the same embedded agent runtime, providers, built-in tools,
-plugins, hooks, profiles, and permission policy as the TUI.
-
-```sh
-capstan run --prompt "Inspect the build failure"
-capstan run --prompt-file task.md --provider openrouter --model MODEL
-capstan run --profile plan --reasoning-effort high --prompt-file task.md
-capstan run --prompt-file task.md --workdir ./src --workspace . --json
-capstan run --benchmark --prompt-file task.md --workdir /tmp/task
-```
-
-Notable options:
-
-- `--provider`, `--model`, `--profile`, `--reasoning-effort`
-- `--workdir`, `--workspace`, `--max-turns`
-- `--session-id` for a persisted immutable CLI session and isolated logs
-- `--no-mcp`, `--no-wiki`, `--no-preserve-reasoning`
-- `--yolo` to auto-allow permission prompts except explicit denies
-- `--benchmark` for isolated workspace-scoped eval mode
-- `--json` for `{ok, text, error}` output
-
-`--benchmark` implies `--no-mcp --no-wiki`, uses an internal workspace-only
-permission scope, and excludes local prompt overrides, external skills,
-`AGENTS.md`, global plugins, and hooks so
-evaluations do not inherit unrelated machine or repository policy.
-
-Run `capstan --help` for the current option list.
-
-## Plugins And Hooks
-
-User plugins live at:
+User plugins are trusted Lua files under:
 
 ```text
 ~/.config/capstan/plugins/*.lua
 ```
 
-In the TUI, new, changed, and deleted plugins are hot-reloaded. Headless
-`capstan run` loads plugins once at startup.
+They are hot-reloaded in the TUI. A plugin may be a slash command, model tool,
+autocomplete source, OAuth provider, hook, or any combination of them.
 
-Plugins can provide slash commands, autocomplete, model tools, OAuth adapters,
-and hooks around messages, requests, stream chunks, tool calls, final agent
-turns, and subagent completion.
-
-Minimal command plugin:
+### Slash command and model tool
 
 ```lua
+---@type CapstanPlugin
 local plugin = {
-  id = "hello",
-  name = "Hello",
-  command = "/hello",
+  id = "project_status",
+  name = "Project Status",
+  command = "/status",
+  tool = {
+    name = "project_status",
+    description = "Read the current project status.",
+    parameters = {type = "object", properties = {}},
+    permission = "project_status",
+  },
 }
 
 function plugin.handler(ctx)
-  return ctx:replace("hello from plugin")
+  return ctx:replace("Project is ready.")
 end
 
 return plugin
 ```
 
-The built-in `self-improvement` skill can create durable local automation but is
-disabled by default. Enable it explicitly only if you want that high-risk
-capability:
+Add `plugin.autocomplete` when command arguments have discoverable values. Add
+`plugin.history = false` for control commands that should not enter model
+context or trigger an agent request.
+
+### Completion notification hook (macOS)
 
 ```lua
-return {
-  capabilities = {
-    self_improvement = true,
-  },
+local plugin = {
+  id = "turn_notification",
+  hooks_scope = "orchestrator",
+  hooks = {},
 }
+
+plugin.hooks.after_agent_turn = function(ctx)
+  tools.shell([[osascript -e 'display notification "Agent turn finished" with title "Capstan"']], 5)
+  return ctx
+end
+
+return plugin
 ```
 
-## Terminal Compatibility
+`after_agent_turn` runs after tool continuations finish and control returns to
+the user. Keep notification hooks orchestrator-only so subagents do not produce
+extra alerts.
 
-Capstan builds ncurses with fallback descriptions for `xterm-256color`,
-`tmux-256color`, `screen-256color`, `xterm`, `screen`, `ansi`, and `vt100`.
-Bracketed paste is supported, so pasted newlines stay in the input editor.
+### OAuth provider plugin
 
-Ordinary terminal, tmux, and screen setups should not require manual `TERMINFO`
-configuration. If startup fails, Capstan prints the current `TERM` and an
-actionable diagnostic before opening the TUI.
+OAuth integration remains provider-specific but uses Capstan's secure credential
+store and standard hooks:
 
-## Known Limitations
+```lua
+local auth = require("agent.auth")
+local plugin = {id = "example_oauth"}
 
-- User Lua plugins and configured MCP servers are trusted code/integrations, not
-  sandboxed isolates.
-- Blocking Lua plugin work can block UI cancellation until it returns.
-- Subagent network waits are parallel, but Lua callbacks and tool handlers run
-  on one Lua thread.
-- MCP currently supports tools, not resources, prompts, sampling, or a separate
-  long-lived server-to-client stream.
-- Vision input depends on provider and model support.
-- Benchmark results are workload- and environment-specific.
+plugin.auth = {
+  provider = "example",
+  authorize = function(method, ctx)
+    -- Complete the provider flow and return the resulting credential.
+    return {type = "oauth", access = "...", refresh = "...", expires = 0}
+  end,
+}
 
-## Project Layout
+plugin.hooks = {
+  before_request = function(ctx)
+    if ctx.provider_name ~= "example" then return ctx end
+    local credential = auth.get("example")
+    if not credential then error("Run /connect example first") end
+    ctx.headers.Authorization = "Bearer " .. credential.access
+    return ctx
+  end,
+}
 
-```text
-src/        C runtime, TUI, permissions, storage, process and HTTP bridges
-include/    C headers
-agent/      embedded Lua agent runtime
-plugins/    embedded built-in Lua plugins
-skills/     gated built-in skills
-specs/      behavior and architecture specifications
-test/       C and Lua tests
-vendor/     vendored ncurses, Lua, munit, and Lua JSON
+return plugin
 ```
 
-## Development Checks
+Use `/connect`, `/auth`, and `/logout` with OAuth-capable plugins. Never commit
+real credentials. See [Plugins](specs/plugins.md), [Hooks](specs/hooks.md),
+[OAuth](specs/oauth-auth.md), and the gated `self-improvement` skill.
+
+### Skills, MCP, and ACP
+
+- Project skills: `.agents/skills/<name>/SKILL.md`
+- User skills: `~/.agents/skills/<name>/SKILL.md` or
+  `~/.config/capstan/skills/<name>/SKILL.md`
+- MCP: local stdio and remote Streamable HTTP servers
+- ACP: `capstan acp [--yolo]` for ACP-compatible editors and orchestrators
+
+Only skill metadata is added eagerly; full Markdown instructions are read when a
+task matches the skill. See [Skills](specs/skills.md), [MCP](specs/mcp-client.md),
+and [ACP](specs/acp.md).
+
+## Sessions and Context
+
+The TUI stores sessions per workspace:
+
+- `/new` creates a session;
+- `/sessions` opens the searchable session list;
+- `/compact` creates an operational handoff for long conversations;
+- queued input waits in a bounded FIFO while the agent is active;
+- `/wiki` manages portable Markdown context.
+
+Headless runs are ephemeral unless `--session-id` is provided.
+
+## Build From Source
+
+Use this path for development or a platform without a prebuilt release.
+
+### macOS
+
+```sh
+xcode-select --install
+./build.sh
+```
+
+### Debian / Ubuntu
+
+```sh
+sudo apt install build-essential libcurl4-openssl-dev ncurses-bin
+./build.sh
+```
+
+### Fedora
+
+```sh
+sudo dnf install gcc make libcurl-devel ncurses
+./build.sh
+```
+
+The binary is written to `build/capstan`. ncurses and Lua are built from
+vendored source and linked statically; libcurl is the only system-linked runtime
+library beyond normal platform libraries.
+
+Development checks:
 
 ```sh
 make test
@@ -503,14 +400,47 @@ make test-http-lua
 make test-build
 ```
 
-Smoke-test only the embedded runtime without opening the TUI:
+## Debugging
+
+Use `/logs` in the TUI or let the model call the `logs` tool. Process logs live
+at:
+
+```text
+$XDG_STATE_HOME/capstan/logs/YYYY-MM-DD.log
+~/.local/state/capstan/logs/YYYY-MM-DD.log          # fallback
+```
+
+Session-scoped logs live under `logs/sessions/<session-id>/`. Increase detail
+for one run with:
 
 ```sh
-./build/capstan --self-test-embedded
+CAPSTAN_LOG_LEVEL=debug capstan
+CAPSTAN_LOG_LEVEL=trace capstan   # includes redacted raw stream payloads
 ```
+
+Trace logs can contain model output and should still be treated as sensitive.
+See [Runtime Logs](specs/runtime-logs.md).
+
+## Contributing
+
+1. Open an issue for behavior or architecture changes that need discussion.
+2. Keep changes focused and follow [`AGENTS.md`](AGENTS.md).
+3. Add or update tests and a focused spec for user-visible behavior.
+4. Run:
+
+   ```sh
+   make test
+   make test-http-lua
+   make test-build
+   ```
+
+5. Submit a pull request with the motivation, implementation notes, and checks
+   run.
+
+Capstan uses C99 with `-Wall -Wextra -Werror`, an embedded Lua runtime, vendored
+ncurses/Lua, and no dependency additions for ad-hoc validation.
 
 ## License
 
-Capstan is licensed under the Apache License 2.0. See [LICENSE](LICENSE) and
-[NOTICE](NOTICE). Licenses for bundled third-party components are collected in
+Apache License 2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and
 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).

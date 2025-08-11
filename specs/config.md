@@ -79,8 +79,10 @@ return {
 ## Behavior
 
 - `provider` and `providers` configure the `agent/` Lua runtime.
-- Environment variables still override config values for explicit runtime
-  provider selection, API keys, model, and context limits.
+- `CAPSTAN_PROVIDER`, `CAPSTAN_MODEL`, and `CAPSTAN_CONTEXT_LIMIT` override the
+  active provider selection, its model, and context limit. Provider-native API
+  key variables such as `DEEPSEEK_API_KEY` and `OPENROUTER_API_KEY` override
+  configured credentials.
 - `permissions` entries define editable permission defaults. Runtime prompt
   choices are persisted separately in state and load after config permissions.
 - `capabilities` contains explicit feature gates. Missing `subagents` is treated
