@@ -81,6 +81,19 @@ capstan run --profile plan --prompt-file task.md
 capstan run --prompt-file task.md --json
 ```
 
+### Attach images
+
+In the interactive TUI, copy an image to the system clipboard and press
+**Ctrl-V** once to attach it to the current prompt. Capstan shows the attachment
+as `[Image N]`; multiple images can be attached, and Backspace removes the most
+recent image when the text field is empty.
+
+Clipboard images are converted to PNG, limited to 10 MiB each, and sent as
+structured vision input. The selected provider and model must support image
+input. Image-only prompts are supported. See
+[Multimodal Images](specs/multimodal-images.md) for platform requirements and
+tool-provided images.
+
 ## Benchmark: Capstan vs OpenCode
 
 The latest 72-attempt Aider Polyglot comparison used the same OpenRouter route,

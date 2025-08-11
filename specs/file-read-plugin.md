@@ -5,7 +5,14 @@
 `/file <path...>` reads files or lists directories and adds the result to the
 conversation context. The agent tool `file_read` accepts either
 `{ "path": "..." }` or `{ "paths": ["...", "..."] }` and uses the same
-path behavior.
+path behavior. If both are present, `paths` entries are read first and `path`
+is appended, with duplicates removed.
+
+The published schema intentionally avoids `anyOf`/`oneOf` because some supported
+providers reject composition keywords in tool schemas. `minProperties = 1`
+together with `additionalProperties = false` still requires at least one known
+argument, while runtime validation rejects empty or unusable values. Allowing
+both known fields is the compatibility trade-off.
 
 - `paths` batches ordinary workspace reads into one model tool call. Entries
   are de-duplicated while preserving their order.

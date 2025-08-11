@@ -6,9 +6,11 @@ other MCP image tools use the same typed result path.
 
 ## Behavior
 
-- In the TUI, `Ctrl+V` reads an image from the system clipboard and attaches it
-  to the current prompt as `[Image N]`. Multiple images may be attached; with
-  an empty text field, Backspace removes the most recent attachment.
+- In the TUI, one `Ctrl+V` reads an image from the system clipboard and attaches
+  it to the current prompt as `[Image N]`. Multiple images may be attached; with
+  an empty text field, Backspace removes the most recent attachment. Nested UI
+  pumps used while MCP or another blocking operation starts route the same
+  shortcut through the canonical attachment handler instead of discarding it.
 - Clipboard images are normalized to PNG, limited to 10 MiB, and sent as
   structured `image_url` content rather than marker text. Image-only prompts
   are valid and attachments persist with the project session.

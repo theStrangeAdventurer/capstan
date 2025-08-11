@@ -44,6 +44,7 @@ curl handle lifecycle, or persisted permission storage.
 | `agent/tools.lua` | Tool schema collection, permission bridge, plugin tool execution, tool result messages. |
 | `agent/tokens.lua` | Approximate token accounting for UI usage display. |
 | `agent/logging.lua` | Compact runtime logging helpers. |
+| `agent/ui.lua` | Canonical adapter for UI-only agent-message appends. |
 | `agent/hooks.lua` | Pipeline hook registry and config/plugin hook installation. |
 
 ## Sequence
@@ -170,8 +171,14 @@ non-trivial tool batch or phase change. Text accompanying tool calls is shown
 immediately, including after workspace mutations; only a no-tool draft that is
 about to enter completion review remains deferred. Tool status blocks also use
 deterministic phase labels such as `Reading`, `Editing`, and `Validating` when
-the model emits no annotation. Every visible tool block starts after one blank
-line so it remains visually separate from the preceding agent commentary.
+the model emits no annotation. Their muted gray italic styling remains lighter
+than fully dimmed secondary UI text and continues across internal
+blank lines in multiline commands and results, ending only at the generated
+`— done`, `— error`, `— denied`, or `— skipped` status. Diff additions and
+removals use muted green-gray and red-gray text on the terminal's default
+background instead of saturated full-line backgrounds. Every visible tool block
+starts after one blank line so it remains visually separate from the preceding
+agent commentary.
 
 A successful provider response with neither text nor tool calls is not a valid
 terminal result. The runtime adds one synthetic continuation asking the model
@@ -197,10 +204,19 @@ OpenRouter keeps `reasoning.effort`, while direct DeepSeek uses top-level
 Provider configs can also define `reasoning`, `reasoning_effort_field`,
 `reasoning_max_tokens`, and `reasoning_exclude` for gateway-specific controls.
 
+Tool progress and runtime status lines are appended through the canonical
+`agent/ui.lua` adapter to the visible message only; they are excluded from
+`raw_text` and therefore from later model history. The
+assistant's streamed prose remains in both representations, while tool calls and
+results continue through the structured request messages.
+
 Reasoning continuity is enabled by default for tool continuations. The stream
-adapter preserves `reasoning_details` in provider order and attaches the whole
-sequence to the assistant tool-call message; plaintext `reasoning` is used only
-when structured details are absent. Direct DeepSeek chat requests adapt that
+adapter preserves `reasoning_details` in provider order, merges streaming
+fragments that share a reasoning-block `index`, and attaches the completed
+sequence to the assistant tool-call message. Fragment text/data is concatenated
+and later metadata such as an Anthropic signature completes the same block;
+plaintext `reasoning` is used only when structured details are absent. Direct
+DeepSeek chat requests adapt that
 fallback to `reasoning_content`; Responses-style providers own their native
 reasoning-item continuation in their provider adapter. These fields remain
 model-only history and are not rendered as assistant text.

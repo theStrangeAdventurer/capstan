@@ -47,7 +47,7 @@ static int l_http_get(lua_State *L) {
     lua_pushinteger(L, 200);
     lua_pushstring(L,
                    "{\"data\":["
-                   "{\"id\":\"model/z\",\"name\":\"Model Z\","
+                   "{\"id\":\"~model/z-latest\",\"name\":\"Model Z Latest\","
                    "\"context_length\":12345},"
                    "{\"id\":\"model/a\",\"name\":\"Model A\","
                    "\"supported_parameters\":[\"reasoning\"]}"
@@ -272,6 +272,8 @@ static lua_State *new_provider_state(void) {
   lua_getglobal(L, "agent");
   lua_pushcfunction(L, l_agent_append);
   lua_setfield(L, -2, "append");
+  lua_pushcfunction(L, l_agent_append);
+  lua_setfield(L, -2, "append_ui");
   lua_pushcfunction(L, l_agent_set_info);
   lua_setfield(L, -2, "set_info");
   lua_pushcfunction(L, l_agent_set_profile_info);
@@ -920,6 +922,8 @@ static void send_tool_call(lua_State *L, const char *call_id,
                            const char *name, const char *arguments);
 static void send_reasoning_delta(lua_State *L, const char *reasoning,
                                  int include_details);
+static void send_reasoning_detail_fragment(lua_State *L, const char *text,
+                                           const char *signature);
 static void send_text_delta(lua_State *L, const char *text);
 static void send_text_done(lua_State *L, const char *text);
 
@@ -1023,6 +1027,36 @@ static MunitResult test_reasoning_details_preserved_for_tool_continuation(
   munit_assert_true(strstr(captured_body, "\"reasoning_details\":[{") != NULL);
   munit_assert_true(strstr(captured_body, "\"text\":\"inspect files\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"reasoning\":\"inspect files\"") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_stream_merges_reasoning_detail_fragments(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  send_reasoning_detail_fragment(L, "inspect ", NULL);
+  send_reasoning_detail_fragment(L, "files", "signed-block");
+  send_tool_call(L, "call_fragmented_reasoning", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  const char *detail = strstr(captured_body, "\"type\":\"reasoning.text\"");
+  munit_assert_not_null(detail);
+  munit_assert_null(strstr(detail + 1, "\"type\":\"reasoning.text\""));
+  munit_assert_not_null(strstr(captured_body, "\"text\":\"inspect files\""));
+  munit_assert_not_null(strstr(captured_body,
+                               "\"signature\":\"signed-block\""));
 
   reset_captures(L);
   lua_close(L);
@@ -1299,6 +1333,48 @@ static MunitResult test_http_mcp_initializes_without_stdio_spawn(
   reset_captures(L);
   call_agent_entry(L);
   munit_assert_true(strstr(captured_body, "\"name\":\"mcp__github__search_repositories\"") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_http_mcp_initialize_error_marks_server_failed(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_http_mcp_config(L);
+
+  int rc = luaL_dostring(
+      L,
+      "http.post_response_async = function(url, body, headers, timeout, callback, opts)\n"
+      "  callback({status = 401, body = 'Unauthorized', headers = {['content-type'] = 'text/plain'}})\n"
+      "  return 1\n"
+      "end\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  call_agent_entry(L);
+
+  rc = luaL_dostring(
+      L,
+      "capstan.mcp.tick(2)\n"
+      "local server = require('agent.mcp').list_servers()[1]\n"
+      "MCP_FAILED_STATUS = server.status\n"
+      "MCP_FAILED_ERROR = server.error\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "MCP_FAILED_STATUS");
+  munit_assert_string_equal(lua_tostring(L, -1), "failed");
+  lua_pop(L, 1);
+  lua_getglobal(L, "MCP_FAILED_ERROR");
+  munit_assert_true(strstr(lua_tostring(L, -1),
+                           "initialize failed: HTTP 401: Unauthorized") != NULL);
+  lua_pop(L, 1);
 
   reset_captures(L);
   lua_close(L);
@@ -2836,6 +2912,40 @@ static MunitResult test_auto_compact_skips_weak_model_with_unknown_context(
   return MUNIT_OK;
 }
 
+static MunitResult test_file_read_schema_requires_known_argument_without_composition(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  load_real_file_plugin(L);
+
+  lua_getglobal(L, "plugins");
+  lua_getfield(L, -1, "file");
+  lua_getfield(L, -1, "tool");
+  lua_getfield(L, -1, "parameters");
+
+  lua_getfield(L, -1, "minProperties");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "additionalProperties");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "anyOf");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "oneOf");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "allOf");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 5);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_provider_models_list_uses_api_response(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -2870,6 +2980,15 @@ static MunitResult test_provider_models_list_uses_api_response(
   munit_assert_int((int)lua_rawlen(L, -1), ==, 3);
   lua_rawgeti(L, -1, 2);
   munit_assert_string_equal(lua_tostring(L, -1), "medium");
+  lua_pop(L, 3);
+
+  lua_rawgeti(L, -1, 2);
+  lua_getfield(L, -1, "id");
+  lua_getfield(L, -2, "text");
+  munit_assert_string_equal(lua_tostring(L, -2), "~model/z-latest");
+  munit_assert_string_equal(lua_tostring(L, -1),
+                            "~model/z-latest  Model Z Latest");
+  lua_pop(L, 3);
 
   reset_captures(L);
   lua_close(L);
@@ -4257,6 +4376,32 @@ static void send_reasoning_delta(lua_State *L, const char *reasoning,
     snprintf(event, sizeof(event),
              "data: {\"choices\":[{\"delta\":{\"reasoning\":\"%s\"}}]}\n\n",
              reasoning);
+  }
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L, event);
+  lua_pushboolean(L, 0);
+  int rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void send_reasoning_detail_fragment(lua_State *L, const char *text,
+                                           const char *signature) {
+  char event[4096];
+  if (signature) {
+    snprintf(event, sizeof(event),
+             "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{"
+             "\"type\":\"reasoning.text\",\"text\":\"%s\","
+             "\"signature\":\"%s\",\"id\":\"reasoning-1\","
+             "\"format\":\"anthropic-claude-v1\",\"index\":0}]}}]}\n\n",
+             text, signature);
+  } else {
+    snprintf(event, sizeof(event),
+             "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{"
+             "\"type\":\"reasoning.text\",\"text\":\"%s\","
+             "\"id\":\"reasoning-1\","
+             "\"format\":\"anthropic-claude-v1\",\"index\":0}]}}]}\n\n",
+             text);
   }
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
@@ -6056,6 +6201,9 @@ static MunitTest tests[] = {
     {"/reasoning_details_preserved_for_tool_continuation",
      test_reasoning_details_preserved_for_tool_continuation, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/stream_merges_reasoning_detail_fragments",
+     test_stream_merges_reasoning_detail_fragments, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/reasoning_plaintext_preserved_and_config_can_disable",
      test_reasoning_plaintext_preserved_and_config_can_disable, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -6073,6 +6221,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/http_mcp_initializes_without_stdio_spawn",
      test_http_mcp_initializes_without_stdio_spawn, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/http_mcp_initialize_error_marks_server_failed",
+     test_http_mcp_initialize_error_marks_server_failed, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/disable_mcp_prevents_background_tick",
      test_disable_mcp_prevents_background_tick, NULL, NULL,
@@ -6199,6 +6350,9 @@ static MunitTest tests[] = {
     {"/auto_compact_skips_weak_model_with_unknown_context",
      test_auto_compact_skips_weak_model_with_unknown_context, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/file_read_schema_requires_known_argument_without_composition",
+     test_file_read_schema_requires_known_argument_without_composition, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_list_uses_api_response",
      test_provider_models_list_uses_api_response, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

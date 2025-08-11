@@ -78,6 +78,8 @@ LLM calls "mcp__browser__browser_navigate"
   the LLM list.
 - Tool call timeout (default 30s) → return error string to LLM.
 - JSON-RPC error response → return error message to LLM.
+- HTTP or response-decoding errors during startup → mark the server as `failed`
+  with the actionable error instead of leaving it stuck in `connecting`.
 - Tool execution error (`isError: true` in result) → return content text with
   error indication.
 - Tool schemas can mark a property as required while also providing a default

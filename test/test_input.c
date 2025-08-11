@@ -95,6 +95,69 @@ static MunitResult test_backspace_middle(const MunitParameter params[], void *da
   return MUNIT_OK;
 }
 
+static MunitResult test_delete_word_backward(const MunitParameter params[],
+                                              void *data) {
+  (void)params;
+  (void)data;
+  input_init();
+  input_set_text("hello world");
+  input_delete_word_backward();
+  munit_assert_string_equal(input_get_text(), "hello ");
+  munit_assert_int(input_get_cursor(), ==, 6);
+  return MUNIT_OK;
+}
+
+static MunitResult test_delete_word_backward_in_middle(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  input_init();
+  input_set_text("one twoX");
+  input_move_left();
+  input_delete_word_backward();
+  munit_assert_string_equal(input_get_text(), "one X");
+  munit_assert_int(input_get_cursor(), ==, 4);
+  return MUNIT_OK;
+}
+
+static MunitResult test_delete_word_backward_utf8(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  input_init();
+  input_set_text("hello мир");
+  input_delete_word_backward();
+  munit_assert_string_equal(input_get_text(), "hello ");
+  munit_assert_int(input_get_cursor(), ==, 6);
+  return MUNIT_OK;
+}
+
+static MunitResult test_delete_word_backward_unicode_punctuation(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  input_init();
+  input_set_text("hello “мир”");
+  input_delete_word_backward();
+  munit_assert_string_equal(input_get_text(), "hello “мир");
+  input_delete_word_backward();
+  munit_assert_string_equal(input_get_text(), "hello “");
+  return MUNIT_OK;
+}
+
+static MunitResult test_delete_to_line_start(const MunitParameter params[],
+                                              void *data) {
+  (void)params;
+  (void)data;
+  input_init();
+  input_set_text("first\nsecond tail!");
+  input_move_left();
+  input_delete_to_line_start();
+  munit_assert_string_equal(input_get_text(), "first\n!");
+  munit_assert_int(input_get_cursor(), ==, 6);
+  return MUNIT_OK;
+}
+
 static MunitResult test_clear(const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -244,6 +307,17 @@ static MunitTest tests[] = {
   {"/backspace_empty", test_backspace_empty, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/backspace_single", test_backspace_single, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/backspace_middle", test_backspace_middle, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/delete_word_backward", test_delete_word_backward, NULL, NULL,
+   MUNIT_TEST_OPTION_NONE, NULL},
+  {"/delete_word_backward_in_middle", test_delete_word_backward_in_middle,
+   NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/delete_word_backward_utf8", test_delete_word_backward_utf8, NULL, NULL,
+   MUNIT_TEST_OPTION_NONE, NULL},
+  {"/delete_word_backward_unicode_punctuation",
+   test_delete_word_backward_unicode_punctuation, NULL, NULL,
+   MUNIT_TEST_OPTION_NONE, NULL},
+  {"/delete_to_line_start", test_delete_to_line_start, NULL, NULL,
+   MUNIT_TEST_OPTION_NONE, NULL},
   {"/clear", test_clear, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/move_left_boundary", test_move_left_boundary, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/move_right_boundary", test_move_right_boundary, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

@@ -19,6 +19,8 @@ int input_get_display_cursor(void);
 void input_insert(int ch);
 void input_set_text(const char *text);
 void input_backspace(void);
+void input_delete_word_backward(void);
+void input_delete_to_line_start(void);
 void input_move_left(void);
 void input_move_right(void);
 void input_clear(void);

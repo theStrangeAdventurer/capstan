@@ -1,7 +1,9 @@
 # Focus Modes
 
 The app has two focus modes: **INPUT** (default) and **MESSAGES**.
-Ctrl-F or Option-Tab switches between them. Shift-Tab cycles the active agent
+Ctrl-F switches between them. Option-Tab also switches focus when the terminal
+encodes Option as Meta (`Esc`, then `Tab`); in Terminal.app this requires the
+profile setting **Use Option as Meta key**. Shift-Tab cycles the active agent
 profile. Returning to messages restores the last message cursor position within
 the current session. Creating or switching sessions resets it, so the next entry
 starts at the end of the new history. The status bar always shows the current
@@ -25,6 +27,7 @@ mode.
 | `Shift+Tab` | Cycle active profile: fast -> implement -> plan |
 | Scroll wheel | Scroll message history |
 | Click in messages | Focus MESSAGES and place the message cursor |
+| Click in input | Focus INPUT, including while a blocking operation is active |
 | Drag in messages | Select message text from press point to release point |
 | `PgUp`/`PgDn` | Page scroll (5 lines) |
 
@@ -48,6 +51,8 @@ matching `Enter`.
 | `Enter` | Submit input |
 | `←`/`→` | Move cursor in input |
 | `Backspace` | Delete character |
+| `Ctrl-W` / `Option+Backspace` | Delete the previous word. Option requires the terminal to encode it as Meta (`Esc`, then Backspace). |
+| `Ctrl-U` | Delete to the start of the current line. `Command+Backspace` works only when explicitly mapped to Ctrl-U in the terminal profile. |
 | Bracketed paste | Insert pasted text, including newlines, into input buffer |
 
 **FOCUS_MESSAGES (navigation):**
@@ -85,6 +90,7 @@ MESSAGES ──v──▸ VISUAL (selection starts)
 VISUAL ──y──▸ MESSAGES (yank, selection cleared)
 VISUAL ──Esc──▸ MESSAGES (selection cancelled)
 INPUT ──click messages──▸ MESSAGES (cursor at clicked text)
+MESSAGES ──click input──▸ INPUT
 MESSAGES ──drag messages──▸ VISUAL (selection remains after release)
 ```
 
@@ -107,3 +113,5 @@ selected range, use the normal clipboard path, and show a non-modal
 - **`tui.c`** — renders mode-dependent visual cues (bold/dim border, status bar, block cursor, selection highlight)
 - **`main.c`** — routes keys based on `mode_get()` and `visual_is_active()`
 - **`set_escdelay(50)`** — called before `initscr()` so Esc responds instantly
+- **`cbreak()`** — keeps input unbuffered so control-key shortcuts are delivered immediately
+- **`tui_handle_input_shortcut()` / `tui_focus_input_at_point()`** — shared input actions used by both the main loop and the blocking UI pump

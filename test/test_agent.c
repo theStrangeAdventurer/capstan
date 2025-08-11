@@ -37,6 +37,30 @@ static MunitResult test_append_agent_without_agent_message_creates_agent(
   return MUNIT_OK;
 }
 
+static MunitResult test_ui_only_append_stays_out_of_model_history(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  clear_messages();
+
+  char *empty = my_strdup("");
+  munit_assert_not_null(empty);
+  add_message(empty, empty, MSG_AGENT);
+
+  append_to_last_message_ui("⚙ shell\n", MSG_AGENT);
+  append_to_last_message("Final answer", MSG_AGENT);
+
+  Messages *msgs = get_messages();
+  munit_assert_size(msgs->size, ==, 1);
+  munit_assert_string_equal(msgs->items[0]->text,
+                            "⚙ shell\nFinal answer");
+  munit_assert_string_equal(msgs->items[0]->raw_text, "Final answer");
+  munit_assert_ptr_not_equal(msgs->items[0]->text, msgs->items[0]->raw_text);
+
+  clear_messages();
+  return MUNIT_OK;
+}
+
 static MunitResult test_agent_activity_label(const MunitParameter params[],
                                              void *data) {
   (void)params;
@@ -188,6 +212,9 @@ static MunitResult test_failed_active_write_keeps_current_session(
 static MunitTest tests[] = {
     {"/append_agent_without_agent_message",
      test_append_agent_without_agent_message_creates_agent, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/ui_only_append_stays_out_of_model_history",
+     test_ui_only_append_stays_out_of_model_history, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/activity_label", test_agent_activity_label, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
