@@ -1,0 +1,15 @@
+[
+  {
+    "file": "src/main.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Ivendor/ncurses-install/include",
+      "-Ivendor/ncurses-install/include/ncursesw",
+      "src/main.c",
+      "-o",
+      "build/termai"
+    ],
+    "directory": "/home/alxd/narnia/termai",
+    "output": "build/termai"
+  }
+]

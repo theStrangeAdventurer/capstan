@@ -1,0 +1,17 @@
+s,@DATADIR@,/Users/alexeyzaytsev/narnia/termai/vendor/ncurses/../ncurses-install/share,g
+s,@TERMINFO@,/Users/alexeyzaytsev/narnia/termai/vendor/ncurses/../ncurses-install/share/terminfo,g
+s,@TERMINFO_DIRS@,/Users/alexeyzaytsev/narnia/termai/vendor/ncurses/../ncurses-install/share/terminfo,g
+s,@NCURSES_MAJOR@,6,g
+s,@NCURSES_MINOR@,6,g
+s,@NCURSES_PATCH@,20251230,g
+s,@NCURSES_OSPEED@,short,g
+s,@CAPTOINFO@,captoinfo,g
+s,@CLEAR@,clear,g
+s,@INFOCMP@,infocmp,g
+s,@INFOTOCAP@,infotocap,g
+s,@RESET@,reset,g
+s,@TABS@,tabs,g
+s,@TIC@,tic,g
+s,@TOE@,toe,g
+s,@TPUT@,tput,g
+s,@TSET@,tset,g
