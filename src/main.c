@@ -1,3 +1,4 @@
+#include "tui.h"
 #include "utils.h"
 #include <locale.h>
 #include <ncursesw/curses.h>
@@ -6,13 +7,6 @@
 #include <string.h>
 
 #define INPUT_BUFFER_SIZE 2048
-
-void redraw(int x, int y, char *input) {
-  // redraw
-  move(y, x);
-  clrtoeol();
-  mvprintw(y, x, "%s", input);
-}
 
 int main(int argc, char *argv[]) {
   char input[INPUT_BUFFER_SIZE] = {0};
