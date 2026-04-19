@@ -1,17 +1,28 @@
+#include "utils.h"
+#include <locale.h>
 #include <ncursesw/curses.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
-#define CMD_BUFFER_SIZE 32
+#define INPUT_BUFFER_SIZE 2048
+
+void redraw(int x, int y, char *input) {
+  // redraw
+  move(y, x);
+  clrtoeol();
+  mvprintw(y, x, "%s", input);
+}
 
 int main(int argc, char *argv[]) {
-  char input[CMD_BUFFER_SIZE] = {0};
+  char input[INPUT_BUFFER_SIZE] = {0};
   size_t buf_size = sizeof input;
 
   int pos = 0;
-
+  setlocale(LC_ALL, ""); // Чтобы рендерились emoji
   initscr();
+  noecho(); // Чтобы не выводились все символы подряд (уточнить)
+
   keypad(stdscr, TRUE);
 
   int rows, cols;
@@ -27,7 +38,7 @@ int main(int argc, char *argv[]) {
   int x = cols / 2;
   int y = rows / 2;
 
-  mvprintw(y, x, "%s", input);
+  redraw(x, y, input);
 
   while (1) {
     refresh();
@@ -43,17 +54,12 @@ int main(int argc, char *argv[]) {
       input[pos++] = ch;
       input[pos] = '\0';
 
-      if (strcmp(input, "hi") == 0) {
-        memset(input, 0, buf_size);
-        strcpy(input, "HELLO!");
+      if (strstr(input, "/hi") != NULL) {
+        replace_with(input, buf_size, "/hi", "👋");
         pos = strlen(input);
       }
     }
-
-    // redraw
-    move(y, x);
-    clrtoeol();
-    mvprintw(y, x, "%s", input);
+    redraw(x, y, input);
   }
 
   endwin();

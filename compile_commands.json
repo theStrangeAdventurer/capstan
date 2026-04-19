@@ -3,9 +3,24 @@
     "file": "src/main.c",
     "arguments": [
       "/usr/bin/gcc",
+      "-Iinclude",
       "-Ivendor/ncurses-install/include",
       "-Ivendor/ncurses-install/include/ncursesw",
       "src/main.c",
+      "-o",
+      "build/termai"
+    ],
+    "directory": "/home/alxd/narnia/termai",
+    "output": "build/termai"
+  },
+  {
+    "file": "src/utils.c",
+    "arguments": [
+      "/usr/bin/gcc",
+      "-Iinclude",
+      "-Ivendor/ncurses-install/include",
+      "-Ivendor/ncurses-install/include/ncursesw",
+      "src/utils.c",
       "-o",
       "build/termai"
     ],

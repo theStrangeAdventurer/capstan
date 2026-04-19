@@ -1,7 +1,7 @@
 CC = gcc
 NCURSES_DIR = vendor/ncurses-install
 
-CFLAGS = -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw
+CFLAGS = -Iinclude -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw
 # -L - флаг для динамических библиотек, в нашем случае нужна статика
 # LDFLAGS = -L$(NCURSES_DIR)/lib -lncursesw 
 # А НАМ НУЖНО СТАТИЧЕСКИ
@@ -9,7 +9,7 @@ CFLAGS = -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw
 # Дополнительно добавляем libtinfow.a - когда собираем с --with-termlib то всякие константы типа "_COLS" уходят туда 
 LDFLAGS = $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DIR)/lib/libtinfow.a
 
-SRCS = src/main.c
+SRCS = src/main.c src/utils.c
 TARGET = build/termai
 
 all: $(TARGET)
