@@ -1,13 +1,14 @@
 CC = gcc
 NCURSES_DIR = vendor/ncurses-install
+LUA_DIR = vendor/lua-5.5.0
 
-CFLAGS = -Iinclude -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw
+CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=c99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
 # -L - флаг для динамических библиотек, в нашем случае нужна статика
 # LDFLAGS = -L$(NCURSES_DIR)/lib -lncursesw 
 # А НАМ НУЖНО СТАТИЧЕСКИ
 # Статическая библиотека - это файл с расширением .a (сокращенно от archive)
 # Дополнительно добавляем libtinfow.a - когда собираем с --with-termlib то всякие константы типа "_COLS" уходят туда 
-LDFLAGS = $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DIR)/lib/libtinfow.a
+LDFLAGS = $(LUA_DIR)/src/liblua.a $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DIR)/lib/libtinfow.a
 
 SRCS = $(wildcard src/*.c)
 

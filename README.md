@@ -9,6 +9,19 @@ cd vendor/ncurses-src
   --prefix=$(pwd)/../ncurses-install
 ```
 
+### Как скачать и собрать lua
+
+> [link](https://www.lua.org/download.html)
+
+```sh
+cd vendor
+curl -L -R -O https://www.lua.org/ftp/lua-5.5.0.tar.gz
+tar zxf lua-5.5.0.tar.gz
+cd lua-5.5.0
+make all test
+
+```
+
 #### Build
 
 ##### Linux
