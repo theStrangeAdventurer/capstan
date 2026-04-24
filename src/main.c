@@ -1,3 +1,4 @@
+#include "plugins.h"
 #include "tui.h"
 #include "utils.h"
 #include <dirent.h>
@@ -64,6 +65,7 @@ int main(int argc, char *argv[]) {
       if (strstr(entry->d_name, ".lua")) {
         char path[512];
         snprintf(path, sizeof(path), "plugins/%s", entry->d_name);
+        Plugin *p = plugin_load(path);
       }
     }
     closedir(dir);
