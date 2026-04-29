@@ -25,12 +25,24 @@ struct Plugin {
   void *user_data;         // Пользовательские данные
 };
 
+typedef struct {
+  Plugin **plugins; // Массив указателей на плагины
+  int count;        // Сколько всего плагинов загружено
+  int capacity;     // Сколько памяти выделено
+} PluginRegistry;
+
+void plugin_registry_add(Plugin *plugin);
+
+Plugin *plugin_registry_find(const char *command);
+
+void plugin_registry_cleanup(void);
+
 void plugins_init(void);
 
 Plugin *plugin_load(const char *path);
 
-const char *plugin_execute_sync(Plugin *plugin, const char *command,
-                                char **args, int argc);
+char *plugin_execute_sync(Plugin *plugin, const char *input, char **args,
+                          int argc);
 
 void plugins_cleanup();
 

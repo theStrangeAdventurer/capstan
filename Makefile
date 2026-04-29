@@ -8,7 +8,8 @@ CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/in
 # А НАМ НУЖНО СТАТИЧЕСКИ
 # Статическая библиотека - это файл с расширением .a (сокращенно от archive)
 # Дополнительно добавляем libtinfow.a - когда собираем с --with-termlib то всякие константы типа "_COLS" уходят туда 
-LDFLAGS = $(LUA_DIR)/src/liblua.a $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DIR)/lib/libtinfow.a
+# -lm математическая библиотека - lua на нее ссылается
+LDFLAGS = $(LUA_DIR)/src/liblua.a $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DIR)/lib/libtinfow.a -lm
 
 SRCS = $(wildcard src/*.c)
 

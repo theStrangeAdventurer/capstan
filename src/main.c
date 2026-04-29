@@ -15,7 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define INPUT_BUFFER_SIZE 2048
+#define INPUT_BUFFER_SIZE 8192
+#define MAX_COMMAND_LEN 64
 
 // Проверка наличия команды в строке
 static int has_command(const char *input, char *command, size_t *pos) {
@@ -34,8 +35,8 @@ static int has_command(const char *input, char *command, size_t *pos) {
 
   // Копируем команду
   size_t cmd_len = end - found;
-  if (cmd_len >= 64)
-    cmd_len = 63;
+  if (cmd_len >= MAX_COMMAND_LEN)
+    cmd_len = MAX_COMMAND_LEN - 1;
   strncpy(command, found, cmd_len);
   command[cmd_len] = '\0';
 
@@ -55,6 +56,7 @@ int main(int argc, char *argv[]) {
   noecho();   // Чтобы не выводились все символы подряд
   timeout(0); // Неблокирующий getch()
   keypad(stdscr, TRUE);
+  plugins_init();
 
   // Загружаем плагины из директории plugins/
   struct dirent *entry;
@@ -66,6 +68,7 @@ int main(int argc, char *argv[]) {
         char path[512];
         snprintf(path, sizeof(path), "plugins/%s", entry->d_name);
         Plugin *p = plugin_load(path);
+        plugin_registry_add(p);
       }
     }
     closedir(dir);
@@ -90,18 +93,22 @@ int main(int argc, char *argv[]) {
     int ch = getch();
     if (ch == ERR) {
       // Нет ввода, небольшая задержка
-      napms(10); // 10ms
+      napms(10); // Нужно для будущей асинхронности
       redraw(x, y, input);
       continue;
     }
 
     if (ch == '\n' || ch == '\r') {
       // Enter - обработка команды
-      char command[64];
+      char command[MAX_COMMAND_LEN];
       size_t cmd_pos;
 
       if (has_command(input, command, &cmd_pos)) {
-        // TODO: Добавить логику обработки команды
+        Plugin *p = plugin_registry_find(command);
+        if (p) {
+          char *result = plugin_execute_sync(p, input, NULL, 0);
+          replace_with(input, sizeof(input), command, result);
+        }
       }
 
       redraw(x, y, input);
@@ -120,6 +127,7 @@ int main(int argc, char *argv[]) {
     redraw(x, y, input);
   }
   endwin();
+  plugin_registry_cleanup();
 
   return 0;
 }

@@ -13,12 +13,7 @@ function plugin.handler(input, command, args)
 	-- command: команда, которую нужно обработать
 	-- args: таблица аргументов команды
 
-	if command == "/hi" or command == "/hello" or command == "/hey" then
-		return "👋"
-	end
-
-	-- Возвращаем nil, если не обрабатываем эту команду
-	return nil
+	return "👋"
 end
 
 return plugin

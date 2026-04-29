@@ -4,12 +4,71 @@
 #include <lualib.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+
+#define PLUGIN_RESPONSE_MAX_SIZE 4096
+#define PLUGIN_CAPACITY_INCREMENT 10
 
 lua_State *L = NULL;
 
 void plugins_init(void) {
   L = luaL_newstate();
   luaL_openlibs(L);
+}
+
+static PluginRegistry plugins_registry = {
+    .plugins = NULL, .count = 0, .capacity = 0};
+
+void plugin_registry_add(Plugin *plugin) {
+  if (plugins_registry.count >= plugins_registry.capacity) {
+    plugins_registry.capacity += PLUGIN_CAPACITY_INCREMENT;
+    plugins_registry.plugins =
+        realloc(plugins_registry.plugins,
+                plugins_registry.capacity *
+                    sizeof(Plugin *)); // Выделяем место под большее количество
+                                       // указателей на плагины
+
+    plugins_registry.plugins[plugins_registry.count++] = plugin;
+  }
+}
+
+Plugin *plugin_registry_find(const char *command) {
+  for (int i = 0; i < plugins_registry.count; i++) {
+    Plugin *p = plugins_registry.plugins[i];
+
+    if (!p || !p->command)
+      continue;
+
+    if (strcmp(p->command, command) == 0)
+      return p;
+  }
+  return NULL;
+}
+
+void plugin_registry_cleanup(void) {
+  if (!plugins_registry.plugins)
+    return;
+
+  for (int i = 0; i < plugins_registry.count; i++) {
+    Plugin *p = plugins_registry.plugins[i];
+
+    if (p) {
+      free(p->command);
+      free(p->user_data);
+      free(p->id);
+      free(p->name);
+      free(p->description);
+
+      if (p->handler_ref > 0)
+        luaL_unref(p->L, LUA_REGISTRYINDEX, p->handler_ref);
+
+      free(p);
+    }
+  }
+  free(plugins_registry.plugins);
+  plugins_registry.plugins = NULL;
+  plugins_registry.count = 0;
+  plugins_registry.capacity = 0;
 }
 
 static char *lua_getstr_f_value(lua_State *L, int idx, const char *field) {
@@ -19,7 +78,7 @@ static char *lua_getstr_f_value(lua_State *L, int idx, const char *field) {
   // бы оказалось на вершине стека
   lua_getfield(L, idx, field);
 
-  const char *strval = lua_tostring(L, idx);
+  const char *strval = lua_tostring(L, -1); // Теперь берем с вершины стека
   char *result = malloc(strlen(strval) + 1);
   strcpy(result, strval);
   lua_pop(L, 1); // Снимаем  id со стека, теперь снова таблица на -1
@@ -51,19 +110,63 @@ Plugin *plugin_load(const char *path) {
   p->command = lua_getstr_f_value(L, -1, "command");
   lua_getfield(L, -1, "handler");
   // Автоматически снимает с вершины стека функцию handler и сохраняет ее в
-  // специальном реестре возвращая при этом ссылку на нее
+  // специальном реестре возвращая при этом ссылку (int) на нее
+  // позже мы получим функцию по этой ссылке числу с помощью lua_rawgeti
+  // LUA_REGISTRYINDEX - специальная таблица в которой можно безопасно хранить
+  // данные lua чтобы их не собрал сборщик мусора
   p->handler_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
   lua_pop(L, 1); // Это уже саму таблицу плагина удаляем со стека
 
   p->callback = NULL;
   p->user_data = NULL;
-
   return p;
 }
 
-const char *plugin_execute_sync(Plugin *plugin, const char *command,
-                                char **args, int argc) {}
+char *plugin_execute_sync(Plugin *plugin, const char *input, char **args,
+                          int argc) {
+  // Достаем функицю по ссылке-индексу из специальной таблицы lua на стороне C и
+  // кладем на вершину стека
+  lua_rawgeti(plugin->L, LUA_REGISTRYINDEX, plugin->handler_ref);
+
+  // Пушим команду на вершину стека
+  // Тут функия уезжает на -2
+  lua_pushstring(plugin->L, input);
+
+  // Кладем на вершину стека таблицу с аргументами
+  // Тут функия уезжает на -3
+  // Таблица на -1
+  lua_createtable(plugin->L, argc, 0);
+
+  for (int i = 0; i < argc; i++) {
+    // Таблица уезжает на -2
+    // Строка из аргумента теперь на вершине стека -1
+    lua_pushstring(plugin->L, args[i]);
+    // Забираем с вершины стека запушеную строку и кладем в таблицу под индексом
+    // i+1
+    lua_seti(plugin->L, -2, i + 1);
+  }
+
+  // Вызываем функцию - 2 аргумента, 1 результат, 0 ошибок
+  // Стек выглядит так:
+  // [-1] {[1]="arg1", [2]="arg2"}  таблица с аргументами
+  // [-2] "input"                  первый аргумент
+  // [-3] функция                    функция
+  // lua_pcall берет со стека указанное количество аргументов и вызывает функцию
+  // под ними
+  // После чего кладет результат выполнения функции обратно на стек
+  if (lua_pcall(plugin->L, 2, 1, 0) != LUA_OK) {
+    fprintf(stderr, "Error: %s\n", lua_tostring(plugin->L, -1));
+    return NULL;
+  }
+
+  const char *result = lua_tostring(plugin->L, -1);
+  static char response_buffer[PLUGIN_RESPONSE_MAX_SIZE];
+  strncpy(response_buffer, result, sizeof(response_buffer));
+  lua_pop(plugin->L, 1);
+
+  return response_buffer;
+}
 void plugins_cleanup(void) {
   if (L) {
     lua_close(L);
