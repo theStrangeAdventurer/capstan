@@ -41,8 +41,7 @@ void plugins_init(void);
 
 Plugin *plugin_load(const char *path);
 
-char *plugin_execute_sync(Plugin *plugin, const char *input, char **args,
-                          int argc);
+char *plugin_execute_sync(Plugin *plugin, const char *input);
 
 void plugins_cleanup();
 

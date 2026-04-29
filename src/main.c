@@ -106,10 +106,18 @@ int main(int argc, char *argv[]) {
       if (has_command(input, command, &cmd_pos)) {
         Plugin *p = plugin_registry_find(command);
         if (p) {
-          char *result = plugin_execute_sync(p, input, NULL, 0);
-          replace_with(input, sizeof(input), command, result);
+          char *result = plugin_execute_sync(p, input);
+          // replace_with(input, sizeof(input), command, result);
+          // Копируем результат назад в input
+          if (result) {
+            strncpy(input, result, INPUT_BUFFER_SIZE - 1);
+            input[INPUT_BUFFER_SIZE - 1] = '\0';
+            pos = strlen(input); // Обновляем позицию курсора
+          }
         }
       }
+      // Вот тут по сути мы должны уже зареплейсенный текст с результатами
+      // работы плагинов отправить во вьюху общего чата а input очистить
 
       redraw(x, y, input);
       continue;

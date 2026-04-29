@@ -123,8 +123,7 @@ Plugin *plugin_load(const char *path) {
   return p;
 }
 
-char *plugin_execute_sync(Plugin *plugin, const char *input, char **args,
-                          int argc) {
+char *plugin_execute_sync(Plugin *plugin, const char *input) {
   // Достаем функицю по ссылке-индексу из специальной таблицы lua на стороне C и
   // кладем на вершину стека
   lua_rawgeti(plugin->L, LUA_REGISTRYINDEX, plugin->handler_ref);
@@ -133,29 +132,14 @@ char *plugin_execute_sync(Plugin *plugin, const char *input, char **args,
   // Тут функия уезжает на -2
   lua_pushstring(plugin->L, input);
 
-  // Кладем на вершину стека таблицу с аргументами
-  // Тут функия уезжает на -3
-  // Таблица на -1
-  lua_createtable(plugin->L, argc, 0);
-
-  for (int i = 0; i < argc; i++) {
-    // Таблица уезжает на -2
-    // Строка из аргумента теперь на вершине стека -1
-    lua_pushstring(plugin->L, args[i]);
-    // Забираем с вершины стека запушеную строку и кладем в таблицу под индексом
-    // i+1
-    lua_seti(plugin->L, -2, i + 1);
-  }
-
-  // Вызываем функцию - 2 аргумента, 1 результат, 0 ошибок
+  // Вызываем функцию - 1 аргумента, 1 результат, 0 ошибок
   // Стек выглядит так:
-  // [-1] {[1]="arg1", [2]="arg2"}  таблица с аргументами
   // [-2] "input"                  первый аргумент
   // [-3] функция                    функция
   // lua_pcall берет со стека указанное количество аргументов и вызывает функцию
   // под ними
   // После чего кладет результат выполнения функции обратно на стек
-  if (lua_pcall(plugin->L, 2, 1, 0) != LUA_OK) {
+  if (lua_pcall(plugin->L, 1, 1, 0) != LUA_OK) {
     fprintf(stderr, "Error: %s\n", lua_tostring(plugin->L, -1));
     return NULL;
   }
