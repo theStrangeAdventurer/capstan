@@ -14,7 +14,7 @@ function plugin.handler(input)
 	local args_num = 1; -- name
 	local args_res = {};
 	local cmd_start = input:find(plugin.command, 1, true)
-	local cmd_end = #plugin.command
+	local cmd_end = cmd_start + #plugin.command
 
 	for word in content_after_cmd:gmatch('%S+') do
 		if #args_res < args_num then
@@ -23,7 +23,7 @@ function plugin.handler(input)
 		end
 	end
 
-	local name = args_res[1];
+	local name = args_res[1] or '<Anonymous>';
 
 	local plugin_result = "👋, " .. name .. "!"
 

@@ -18,6 +18,14 @@
 #define INPUT_BUFFER_SIZE 8192
 #define MAX_COMMAND_LEN 64
 
+static void replace_input(char *dest, char *new_val, int *pos) {
+  if (!dest || !new_val)
+    return;
+  strncpy(dest, new_val, INPUT_BUFFER_SIZE - 1);
+  dest[INPUT_BUFFER_SIZE - 1] = '\0';
+  *pos = strlen(dest);
+}
+
 // Проверка наличия команды в строке
 static int has_command(const char *input, char *command, size_t *pos) {
   const char *found = strstr(input, "/");
@@ -109,11 +117,7 @@ int main(int argc, char *argv[]) {
           char *result = plugin_execute_sync(p, input);
           // replace_with(input, sizeof(input), command, result);
           // Копируем результат назад в input
-          if (result) {
-            strncpy(input, result, INPUT_BUFFER_SIZE - 1);
-            input[INPUT_BUFFER_SIZE - 1] = '\0';
-            pos = strlen(input); // Обновляем позицию курсора
-          }
+          replace_input(input, result, &pos);
         }
       }
       // Вот тут по сути мы должны уже зареплейсенный текст с результатами
@@ -123,9 +127,14 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    if ((ch == KEY_BACKSPACE || ch == 127 || ch == 8)) {
+    int is_backspace_pressed = (ch == KEY_BACKSPACE || ch == 127 || ch == 8);
+
+    if (is_backspace_pressed) {
       if (pos > 0) {
-        input[--pos] = '\0';
+        // Удаляем нужное количество байт для UTF-8 символов
+        int prev_pos = get_prev_char_start(input, pos);
+        strcpy(input + prev_pos, input + pos);
+        pos = prev_pos;
       }
     } else {
       input[pos++] = ch;
@@ -136,6 +145,6 @@ int main(int argc, char *argv[]) {
   }
   endwin();
   plugin_registry_cleanup();
-
+  system("reset");
   return 0;
 }

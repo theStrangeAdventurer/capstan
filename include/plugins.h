@@ -44,5 +44,5 @@ Plugin *plugin_load(const char *path);
 char *plugin_execute_sync(Plugin *plugin, const char *input);
 
 void plugins_cleanup();
-
+char *get_plugins_info();
 #endif

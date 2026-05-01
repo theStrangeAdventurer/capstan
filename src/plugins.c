@@ -2,6 +2,7 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -19,6 +20,23 @@ void plugins_init(void) {
 static PluginRegistry plugins_registry = {
     .plugins = NULL, .count = 0, .capacity = 0};
 
+char *get_plugins_info() {
+  char *result = malloc(100 * plugins_registry.count);
+  int len = 0;
+
+  len += sprintf(result, "count: %d", plugins_registry.count);
+  for (int i = 0; i < plugins_registry.count; i++) {
+    Plugin *p = plugins_registry.plugins[i];
+
+    if (!p || !p->command)
+      continue;
+
+    len += sprintf(result + len, "*** %s[%s] *** ", p->name, p->command);
+  }
+
+  return result;
+}
+
 void plugin_registry_add(Plugin *plugin) {
   if (plugins_registry.count >= plugins_registry.capacity) {
     plugins_registry.capacity += PLUGIN_CAPACITY_INCREMENT;
@@ -27,9 +45,8 @@ void plugin_registry_add(Plugin *plugin) {
                 plugins_registry.capacity *
                     sizeof(Plugin *)); // Выделяем место под большее количество
                                        // указателей на плагины
-
-    plugins_registry.plugins[plugins_registry.count++] = plugin;
   }
+  plugins_registry.plugins[plugins_registry.count++] = plugin;
 }
 
 Plugin *plugin_registry_find(const char *command) {
@@ -139,14 +156,28 @@ char *plugin_execute_sync(Plugin *plugin, const char *input) {
   // lua_pcall берет со стека указанное количество аргументов и вызывает функцию
   // под ними
   // После чего кладет результат выполнения функции обратно на стек
-  if (lua_pcall(plugin->L, 1, 1, 0) != LUA_OK) {
+  if (lua_pcall(plugin->L, 1, 2, 0) != LUA_OK) {
     fprintf(stderr, "Error: %s\n", lua_tostring(plugin->L, -1));
     return NULL;
   }
+  // Теперь на стеке:
+  // [-2] ui_result (первый возврат из Lua)
+  // [-1] llm_result (второй возврат или nil)
+  const char *ui_result = lua_tostring(plugin->L, -2);
+  const char *llm_result = NULL;
 
-  const char *result = lua_tostring(plugin->L, -1);
+  if (!lua_isnil(plugin->L, -1)) {
+    llm_result = lua_tostring(plugin->L, -1);
+  }
+
+  if (!llm_result) {
+    llm_result = ui_result; // TODO: подумать что с этим делать, видимо надо
+                            // заводить структуру с двумя полями
+  }
+
   static char response_buffer[PLUGIN_RESPONSE_MAX_SIZE];
-  strncpy(response_buffer, result, sizeof(response_buffer));
+
+  strncpy(response_buffer, ui_result, sizeof(response_buffer));
   lua_pop(plugin->L, 1);
 
   return response_buffer;
