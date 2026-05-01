@@ -26,6 +26,11 @@ struct Plugin {
 };
 
 typedef struct {
+  char *ui_result;
+  char *llm_result;
+} PluginResult;
+
+typedef struct {
   Plugin **plugins; // Массив указателей на плагины
   int count;        // Сколько всего плагинов загружено
   int capacity;     // Сколько памяти выделено
@@ -41,7 +46,7 @@ void plugins_init(void);
 
 Plugin *plugin_load(const char *path);
 
-char *plugin_execute_sync(Plugin *plugin, const char *input);
+PluginResult *plugin_execute_sync(Plugin *plugin, const char *input);
 
 void plugins_cleanup();
 char *get_plugins_info();

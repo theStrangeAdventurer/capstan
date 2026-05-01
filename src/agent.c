@@ -5,6 +5,8 @@
 
 static Messages messages = {0};
 
+Messages *get_messages(void) { return &messages; }
+
 void add_message(char *text, char *raw_text, MessageRole role) {
   if (messages.count >= messages.capacity) {
     messages.capacity += MESSAGES_CAPACITY_INCREMENT;
@@ -27,7 +29,7 @@ void add_message(char *text, char *raw_text, MessageRole role) {
   messages.items[messages.count++] = message;
 }
 
-void clear_messages() {
+void clear_messages(void) {
   if (!messages.items || !messages.count)
     return;
 

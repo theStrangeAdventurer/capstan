@@ -1,6 +1,6 @@
+#include "agent.h"
 #include "plugins.h"
 #include "tui.h"
-#include "utils.h"
 #include <dirent.h>
 #include <lauxlib.h>
 #include <locale.h>
@@ -91,6 +91,7 @@ int main(int argc, char *argv[]) {
 
   int x = cols / 2 - strlen(greeting) / 2;
   int y = rows / 2;
+  // int sep_y = rows / 4;
 
   redraw(x, y, input);
 
@@ -111,19 +112,21 @@ int main(int argc, char *argv[]) {
       char command[MAX_COMMAND_LEN];
       size_t cmd_pos;
 
+      add_message(input, input, MSG_USER);
+      redraw(x, y, input);
+
       if (has_command(input, command, &cmd_pos)) {
         Plugin *p = plugin_registry_find(command);
         if (p) {
-          char *result = plugin_execute_sync(p, input);
-          // replace_with(input, sizeof(input), command, result);
-          // Копируем результат назад в input
-          replace_input(input, result, &pos);
+          PluginResult *r = plugin_execute_sync(p, input);
+          if (r) {
+            add_message(r->ui_result, r->llm_result, MSG_USER);
+            replace_input(input, r->ui_result, &pos);
+            redraw(x, y, input);
+          }
         }
       }
-      // Вот тут по сути мы должны уже зареплейсенный текст с результатами
-      // работы плагинов отправить во вьюху общего чата а input очистить
 
-      redraw(x, y, input);
       continue;
     }
 

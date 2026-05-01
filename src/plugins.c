@@ -140,7 +140,15 @@ Plugin *plugin_load(const char *path) {
   return p;
 }
 
-char *plugin_execute_sync(Plugin *plugin, const char *input) {
+static char *my_strdup(const char *s) {
+  size_t len = strlen(s) + 1;
+  char *new = malloc(len);
+  if (new == NULL)
+    return NULL;
+  return memcpy(new, s, len);
+}
+
+PluginResult *plugin_execute_sync(Plugin *plugin, const char *input) {
   // Достаем функицю по ссылке-индексу из специальной таблицы lua на стороне C и
   // кладем на вершину стека
   lua_rawgeti(plugin->L, LUA_REGISTRYINDEX, plugin->handler_ref);
@@ -175,13 +183,14 @@ char *plugin_execute_sync(Plugin *plugin, const char *input) {
                             // заводить структуру с двумя полями
   }
 
-  static char response_buffer[PLUGIN_RESPONSE_MAX_SIZE];
+  PluginResult *r = malloc(sizeof(PluginResult));
+  r->ui_result = my_strdup(ui_result);
+  r->llm_result = my_strdup(llm_result ? llm_result : ui_result);
+  lua_pop(plugin->L, 2);
 
-  strncpy(response_buffer, ui_result, sizeof(response_buffer));
-  lua_pop(plugin->L, 1);
-
-  return response_buffer;
+  return r;
 }
+
 void plugins_cleanup(void) {
   if (L) {
     lua_close(L);
