@@ -53,6 +53,7 @@ int main(int argc, char *argv[]) {
   noecho();
   timeout(0);
   keypad(stdscr, TRUE);
+  mousemask(ALL_MOUSE_EVENTS, NULL);
   init_tui();
 
   plugins_init();
@@ -83,6 +84,22 @@ int main(int argc, char *argv[]) {
 
     if (ch == KEY_RESIZE) {
       render_all(scroll_offset, input, pos);
+      continue;
+    }
+
+    if (ch == KEY_MOUSE) {
+      MEVENT event;
+      if (getmouse(&event) == OK) {
+        if (event.bstate & BUTTON4_PRESSED) {
+          scroll_offset += 3;
+          render_all(scroll_offset, input, pos);
+        } else if (event.bstate & BUTTON5_PRESSED) {
+          scroll_offset -= 3;
+          if (scroll_offset < 0)
+            scroll_offset = 0;
+          render_all(scroll_offset, input, pos);
+        }
+      }
       continue;
     }
 
