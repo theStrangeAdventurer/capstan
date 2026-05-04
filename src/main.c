@@ -1,6 +1,7 @@
 #include "agent.h"
 #include "plugins.h"
 #include "tui.h"
+#include "utils.h"
 #include <dirent.h>
 #include <lauxlib.h>
 #include <locale.h>
@@ -18,30 +19,18 @@
 #define INPUT_BUFFER_SIZE 8192
 #define MAX_COMMAND_LEN 64
 
-static void replace_input(char *dest, char *new_val, int *pos) {
-  if (!dest || !new_val)
-    return;
-  strncpy(dest, new_val, INPUT_BUFFER_SIZE - 1);
-  dest[INPUT_BUFFER_SIZE - 1] = '\0';
-  *pos = strlen(dest);
-}
-
-// Проверка наличия команды в строке
 static int has_command(const char *input, char *command, size_t *pos) {
   const char *found = strstr(input, "/");
   if (!found)
     return 0;
 
-  // Возвращаем позицию начала команды
   *pos = found - input;
 
-  // Ищем конец команды (пробел или конец строки)
   const char *end = found;
   while (*end && *end != ' ' && *end != '\0') {
     end++;
   }
 
-  // Копируем команду
   size_t cmd_len = end - found;
   if (cmd_len >= MAX_COMMAND_LEN)
     cmd_len = MAX_COMMAND_LEN - 1;
@@ -56,22 +45,22 @@ int main(int argc, char *argv[]) {
   (void)argv;
 
   char input[INPUT_BUFFER_SIZE] = {0};
-  // size_t buf_size = sizeof input;
-
   int pos = 0;
-  setlocale(LC_ALL, ""); // Чтобы рендерились emoji
+  int scroll_offset = 0;
+
+  setlocale(LC_ALL, "");
   initscr();
-  noecho();   // Чтобы не выводились все символы подряд
-  timeout(0); // Неблокирующий getch()
+  noecho();
+  timeout(0);
   keypad(stdscr, TRUE);
+  init_tui();
+
   plugins_init();
 
-  // Загружаем плагины из директории plugins/
   struct dirent *entry;
   DIR *dir = opendir("plugins");
   if (dir) {
     while ((entry = readdir(dir)) != NULL) {
-      // Проверяем что это файл и имеет расширение .lua
       if (strstr(entry->d_name, ".lua")) {
         char path[512];
         snprintf(path, sizeof(path), "plugins/%s", entry->d_name);
@@ -82,51 +71,58 @@ int main(int argc, char *argv[]) {
     closedir(dir);
   }
 
-  int rows, cols;
-  getmaxyx(stdscr, rows, cols);
-
-  const char *greeting = "Введите команду (например: /hi, /file README.md)";
-  strcpy(input, greeting);
-  pos = strlen(input);
-
-  int x = cols / 2 - strlen(greeting) / 2;
-  int y = rows / 2;
-  // int sep_y = rows / 4;
-
-  redraw(x, y, input);
+  render_all(scroll_offset, input, pos);
 
   while (1) {
-    refresh();
-
-    // Обработка пользовательского ввода
     int ch = getch();
     if (ch == ERR) {
-      // Нет ввода, небольшая задержка
-      napms(10); // Нужно для будущей асинхронности
-      redraw(x, y, input);
+      napms(10);
+      render_all(scroll_offset, input, pos);
+      continue;
+    }
+
+    if (ch == KEY_RESIZE) {
+      render_all(scroll_offset, input, pos);
+      continue;
+    }
+
+    if (ch == KEY_PPAGE) {
+      scroll_offset += 5;
+      render_all(scroll_offset, input, pos);
+      continue;
+    }
+
+    if (ch == KEY_NPAGE) {
+      scroll_offset -= 5;
+      if (scroll_offset < 0)
+        scroll_offset = 0;
+      render_all(scroll_offset, input, pos);
       continue;
     }
 
     if (ch == '\n' || ch == '\r') {
-      // Enter - обработка команды
-      char command[MAX_COMMAND_LEN];
-      size_t cmd_pos;
+      if (strlen(input) > 0) {
+        char *cp_input = my_strdup(input);
 
-      add_message(input, input, MSG_USER);
-      redraw(x, y, input);
+        add_message(cp_input, cp_input, MSG_USER);
+        scroll_offset = 0;
 
-      if (has_command(input, command, &cmd_pos)) {
-        Plugin *p = plugin_registry_find(command);
-        if (p) {
-          PluginResult *r = plugin_execute_sync(p, input);
-          if (r) {
-            add_message(r->ui_result, r->llm_result, MSG_USER);
-            replace_input(input, r->ui_result, &pos);
-            redraw(x, y, input);
+        char command[MAX_COMMAND_LEN];
+        size_t cmd_pos;
+        if (has_command(input, command, &cmd_pos)) {
+          Plugin *p = plugin_registry_find(command);
+          if (p) {
+            PluginResult *r = plugin_execute_sync(p, input);
+            if (r) {
+              add_message(r->ui_result, r->llm_result, MSG_AGENT);
+            }
           }
         }
       }
 
+      memset(input, 0, INPUT_BUFFER_SIZE);
+      pos = 0;
+      render_all(scroll_offset, input, pos);
       continue;
     }
 
@@ -134,7 +130,6 @@ int main(int argc, char *argv[]) {
 
     if (is_backspace_pressed) {
       if (pos > 0) {
-        // Удаляем нужное количество байт для UTF-8 символов
         int prev_pos = get_prev_char_start(input, pos);
         strcpy(input + prev_pos, input + pos);
         pos = prev_pos;
@@ -144,7 +139,7 @@ int main(int argc, char *argv[]) {
       input[pos] = '\0';
     }
 
-    redraw(x, y, input);
+    render_all(scroll_offset, input, pos);
   }
   endwin();
   plugin_registry_cleanup();

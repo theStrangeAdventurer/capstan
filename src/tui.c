@@ -1,22 +1,113 @@
 #include "curses.h"
+#include "agent.h"
+#include "tui.h"
+#include <stdlib.h>
+#include <string.h>
 
-void redraw_char(int x, int y, char *input, int pos) {
-  move(y, x + pos);
-  printw("%c", input[pos]);
+void init_tui(void) {
+  if (has_colors()) {
+    start_color();
+    init_pair(1, COLOR_CYAN, COLOR_BLACK);
+    init_pair(2, COLOR_GREEN, COLOR_BLACK);
+  }
+  curs_set(1);
 }
 
-void redraw_backspace(int x, int y, int pos) {
-  move(y, x + pos);
-  printw(" "); // Напечатать пробел вместо символа
+void render_all(int scroll_offset, const char *input, int input_pos) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  int margin = MARGIN;
+  int input_h = INPUT_WIN_HEIGHT;
+  int msg_h = rows - input_h - 2 * margin;
+  int inner_w = cols - 2 * margin;
+
+  if (msg_h < 1 || inner_w < 1)
+    return;
+
+  // --- Message history window ---
+  WINDOW *msg_win = newwin(msg_h, inner_w, margin, margin);
+  if (!msg_win)
+    return;
+  werase(msg_win);
+
+  Messages *msgs = get_messages();
+
+  int *line_counts = malloc(msgs->count * sizeof(int));
+  int total_lines = 0;
+
+  for (int i = 0; i < msgs->count; i++) {
+    int len = strlen(msgs->items[i]->text);
+    int l = len == 0 ? 1 : (len + inner_w - 1) / inner_w;
+    line_counts[i] = l;
+    total_lines += l;
+  }
+
+  int max_scroll = total_lines > msg_h ? total_lines - msg_h : 0;
+  if (scroll_offset > max_scroll)
+    scroll_offset = max_scroll;
+  if (scroll_offset < 0)
+    scroll_offset = 0;
+
+  int top_line = total_lines - msg_h - scroll_offset;
+  if (top_line < 0)
+    top_line = 0;
+
+  int global_line = 0;
+  int win_row = 0;
+
+  for (int i = 0; i < msgs->count && win_row < msg_h; i++) {
+    Message *msg = msgs->items[i];
+    int cp = msg->role == MSG_USER ? 1 : 2;
+    wattron(msg_win, COLOR_PAIR(cp));
+
+    const char *text = msg->text;
+    int text_len = strlen(text);
+    int byte_off = 0;
+
+    for (int l = 0; l < line_counts[i]; l++) {
+      if (global_line >= top_line && win_row < msg_h) {
+        int rem = text_len - byte_off;
+        int n = rem > inner_w ? inner_w : rem;
+        mvwaddnstr(msg_win, win_row, 0, text + byte_off, n);
+        win_row++;
+      }
+      byte_off += inner_w;
+      global_line++;
+    }
+
+    wattroff(msg_win, COLOR_PAIR(cp));
+  }
+
+  free(line_counts);
+
+  // --- Input window (fixed at bottom) ---
+  int input_y = rows - input_h - margin;
+  WINDOW *input_win = newwin(input_h, inner_w, input_y, margin);
+  if (!input_win) {
+    wrefresh(msg_win);
+    delwin(msg_win);
+    return;
+  }
+
+  werase(input_win);
+  box(input_win, 0, 0);
+  mvwaddstr(input_win, 1, 1, input);
+  int vis_pos = count_visible_chars(input, input_pos);
+  wmove(input_win, 1, 1 + vis_pos);
+
+  wrefresh(msg_win);
+  wrefresh(input_win);
+
+  delwin(msg_win);
+  delwin(input_win);
 }
 
 int count_visible_chars(const char *str, int byte_pos) {
   int chars = 0;
   for (int i = 0; i < byte_pos && str[i]; i++) {
-    // UTF-8: если NOT continuation byte (не 10xxxxxx) → новый символ
-    if ((str[i] & 0xC0) != 0x80) {
+    if ((str[i] & 0xC0) != 0x80)
       chars++;
-    }
   }
   return chars;
 }
@@ -24,18 +115,9 @@ int count_visible_chars(const char *str, int byte_pos) {
 int get_prev_char_start(const char *str, int pos) {
   if (pos <= 0)
     return pos;
-
   pos--;
-  // UTF-8: если бит 11xxxxxx → это начало символа
   while (pos > 0 && (str[pos] & 0xC0) == 0x80) {
     pos--;
   }
   return pos;
-}
-void redraw(int x, int y, char *input) {
-  // Очищаем строку с вводом
-  move(y, x);
-  clrtoeol();
-  addstr(input); // Лучше использовать для UTF-8 символов
-  // mvprintw(y, x, "%s", input);
 }

@@ -1,5 +1,14 @@
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+
+char *my_strdup(const char *s) {
+  size_t len = strlen(s) + 1;
+  char *new = malloc(len);
+  if (new == NULL)
+    return NULL;
+  return memcpy(new, s, len);
+}
 
 /**
  * replace string to another string and put it in Buffer

@@ -1,4 +1,5 @@
 #include "plugins.h"
+#include "utils.h"
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
@@ -140,14 +141,6 @@ Plugin *plugin_load(const char *path) {
   return p;
 }
 
-static char *my_strdup(const char *s) {
-  size_t len = strlen(s) + 1;
-  char *new = malloc(len);
-  if (new == NULL)
-    return NULL;
-  return memcpy(new, s, len);
-}
-
 PluginResult *plugin_execute_sync(Plugin *plugin, const char *input) {
   // Достаем функицю по ссылке-индексу из специальной таблицы lua на стороне C и
   // кладем на вершину стека
@@ -179,8 +172,7 @@ PluginResult *plugin_execute_sync(Plugin *plugin, const char *input) {
   }
 
   if (!llm_result) {
-    llm_result = ui_result; // TODO: подумать что с этим делать, видимо надо
-                            // заводить структуру с двумя полями
+    llm_result = ui_result;
   }
 
   PluginResult *r = malloc(sizeof(PluginResult));
