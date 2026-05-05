@@ -82,6 +82,9 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
+    int is_enter_pressed = ch == '\n' || ch == '\r';
+    int is_backspace_pressed = (ch == KEY_BACKSPACE || ch == 127 || ch == 8);
+
     if (ch == KEY_RESIZE) {
       render_all(scroll_offset, input, pos);
       continue;
@@ -117,11 +120,9 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    if (ch == '\n' || ch == '\r') {
+    if (is_enter_pressed) {
       if (strlen(input) > 0) {
-        char *cp_input = my_strdup(input);
 
-        add_message(cp_input, cp_input, MSG_USER);
         scroll_offset = 0;
 
         char command[MAX_COMMAND_LEN];
@@ -131,9 +132,12 @@ int main(int argc, char *argv[]) {
           if (p) {
             PluginResult *r = plugin_execute_sync(p, input);
             if (r) {
-              add_message(r->ui_result, r->llm_result, MSG_AGENT);
+              add_message(r->ui_result, r->raw_result, MSG_USER);
             }
           }
+        } else {
+          char *cp_input = my_strdup(input);
+          add_message(cp_input, cp_input, MSG_USER);
         }
       }
 
@@ -142,8 +146,6 @@ int main(int argc, char *argv[]) {
       render_all(scroll_offset, input, pos);
       continue;
     }
-
-    int is_backspace_pressed = (ch == KEY_BACKSPACE || ch == 127 || ch == 8);
 
     if (is_backspace_pressed) {
       if (pos > 0) {

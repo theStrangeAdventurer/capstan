@@ -27,7 +27,7 @@ struct Plugin {
 
 typedef struct {
   char *ui_result;
-  char *llm_result;
+  char *raw_result;
 } PluginResult;
 
 typedef struct {

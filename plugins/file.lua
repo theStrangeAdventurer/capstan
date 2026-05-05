@@ -22,10 +22,10 @@ function plugin.handler(input)
 	local cmd_start = input:find(plugin.command, 1, true)
 	local cmd_end = cmd_start + #plugin.command
 	local ui_result = input:sub(1, cmd_start - 1) .. ui_value .. " " .. input:sub(cmd_end + 1)
-	local llm_result = input:sub(1, cmd_start - 1) .. llm_value .. " " .. input:sub(cmd_end + 1)
+	local raw_result = input:sub(1, cmd_start - 1) .. llm_value .. " " .. input:sub(cmd_end + 1)
 
 	file:close()
-	return ui_result, llm_result
+	return ui_result, raw_result
 end
 
 return plugin

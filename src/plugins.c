@@ -163,21 +163,21 @@ PluginResult *plugin_execute_sync(Plugin *plugin, const char *input) {
   }
   // Теперь на стеке:
   // [-2] ui_result (первый возврат из Lua)
-  // [-1] llm_result (второй возврат или nil)
+  // [-1] raw_result (второй возврат или nil)
   const char *ui_result = lua_tostring(plugin->L, -2);
-  const char *llm_result = NULL;
+  const char *raw_result = NULL;
 
   if (!lua_isnil(plugin->L, -1)) {
-    llm_result = lua_tostring(plugin->L, -1);
+    raw_result = lua_tostring(plugin->L, -1);
   }
 
-  if (!llm_result) {
-    llm_result = ui_result;
+  if (!raw_result) {
+    raw_result = ui_result;
   }
 
   PluginResult *r = malloc(sizeof(PluginResult));
   r->ui_result = my_strdup(ui_result);
-  r->llm_result = my_strdup(llm_result ? llm_result : ui_result);
+  r->raw_result = my_strdup(raw_result ? raw_result : ui_result);
   lua_pop(plugin->L, 2);
 
   return r;
