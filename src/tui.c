@@ -1,14 +1,15 @@
-#include "curses.h"
-#include "agent.h"
 #include "tui.h"
+#include "agent.h"
+#include "curses.h"
 #include <stdlib.h>
 #include <string.h>
 
 void init_tui(void) {
   if (has_colors()) {
     start_color();
-    init_pair(1, COLOR_CYAN, COLOR_BLACK);
-    init_pair(2, COLOR_GREEN, COLOR_BLACK);
+    use_default_colors();
+    init_pair(1, COLOR_CYAN, -1);
+    init_pair(2, COLOR_GREEN, -1);
   }
   curs_set(1);
 }
