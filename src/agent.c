@@ -1,11 +1,52 @@
 #include "agent.h"
 #include <stdlib.h>
+#include <string.h>
 
 #define MESSAGES_CAPACITY_INCREMENT 10
 
 static Messages messages = {0};
 
 Messages *get_messages(void) { return &messages; }
+
+static Message *find_last_message_by_role(MessageRole role) {
+  Message *m = NULL;
+
+  if (!messages.items || !messages.count)
+    return m;
+
+  for (int i = messages.count - 1; i >= 0; i--) {
+    m = messages.items[i];
+    if (m->role == role) {
+      return m;
+    }
+  }
+  return m;
+}
+
+// FIXME: пока тут код такой из предположения что text и raw_text одинаковые для
+// сообщения с ролью агента, но в целом точно будут кейсы когда оно разное
+void append_to_last_message(char *text, MessageRole role) {
+
+  Message *m = find_last_message_by_role(role);
+
+  if (!m)
+    return;
+
+  int old_len = strlen(m->raw_text);
+  int add_len = strlen(text);
+
+  int new_size = old_len + add_len + 1;
+
+  char *new_ptr = realloc(m->raw_text, new_size);
+
+  if (!new_ptr)
+    return;
+
+  m->raw_text = new_ptr;
+  m->text = new_ptr;
+  memcpy(m->raw_text + old_len, text, add_len);
+  m->raw_text[old_len + add_len] = '\0';
+}
 
 void add_message(char *text, char *raw_text, MessageRole role) {
   if (messages.count >= messages.capacity) {
@@ -37,7 +78,7 @@ void clear_messages(void) {
     Message *m = messages.items[i];
     if (m->text)
       free(m->text);
-    if (m->raw_text)
+    if (m->raw_text && m->raw_text != m->text)
       free(m->raw_text);
     free(m);
   }

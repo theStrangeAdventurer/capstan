@@ -1,4 +1,5 @@
 #include "plugins.h"
+#include "http.h"
 #include "utils.h"
 #include <lauxlib.h>
 #include <lua.h>
@@ -16,6 +17,7 @@ lua_State *L = NULL;
 void plugins_init(void) {
   L = luaL_newstate();
   luaL_openlibs(L);
+  http_init(L);
 }
 
 static PluginRegistry plugins_registry = {
@@ -188,4 +190,5 @@ void plugins_cleanup(void) {
     lua_close(L);
     L = NULL;
   }
+  http_cleanup();
 }

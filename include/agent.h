@@ -19,6 +19,7 @@ typedef struct {
 } Messages;
 
 void add_message(char *text, char *raw_text, MessageRole role);
+void append_to_last_message(char *text, MessageRole role);
 Messages *get_messages(void);
 void clear_messages(void);
 
