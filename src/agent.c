@@ -1,6 +1,7 @@
 #include "agent.h"
 #include <lauxlib.h>
 #include <lua.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -115,4 +116,31 @@ void agent_init(lua_State *L) {
   lua_pushcfunction(L, l_agent_append);
   lua_setfield(L, -2, "append");
   lua_setglobal(L, "agent");
+}
+
+void agent_emit(lua_State *L) {
+  Messages *msgs = get_messages();
+  lua_newtable(L);
+  int idx = 1;
+  for (int i = 0; i < msgs->count; i++) {
+    if (!msgs->items[i]->text || msgs->items[i]->text[0] == '\0')
+      continue;
+    lua_newtable(L);
+    lua_pushstring(L, msgs->items[i]->role == MSG_USER ? "user" : "assistant");
+    lua_setfield(L, -2, "role");
+    lua_pushstring(L, msgs->items[i]->text);
+    lua_setfield(L, -2, "content");
+    lua_rawseti(L, -2, idx++);
+  }
+  lua_getglobal(L, "on_messages");
+  if (lua_isfunction(L, -1)) {
+    lua_pushvalue(L, -2);
+    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+      fprintf(stderr, "on_messages: %s\n", lua_tostring(L, -1));
+      lua_pop(L, 1);
+    }
+  } else {
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
 }

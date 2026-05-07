@@ -20,6 +20,10 @@ void plugins_init(void) {
   luaL_openlibs(L);
   http_init(L);
   agent_init(L);
+  if (luaL_dofile(L, "ai/providers.lua") != LUA_OK) {
+    fprintf(stderr, "providers: %s\n", lua_tostring(L, -1));
+    lua_pop(L, 1);
+  }
 }
 
 static PluginRegistry plugins_registry = {

@@ -145,6 +145,10 @@ int main(int argc, char *argv[]) {
           char *cp_input = my_strdup(input);
           add_message(cp_input, cp_input, MSG_USER);
         }
+
+        char *empty = my_strdup("");
+        add_message(empty, empty, MSG_AGENT);
+        agent_emit(L);
       }
 
       memset(input, 0, INPUT_BUFFER_SIZE);

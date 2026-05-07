@@ -50,4 +50,17 @@ M.stream = function(provider_name, on_text)
     end
 end
 
+_G.on_messages = function(messages)
+    local active = M.providers[M.provider]
+    http.post_stream(
+        active.endpoint,
+        json.encode({model = active.model, messages = messages, stream = true}),
+        {["Content-Type"] = "application/json",
+         ["Authorization"] = "Bearer " .. active.api_key},
+        M.stream(M.provider, function(text, is_done)
+            if not is_done then agent.append(text, "agent") end
+        end)
+    )
+end
+
 return M
