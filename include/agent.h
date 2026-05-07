@@ -1,6 +1,8 @@
 #ifndef AGENT_H
 #define AGENT_H
 
+#include <lua.h>
+
 typedef enum {
   MSG_USER,
   MSG_AGENT,
@@ -22,5 +24,6 @@ void add_message(char *text, char *raw_text, MessageRole role);
 void append_to_last_message(char *text, MessageRole role);
 Messages *get_messages(void);
 void clear_messages(void);
+void agent_init(lua_State *L);
 
 #endif

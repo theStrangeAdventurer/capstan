@@ -1,4 +1,5 @@
 #include "plugins.h"
+#include "agent.h"
 #include "http.h"
 #include "utils.h"
 #include <lauxlib.h>
@@ -18,6 +19,7 @@ void plugins_init(void) {
   L = luaL_newstate();
   luaL_openlibs(L);
   http_init(L);
+  agent_init(L);
 }
 
 static PluginRegistry plugins_registry = {

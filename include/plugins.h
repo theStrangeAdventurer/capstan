@@ -3,6 +3,8 @@
 
 #include <lua.h>
 
+extern lua_State *L;
+
 typedef struct Plugin Plugin;
 typedef void (*PluginCallback)(Plugin *plugin, const char *result,
                                void *user_data);

@@ -14,6 +14,26 @@ void init_tui(void) {
   curs_set(1);
 }
 
+static int count_message_lines(const char *text, int width) {
+  if (!text || !*text)
+    return 1;
+  int lines = 1;
+  int col = 0;
+  for (const char *p = text; *p; p++) {
+    if (*p == '\n') {
+      lines++;
+      col = 0;
+    } else {
+      col++;
+      if (col >= width) {
+        lines++;
+        col = 0;
+      }
+    }
+  }
+  return lines;
+}
+
 void render_all(int scroll_offset, const char *input, int input_pos) {
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
@@ -26,7 +46,6 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
   if (msg_h < 1 || inner_w < 1)
     return;
 
-  // --- Message history window ---
   WINDOW *msg_win = newwin(msg_h, inner_w, margin, margin);
   if (!msg_win)
     return;
@@ -38,8 +57,7 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
   int total_lines = 0;
 
   for (int i = 0; i < msgs->count; i++) {
-    int len = strlen(msgs->items[i]->text);
-    int l = len == 0 ? 1 : (len + inner_w - 1) / inner_w;
+    int l = count_message_lines(msgs->items[i]->text, inner_w);
     line_counts[i] = l;
     total_lines += l;
   }
@@ -62,18 +80,23 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
     int cp = msg->role == MSG_USER ? 1 : 2;
     wattron(msg_win, COLOR_PAIR(cp));
 
-    const char *text = msg->text;
-    int text_len = strlen(text);
-    int byte_off = 0;
-
+    const char *p = msg->text;
     for (int l = 0; l < line_counts[i]; l++) {
+      const char *line_end = p;
+      int col = 0;
+      while (*line_end && *line_end != '\n' && col < inner_w) {
+        line_end++;
+        col++;
+      }
+
       if (global_line >= top_line && win_row < msg_h) {
-        int rem = text_len - byte_off;
-        int n = rem > inner_w ? inner_w : rem;
-        mvwaddnstr(msg_win, win_row, 0, text + byte_off, n);
+        mvwaddnstr(msg_win, win_row, 0, p, line_end - p);
         win_row++;
       }
-      byte_off += inner_w;
+
+      if (*line_end == '\n')
+        line_end++;
+      p = line_end;
       global_line++;
     }
 
@@ -82,7 +105,6 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
 
   free(line_counts);
 
-  // --- Input window (fixed at bottom) ---
   int input_y = rows - input_h - margin;
   WINDOW *input_win = newwin(input_h, inner_w, input_y, margin);
   if (!input_win) {

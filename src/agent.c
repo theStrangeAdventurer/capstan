@@ -1,4 +1,6 @@
 #include "agent.h"
+#include <lauxlib.h>
+#include <lua.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,8 +31,13 @@ void append_to_last_message(char *text, MessageRole role) {
 
   Message *m = find_last_message_by_role(role);
 
-  if (!m)
+  if (!m) {
+    size_t len = strlen(text);
+    char *copy = malloc(len + 1);
+    memcpy(copy, text, len + 1);
+    add_message(copy, copy, role);
     return;
+  }
 
   int old_len = strlen(m->raw_text);
   int add_len = strlen(text);
@@ -87,4 +94,25 @@ void clear_messages(void) {
   messages.items = NULL;
   messages.capacity = 0;
   messages.count = 0;
+}
+
+static int l_agent_append(lua_State *L) {
+  const char *text = luaL_checkstring(L, 1);
+  MessageRole role = MSG_USER;
+
+  if (lua_gettop(L) >= 2) {
+    const char *role_str = luaL_checkstring(L, 2);
+    if (strcmp(role_str, "agent") == 0)
+      role = MSG_AGENT;
+  }
+
+  append_to_last_message((char *)text, role);
+  return 0;
+}
+
+void agent_init(lua_State *L) {
+  lua_newtable(L);
+  lua_pushcfunction(L, l_agent_append);
+  lua_setfield(L, -2, "append");
+  lua_setglobal(L, "agent");
 }

@@ -1,5 +1,6 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
+#include <curl/multi.h>
 #include <curl/typecheck-gcc.h>
 #include <lauxlib.h>
 #include <lua.h>
@@ -13,6 +14,18 @@ typedef struct {
   size_t size;
   size_t cap;
 } RespBuf;
+
+typedef struct {
+  CURL *easy;
+  lua_State *L;
+  int callback_ref;
+  struct curl_slist *headers;
+} StreamCtx;
+
+static CURLM *multi_handle = NULL;
+static StreamCtx **streams = NULL;
+static int stream_count = 0;
+static int stream_cap = 0;
 
 /**
  * Колбек с контрактом  CURLOPT_WRITEFUNCTION
@@ -48,20 +61,92 @@ static struct curl_slist *parse_headers(lua_State *L, int index) {
   struct curl_slist *headers = NULL;
 
   if (lua_istable(L, index)) {
-    lua_pushnil(
-        L); // nil как указатель для lua_next что надо начинать с начала таблицы
+    lua_pushnil(L);
     while (lua_next(L, index) != 0) {
-      const char *key =
-          lua_tostring(L, -2); // Фикс позиция не завязанная на позицию таблицы
-      const char *val = lua_tostring(L, -1); // Фикс позиция
+      const char *key = lua_tostring(L, -2);
+      const char *val = lua_tostring(L, -1);
       char header[2048];
-      snprintf(header, sizeof(header), "%s: %s", key, val); // "Header: value"
+      snprintf(header, sizeof(header), "%s: %s", key, val);
       headers = curl_slist_append(headers, header);
-      lua_pop(L, 1); // Снимаем со стека значение оставляя только key как курсор
-                     // для следующей итерации
+      lua_pop(L, 1);
     }
   }
   return headers;
+}
+
+/**
+ * Колбек для стриминга: получает сырые байты и сразу зовёт Lua callback
+ */
+static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
+                              void *userdata) {
+  StreamCtx *ctx = userdata;
+  size_t total = size * count;
+  if (total == 0)
+    return 0;
+
+  lua_rawgeti(ctx->L, LUA_REGISTRYINDEX, ctx->callback_ref);
+  lua_pushlstring(ctx->L, chunk_ptr, total);
+  lua_pushboolean(ctx->L, 0);
+  if (lua_pcall(ctx->L, 2, 0, 0) != LUA_OK) {
+    fprintf(stderr, "stream cb error: %s\n", lua_tostring(ctx->L, -1));
+    lua_pop(ctx->L, 1);
+    return 0;
+  }
+  return total;
+}
+
+/**
+ * http.post_stream(url, body, headers, callback)
+ * callback(raw_chunk, is_done) — вызывается для каждого TCP-чанка
+ * Возвращает async_id
+ */
+static int l_http_post_stream(lua_State *L) {
+  const char *url = luaL_checkstring(L, 1);
+  const char *body = NULL;
+  size_t body_len = 0;
+
+  if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
+    body = luaL_checklstring(L, 2, &body_len);
+  }
+
+  struct curl_slist *headers = parse_headers(L, 3);
+
+  luaL_checktype(L, 4, LUA_TFUNCTION);
+  lua_pushvalue(L, 4);
+  int callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+
+  CURL *easy = curl_easy_init();
+  curl_easy_setopt(easy, CURLOPT_URL, url);
+  curl_easy_setopt(easy, CURLOPT_POST, 1L);
+  if (body) {
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)body_len);
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, body);
+  }
+  if (headers) {
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+  }
+
+  StreamCtx *ctx = malloc(sizeof(StreamCtx));
+  ctx->easy = easy;
+  ctx->L = L;
+  ctx->callback_ref = callback_ref;
+  ctx->headers = headers;
+
+  curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, stream_write_cb);
+  curl_easy_setopt(easy, CURLOPT_WRITEDATA, ctx);
+
+  curl_multi_add_handle(multi_handle, easy);
+
+  if (stream_count >= stream_cap) {
+    stream_cap = stream_cap ? stream_cap * 2 : 4;
+    streams = realloc(streams, stream_cap * sizeof(StreamCtx *));
+  }
+  streams[stream_count] = ctx;
+  int async_id = stream_count;
+  stream_count++;
+
+  lua_pushinteger(L, async_id);
+  return 1;
 }
 
 static int l_http_post(lua_State *L) {
@@ -105,7 +190,7 @@ static int l_http_post(lua_State *L) {
 static int l_http_get(lua_State *L) {
   const char *url = luaL_checkstring(L, 1);
   struct curl_slist *headers = parse_headers(L, 2);
-  // easy это простой синхронный вызов curl
+
   CURL *easy = curl_easy_init();
   curl_easy_setopt(easy, CURLOPT_URL, url);
   if (headers) {
@@ -128,21 +213,101 @@ static int l_http_get(lua_State *L) {
   free(response.data);
   curl_slist_free_all(headers);
   curl_easy_cleanup(easy);
-  return 2; // Два результата положили на стек - status -2, response_data -1
+  return 2;
+}
+
+/**
+ * main loop дёргает http_poll на каждой итерации.
+ * Двигает curl_multi, вызывает Lua-колбеки на новые чанки.
+ * При завершении стрима — вызывает колбек с (nil, true), чистит ресурсы.
+ */
+int http_poll(lua_State *L) {
+  if (!multi_handle)
+    return 0;
+
+  int still_running;
+  curl_multi_perform(multi_handle, &still_running);
+
+  int had_events = 0;
+  CURLMsg *msg;
+  int msgs_in_queue;
+
+  while ((msg = curl_multi_info_read(multi_handle, &msgs_in_queue))) {
+    if (msg->msg != CURLMSG_DONE)
+      continue;
+
+    StreamCtx *found = NULL;
+    int found_idx = -1;
+    for (int i = 0; i < stream_count; i++) {
+      if (streams[i] && streams[i]->easy == msg->easy_handle) {
+        found = streams[i];
+        found_idx = i;
+        break;
+      }
+    }
+
+    if (!found)
+      continue;
+
+    int cb_ref = found->callback_ref;
+    struct curl_slist *h = found->headers;
+    CURL *e = found->easy;
+    free(found);
+    streams[found_idx] = NULL;
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, cb_ref);
+    lua_pushnil(L);
+    lua_pushboolean(L, 1);
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+      fprintf(stderr, "stream done cb error: %s\n", lua_tostring(L, -1));
+      lua_pop(L, 1);
+    }
+
+    luaL_unref(L, LUA_REGISTRYINDEX, cb_ref);
+    curl_slist_free_all(h);
+    curl_multi_remove_handle(multi_handle, e);
+    curl_easy_cleanup(e);
+
+    had_events = 1;
+  }
+
+  int write_idx = 0;
+  for (int i = 0; i < stream_count; i++) {
+    if (streams[i] != NULL) {
+      streams[write_idx++] = streams[i];
+    }
+  }
+  stream_count = write_idx;
+
+  return had_events;
 }
 
 void http_init(lua_State *L) {
-  curl_global_init(CURL_GLOBAL_DEFAULT); // один раз на процесс
+  curl_global_init(CURL_GLOBAL_DEFAULT);
+  multi_handle = curl_multi_init();
+
   lua_newtable(L);
+
   lua_pushcfunction(L, l_http_get);
-  lua_setfield(
-      L, -2,
-      "get"); // В этот момент  l_http_get уже не лежит на стеке, она
-              // переместилась в таблицу в качестве значения для ключа get
+  lua_setfield(L, -2, "get");
+
   lua_pushcfunction(L, l_http_post);
   lua_setfield(L, -2, "post");
+
+  lua_pushcfunction(L, l_http_post_stream);
+  lua_setfield(L, -2, "post_stream");
 
   lua_setglobal(L, "http");
 }
 
-void http_cleanup(void) { curl_global_cleanup(); }
+void http_cleanup(void) {
+  if (multi_handle) {
+    curl_multi_cleanup(multi_handle);
+    multi_handle = NULL;
+  }
+  free(streams);
+  streams = NULL;
+  stream_count = 0;
+  stream_cap = 0;
+  curl_global_cleanup();
+}

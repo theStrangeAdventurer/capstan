@@ -1,4 +1,5 @@
 #include "agent.h"
+#include "http.h"
 #include "plugins.h"
 #include "tui.h"
 #include "utils.h"
@@ -77,6 +78,7 @@ int main(int argc, char *argv[]) {
   while (1) {
     int ch = getch();
     if (ch == ERR) {
+      http_poll(L);
       napms(10);
       render_all(scroll_offset, input, pos);
       continue;
@@ -134,6 +136,10 @@ int main(int argc, char *argv[]) {
             if (r) {
               add_message(r->ui_result, r->raw_result, MSG_USER);
             }
+          } else {
+            char err[256];
+            snprintf(err, sizeof(err), "Unknown command: %s", command);
+            add_message(err, err, MSG_USER);
           }
         } else {
           char *cp_input = my_strdup(input);
