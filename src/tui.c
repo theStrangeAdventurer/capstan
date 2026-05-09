@@ -23,11 +23,11 @@ static int count_message_lines(const char *text, int width) {
     if (*p == '\n') {
       lines++;
       col = 0;
-    } else {
+    } else if ((*p & 0xC0) != 0x80) {
       col++;
-      if (col >= width) {
+      if (col > width) {
         lines++;
-        col = 0;
+        col = 1;
       }
     }
   }
@@ -84,9 +84,13 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
     for (int l = 0; l < line_counts[i]; l++) {
       const char *line_end = p;
       int col = 0;
-      while (*line_end && *line_end != '\n' && col < inner_w) {
+      while (*line_end && *line_end != '\n') {
+        int is_char = (*line_end & 0xC0) != 0x80;
+        if (is_char && col >= inner_w)
+          break;
         line_end++;
-        col++;
+        if (is_char)
+          col++;
       }
 
       if (global_line >= top_line && win_row < msg_h) {
@@ -129,6 +133,9 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
 int count_visible_chars(const char *str, int byte_pos) {
   int chars = 0;
   for (int i = 0; i < byte_pos && str[i]; i++) {
+    // Это классический способ работать с UTF8 символами,
+    // по сути эта проверка позволяет игногировать все хвосты многобайтовых
+    // символов и считать только их головы
     if ((str[i] & 0xC0) != 0x80)
       chars++;
   }

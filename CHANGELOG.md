@@ -1,5 +1,55 @@
 # CHANGELOG.md
 
+## Session 2: HTTP + Agent + Streaming → LLM
+
+### HTTP Streaming (`src/http.c`)
+
+- **`curl_multi`** — добавлен глобальный `CURLM *multi_handle` для неблокирующих запросов
+- **`StreamCtx`** — контекст стрима: `CURL *easy`, `lua_State *L`, колбек-реф, хедеры
+- **Динамический массив `streams[]`** — с удвоением при заполнении (амортизированная O(1) вставка)
+- **`stream_write_cb`** — колбек curl: получает сырые TCP-чанки и сразу вызывает Lua `callback(raw, false)`
+- **`l_http_post_stream`** — `http.post_stream(url, body, headers, callback)` → возвращает `async_id`, запрос регистрируется в `curl_multi`
+- **`http_poll(L)`** — дёргает `curl_multi_perform`, при `CURLMSG_DONE` вызывает `callback(nil, true)`, чистит хендлы и компактит массив стримов
+- **`http_init`** — инициализирует `multi_handle`, регистрирует `http.post_stream`
+
+### Agent Lua API (`src/agent.c`)
+
+- **`l_agent_append`** — `agent.append(text, role)` с дефолтной ролью `MSG_USER`
+- **`agent_emit`** — строит Lua-таблицу `{ {role, content}, ... }` из Messages, пропускает пустые сообщения, вызывает `_G.on_messages(history)`
+- **`append_to_last_message`** — авто-создаёт сообщение если нет последнего нужной роли
+- **`agent_init`** — регистрирует глобальную таблицу `agent` с полем `append`
+
+### Main loop (`src/main.c`)
+
+- **`http_poll(L)`** в idle-ветке — драйвит curl_multi на каждом цикле
+- **`else` для неизвестных команд** — `Unknown command: /xxx`
+- **`add_message("", MSG_AGENT)` + `agent_emit(L)`** — после любого ввода добавляется пустой зелёный плейсхолдер, затем C собирает историю и вызывает `on_messages`
+
+### TUI (`src/tui.c`)
+
+- **`count_message_lines()`** — подсчёт строк с учётом `\n` и ширины окна
+- **Рендеринг по визуальным строкам** — сканирует до `\n` или `inner_w` вместо тупого сдвига на `inner_w`
+
+### Plugins system (`src/plugins.c`)
+
+- **`+ agent_init(L)`** — регистрирует `agent` global
+- **`+ luaL_dofile(L, "ai/providers.lua")`** — загружает провайдеры и сеттит `_G.on_messages`
+
+### Headers
+
+- **`include/plugins.h`** — `+ extern lua_State *L`
+- **`include/agent.h`** — `+ void agent_init(L)`, `+ void agent_emit(L)`
+
+### Lua
+
+| Файл | Что |
+|---|---|
+| `ai/providers.lua` | `M.default_on_chunk` (OpenAI-совместимый SSE-парсинг), `M.stream()` (буферизация `\n\n` + кастомный `on_chunk` на провайдера), `_G.on_messages` (отправка в LLM через `http.post_stream` + `agent.append`) |
+| `plugins/stream_test.lua` | `/stream` — тест `http.post_stream` → `agent.append` на httpbin |
+| `plugins/http_post_example.lua` | `/post` — синхронный `http.post` JSON |
+
+---
+
 ## Session 1: Lua Plugin System Foundation
 
 ### Added
