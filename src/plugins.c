@@ -149,7 +149,7 @@ Plugin *plugin_load(const char *path) {
   return p;
 }
 
-PluginResult *plugin_execute_sync(Plugin *plugin, const char *input) {
+PluginResult *plugin_execute(Plugin *plugin, const char *input) {
   // Достаем функицю по ссылке-индексу из специальной таблицы lua на стороне C и
   // кладем на вершину стека
   lua_rawgeti(plugin->L, LUA_REGISTRYINDEX, plugin->handler_ref);

@@ -1,4 +1,5 @@
 #include "agent.h"
+#include "dyn_arr.h"
 #include <lauxlib.h>
 #include <lua.h>
 #include <stdio.h>
@@ -14,10 +15,10 @@ Messages *get_messages(void) { return &messages; }
 static Message *find_last_message_by_role(MessageRole role) {
   Message *m = NULL;
 
-  if (!messages.items || !messages.count)
+  if (!messages.items || !messages.size)
     return m;
 
-  for (int i = messages.count - 1; i >= 0; i--) {
+  for (int i = messages.size - 1; i >= 0; i--) {
     m = messages.items[i];
     if (m->role == role) {
       return m;
@@ -57,17 +58,6 @@ void append_to_last_message(char *text, MessageRole role) {
 }
 
 void add_message(char *text, char *raw_text, MessageRole role) {
-  if (messages.count >= messages.capacity) {
-    messages.capacity += MESSAGES_CAPACITY_INCREMENT;
-    Message **tmp =
-        realloc(messages.items,
-                messages.capacity *
-                    sizeof(Message *)); // Выделяем место под большее количество
-                                        // указателей на сообщения
-    if (!tmp)
-      return;
-    messages.items = tmp;
-  }
 
   Message *message = malloc(sizeof(Message));
 
@@ -75,14 +65,14 @@ void add_message(char *text, char *raw_text, MessageRole role) {
   message->raw_text = raw_text;
   message->role = role;
 
-  messages.items[messages.count++] = message;
+  da_append(&messages, message);
 }
 
 void clear_messages(void) {
-  if (!messages.items || !messages.count)
+  if (!messages.items || !messages.size)
     return;
 
-  for (int i = 0; i < messages.count; i++) {
+  for (int i = 0; i < messages.size; i++) {
     Message *m = messages.items[i];
     if (m->text)
       free(m->text);
@@ -94,7 +84,7 @@ void clear_messages(void) {
   free(messages.items);
   messages.items = NULL;
   messages.capacity = 0;
-  messages.count = 0;
+  messages.size = 0;
 }
 
 static int l_agent_append(lua_State *L) {
@@ -122,7 +112,7 @@ void agent_emit(lua_State *L) {
   Messages *msgs = get_messages();
   lua_newtable(L);
   int idx = 1;
-  for (int i = 0; i < msgs->count; i++) {
+  for (int i = 0; i < msgs->size; i++) {
     if (!msgs->items[i]->text || msgs->items[i]->text[0] == '\0')
       continue;
     lua_newtable(L);

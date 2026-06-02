@@ -16,7 +16,7 @@ typedef struct {
 
 typedef struct {
   Message **items;
-  int count;
+  int size;
   int capacity;
 } Messages;
 

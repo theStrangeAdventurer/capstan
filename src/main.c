@@ -132,7 +132,7 @@ int main(int argc, char *argv[]) {
         if (has_command(input, command, &cmd_pos)) {
           Plugin *p = plugin_registry_find(command);
           if (p) {
-            PluginResult *r = plugin_execute_sync(p, input);
+            PluginResult *r = plugin_execute(p, input);
             if (r) {
               add_message(r->ui_result, r->raw_result, MSG_USER);
             }

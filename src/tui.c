@@ -53,10 +53,10 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
 
   Messages *msgs = get_messages();
 
-  int *line_counts = malloc(msgs->count * sizeof(int));
+  int *line_counts = malloc(msgs->size * sizeof(int));
   int total_lines = 0;
 
-  for (int i = 0; i < msgs->count; i++) {
+  for (int i = 0; i < msgs->size; i++) {
     int l = count_message_lines(msgs->items[i]->text, inner_w);
     line_counts[i] = l;
     total_lines += l;
@@ -75,7 +75,7 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
   int global_line = 0;
   int win_row = 0;
 
-  for (int i = 0; i < msgs->count && win_row < msg_h; i++) {
+  for (int i = 0; i < msgs->size && win_row < msg_h; i++) {
     Message *msg = msgs->items[i];
     int cp = msg->role == MSG_USER ? 1 : 2;
     wattron(msg_win, COLOR_PAIR(cp));
