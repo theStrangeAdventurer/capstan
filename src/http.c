@@ -4,10 +4,14 @@
 #include <curl/typecheck-gcc.h>
 #include <lauxlib.h>
 #include <lua.h>
+#include <ncursesw/curses.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "http.h"
+#include "tui.h"
 
 typedef struct {
   char *data;
@@ -26,6 +30,11 @@ static CURLM *multi_handle = NULL;
 static StreamCtx **streams = NULL;
 static int stream_count = 0;
 static int stream_cap = 0;
+static int g_sync_active = 0;
+
+int http_is_loading(void) {
+  return g_sync_active || stream_count > 0;
+}
 
 /**
  * Колбек с контрактом  CURLOPT_WRITEFUNCTION
@@ -176,7 +185,23 @@ static int l_http_post(lua_State *L) {
   RespBuf response = {0};
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
-  curl_easy_perform(easy);
+
+  g_sync_active = 1;
+  curl_multi_add_handle(multi_handle, easy);
+
+  int still_running = 1;
+  while (still_running) {
+    curl_multi_perform(multi_handle, &still_running);
+    if (still_running) {
+      napms(10);
+      render_all();
+    }
+  }
+
+  http_poll(L);
+  curl_multi_remove_handle(multi_handle, easy);
+  g_sync_active = 0;
+
   long status = 0;
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
   lua_pushinteger(L, status);
@@ -198,14 +223,26 @@ static int l_http_get(lua_State *L) {
   }
 
   RespBuf response = {0};
-
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
 
-  curl_easy_perform(easy);
+  g_sync_active = 1;
+  curl_multi_add_handle(multi_handle, easy);
+
+  int still_running = 1;
+  while (still_running) {
+    curl_multi_perform(multi_handle, &still_running);
+    if (still_running) {
+      napms(10);
+      render_all();
+    }
+  }
+
+  http_poll(L);
+  curl_multi_remove_handle(multi_handle, easy);
+  g_sync_active = 0;
 
   long status = 0;
-
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
   lua_pushinteger(L, status);
   lua_pushstring(L, response.data ? response.data : "");

@@ -1,6 +1,7 @@
 #include "tui.h"
 #include "agent.h"
 #include "curses.h"
+#include "http.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -34,7 +35,17 @@ static int count_message_lines(const char *text, int width) {
   return lines;
 }
 
-void render_all(int scroll_offset, const char *input, int input_pos) {
+static int spinner_tick = 0;
+static int prev_loading = 0;
+static const char *spinner_frames[] = {
+  "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"
+};
+#define SPINNER_FRAMES 10
+
+void render_all(void) {
+  int scroll_offset = g_scroll;
+  const char *input = g_input_buf;
+  int input_pos = g_cursor;
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
@@ -56,7 +67,7 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
   int *line_counts = malloc(msgs->size * sizeof(int));
   int total_lines = 0;
 
-  for (int i = 0; i < msgs->size; i++) {
+  for (size_t i = 0; i < msgs->size; i++) {
     int l = count_message_lines(msgs->items[i]->text, inner_w);
     line_counts[i] = l;
     total_lines += l;
@@ -75,7 +86,7 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
   int global_line = 0;
   int win_row = 0;
 
-  for (int i = 0; i < msgs->size && win_row < msg_h; i++) {
+  for (size_t i = 0; i < msgs->size && win_row < msg_h; i++) {
     Message *msg = msgs->items[i];
     int cp = msg->role == MSG_USER ? 1 : 2;
     wattron(msg_win, COLOR_PAIR(cp));
@@ -112,7 +123,8 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
   int input_y = rows - input_h - margin;
   WINDOW *input_win = newwin(input_h, inner_w, input_y, margin);
   if (!input_win) {
-    wrefresh(msg_win);
+    wnoutrefresh(msg_win);
+    doupdate();
     delwin(msg_win);
     return;
   }
@@ -123,8 +135,26 @@ void render_all(int scroll_offset, const char *input, int input_pos) {
   int vis_pos = count_visible_chars(input, input_pos);
   wmove(input_win, 1, 1 + vis_pos);
 
-  wrefresh(msg_win);
-  wrefresh(input_win);
+  int loading = http_is_loading();
+  if (loading) {
+    int idx = (spinner_tick / 4) % SPINNER_FRAMES;
+    attron(A_BOLD);
+    mvaddstr(rows - 1, MARGIN + 1, spinner_frames[idx]);
+    attroff(A_BOLD);
+  } else if (prev_loading) {
+    mvaddstr(rows - 1, MARGIN + 1, " ");
+  }
+  spinner_tick++;
+
+  if (loading != prev_loading) {
+    curs_set(loading ? 0 : 1);
+    prev_loading = loading;
+  }
+
+  wnoutrefresh(stdscr);
+  wnoutrefresh(msg_win);
+  wnoutrefresh(input_win);
+  doupdate();
 
   delwin(msg_win);
   delwin(input_win);

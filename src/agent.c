@@ -68,24 +68,15 @@ void add_message(char *text, char *raw_text, MessageRole role) {
   da_append(&messages, message);
 }
 
-void clear_messages(void) {
-  if (!messages.items || !messages.size)
-    return;
-
-  for (int i = 0; i < messages.size; i++) {
-    Message *m = messages.items[i];
-    if (m->text)
-      free(m->text);
-    if (m->raw_text && m->raw_text != m->text)
-      free(m->raw_text);
-    free(m);
-  }
-
-  free(messages.items);
-  messages.items = NULL;
-  messages.capacity = 0;
-  messages.size = 0;
+void free_message(Message *m) {
+  if (m->text)
+    free(m->text);
+  if (m->raw_text && m->raw_text != m->text)
+    free(m->raw_text);
+  free(m);
 }
+
+void clear_messages(void) { da_free_each(&messages, free_message); }
 
 static int l_agent_append(lua_State *L) {
   const char *text = luaL_checkstring(L, 1);
@@ -112,7 +103,7 @@ void agent_emit(lua_State *L) {
   Messages *msgs = get_messages();
   lua_newtable(L);
   int idx = 1;
-  for (int i = 0; i < msgs->size; i++) {
+  for (size_t i = 0; i < msgs->size; i++) {
     if (!msgs->items[i]->text || msgs->items[i]->text[0] == '\0')
       continue;
     lua_newtable(L);

@@ -2,6 +2,7 @@
 #define AGENT_H
 
 #include <lua.h>
+#include <stddef.h>
 
 typedef enum {
   MSG_USER,
@@ -16,8 +17,8 @@ typedef struct {
 
 typedef struct {
   Message **items;
-  int size;
-  int capacity;
+  size_t size;
+  size_t capacity;
 } Messages;
 
 void add_message(char *text, char *raw_text, MessageRole role);

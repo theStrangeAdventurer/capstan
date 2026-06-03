@@ -20,6 +20,10 @@
 #define INPUT_BUFFER_SIZE 8192
 #define MAX_COMMAND_LEN 64
 
+int g_scroll = 0;
+char g_input_buf[INPUT_BUFFER_SIZE] = {0};
+int g_cursor = 0;
+
 static int has_command(const char *input, char *command, size_t *pos) {
   const char *found = strstr(input, "/");
   if (!found)
@@ -45,10 +49,6 @@ int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
 
-  char input[INPUT_BUFFER_SIZE] = {0};
-  int pos = 0;
-  int scroll_offset = 0;
-
   setlocale(LC_ALL, "");
   initscr();
   noecho();
@@ -73,14 +73,14 @@ int main(int argc, char *argv[]) {
     closedir(dir);
   }
 
-  render_all(scroll_offset, input, pos);
+  render_all();
 
   while (1) {
     int ch = getch();
     if (ch == ERR) {
       http_poll(L);
       napms(10);
-      render_all(scroll_offset, input, pos);
+      render_all();
       continue;
     }
 
@@ -88,7 +88,7 @@ int main(int argc, char *argv[]) {
     int is_backspace_pressed = (ch == KEY_BACKSPACE || ch == 127 || ch == 8);
 
     if (ch == KEY_RESIZE) {
-      render_all(scroll_offset, input, pos);
+      render_all();
       continue;
     }
 
@@ -96,43 +96,43 @@ int main(int argc, char *argv[]) {
       MEVENT event;
       if (getmouse(&event) == OK) {
         if (event.bstate & BUTTON4_PRESSED) {
-          scroll_offset += 3;
-          render_all(scroll_offset, input, pos);
+          g_scroll += 3;
+          render_all();
         } else if (event.bstate & BUTTON5_PRESSED) {
-          scroll_offset -= 3;
-          if (scroll_offset < 0)
-            scroll_offset = 0;
-          render_all(scroll_offset, input, pos);
+          g_scroll -= 3;
+          if (g_scroll < 0)
+            g_scroll = 0;
+          render_all();
         }
       }
       continue;
     }
 
     if (ch == KEY_PPAGE) {
-      scroll_offset += 5;
-      render_all(scroll_offset, input, pos);
+      g_scroll += 5;
+      render_all();
       continue;
     }
 
     if (ch == KEY_NPAGE) {
-      scroll_offset -= 5;
-      if (scroll_offset < 0)
-        scroll_offset = 0;
-      render_all(scroll_offset, input, pos);
+      g_scroll -= 5;
+      if (g_scroll < 0)
+        g_scroll = 0;
+      render_all();
       continue;
     }
 
     if (is_enter_pressed) {
-      if (strlen(input) > 0) {
+      if (strlen(g_input_buf) > 0) {
 
-        scroll_offset = 0;
+        g_scroll = 0;
 
         char command[MAX_COMMAND_LEN];
         size_t cmd_pos;
-        if (has_command(input, command, &cmd_pos)) {
+        if (has_command(g_input_buf, command, &cmd_pos)) {
           Plugin *p = plugin_registry_find(command);
           if (p) {
-            PluginResult *r = plugin_execute(p, input);
+            PluginResult *r = plugin_execute(p, g_input_buf);
             if (r) {
               add_message(r->ui_result, r->raw_result, MSG_USER);
             }
@@ -142,7 +142,7 @@ int main(int argc, char *argv[]) {
             add_message(err, err, MSG_USER);
           }
         } else {
-          char *cp_input = my_strdup(input);
+          char *cp_input = my_strdup(g_input_buf);
           add_message(cp_input, cp_input, MSG_USER);
         }
 
@@ -151,24 +151,24 @@ int main(int argc, char *argv[]) {
         agent_emit(L);
       }
 
-      memset(input, 0, INPUT_BUFFER_SIZE);
-      pos = 0;
-      render_all(scroll_offset, input, pos);
+      memset(g_input_buf, 0, INPUT_BUFFER_SIZE);
+      g_cursor = 0;
+      render_all();
       continue;
     }
 
     if (is_backspace_pressed) {
-      if (pos > 0) {
-        int prev_pos = get_prev_char_start(input, pos);
-        strcpy(input + prev_pos, input + pos);
-        pos = prev_pos;
+      if (g_cursor > 0) {
+        int prev_pos = get_prev_char_start(g_input_buf, g_cursor);
+        strcpy(g_input_buf + prev_pos, g_input_buf + g_cursor);
+        g_cursor = prev_pos;
       }
     } else {
-      input[pos++] = ch;
-      input[pos] = '\0';
+      g_input_buf[g_cursor++] = ch;
+      g_input_buf[g_cursor] = '\0';
     }
 
-    render_all(scroll_offset, input, pos);
+    render_all();
   }
   endwin();
   plugin_registry_cleanup();

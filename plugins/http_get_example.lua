@@ -7,6 +7,7 @@ plugin.command = "/ip"
 plugin.async = false
 
 function plugin.handler(input)
+	http.get("https://httpbin.org/delay/2") -- демо-блокировка чтобы увидеть спиннер
 	local status, body = http.get("https://api.ipify.org")
 
 	if status ~= 200 then
