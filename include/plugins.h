@@ -48,7 +48,7 @@ void plugins_init(void);
 
 Plugin *plugin_load(const char *path);
 
-PluginResult *plugin_execute(Plugin *plugin, const char *input);
+PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end);
 
 void plugins_cleanup();
 char *get_plugins_info();

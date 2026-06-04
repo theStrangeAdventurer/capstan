@@ -1,8 +1,9 @@
 #ifndef TUI_H
 #define TUI_H
 
-#define INPUT_WIN_HEIGHT 3
-#define MARGIN 1
+#define INPUT_WIN_HEIGHT   4
+#define INPUT_CONTENT_LINES 2
+#define MARGIN              1
 
 extern int g_scroll;
 extern char g_input_buf[];

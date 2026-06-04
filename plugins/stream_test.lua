@@ -7,24 +7,23 @@ plugin.description = "Test http.post_stream -> agent.append pipeline"
 plugin.command = "/stream"
 plugin.async = false
 
-function plugin.handler(input)
-    _G.stream_done = false
+function plugin.handler(ctx)
+	_G.stream_done = false
 
-    http.post_stream(
-        "https://httpbin.org/post",
-        json.encode({msg = "streaming from termai", ts = os.time()}),
-        {["Content-Type"] = "application/json"},
-        function(raw, is_done)
-            if is_done then
-                _G.stream_done = true
-            else
-                -- default role = "user", use agent.append(raw, "agent") for MSG_AGENT
-                agent.append(raw)
-            end
-        end
-    )
+	http.post_stream(
+		"https://httpbin.org/post",
+		json.encode({msg = "streaming from termai", ts = os.time()}),
+		{["Content-Type"] = "application/json"},
+		function(raw, is_done)
+			if is_done then
+				_G.stream_done = true
+			else
+				agent.append(raw)
+			end
+		end
+	)
 
-    return "stream started..."
+	return "stream started..."
 end
 
 return plugin

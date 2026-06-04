@@ -52,6 +52,7 @@ end
 
 _G.on_messages = function(messages)
     local active = M.providers[M.provider]
+    agent.set_info(M.provider, active.model)
     http.post_stream(
         active.endpoint,
         json.encode({model = active.model, messages = messages, stream = true}),

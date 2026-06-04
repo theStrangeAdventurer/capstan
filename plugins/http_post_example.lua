@@ -7,7 +7,7 @@ plugin.description = "Demonstrate http.post with JSON body"
 plugin.command = "/post"
 plugin.async = false
 
-function plugin.handler(input)
+function plugin.handler(ctx)
 	local payload = json.encode({
 		message = "Hello from termai",
 		timestamp = os.time()
@@ -25,15 +25,10 @@ function plugin.handler(input)
 
 	local response = json.decode(body)
 
-	local ui_value = "POST " .. status .. " | echo: " .. response.json.message
-	local llm_value = "HTTP POST to httpbin returned status " .. status .. " with message: " .. response.json.message
-
-	local cmd_start = input:find(plugin.command, 1, true)
-	local cmd_end = cmd_start + #plugin.command
-	local ui_result = input:sub(1, cmd_start - 1) .. ui_value .. input:sub(cmd_end + 1)
-	local llm_result = input:sub(1, cmd_start - 1) .. llm_value .. input:sub(cmd_end + 1)
-
-	return ui_result, llm_result
+	return ctx:replace(
+		"POST " .. status .. " | echo: " .. response.json.message,
+		"HTTP POST to httpbin returned status " .. status .. " with message: " .. response.json.message
+	)
 end
 
 return plugin

@@ -2,6 +2,7 @@
 #include "agent.h"
 #include "curses.h"
 #include "http.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,6 +12,7 @@ void init_tui(void) {
     use_default_colors();
     init_pair(1, COLOR_CYAN, -1);
     init_pair(2, COLOR_GREEN, -1);
+    init_pair(3, COLOR_YELLOW, -1);
   }
   curs_set(1);
 }
@@ -41,6 +43,29 @@ static const char *spinner_frames[] = {
   "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"
 };
 #define SPINNER_FRAMES 10
+#define SPINNER_COUNT  6
+#define SPINNER_PHASE  2
+static const int spinner_attrs[SPINNER_COUNT] = {
+  A_BOLD,  // bright orange
+  0,       // orange dimmed
+  A_DIM,   // yellow dimmed
+  0,       // yellow
+  A_BOLD,  // orange
+  0,       // orange dimmed
+};
+
+static int count_visible_chars_to(const char *str, int max_chars) {
+  int bytes = 0, chars = 0;
+  while (str[bytes]) {
+    if ((str[bytes] & 0xC0) != 0x80) {
+      if (chars >= max_chars)
+        break;
+      chars++;
+    }
+    bytes++;
+  }
+  return bytes;
+}
 
 void render_all(void) {
   int scroll_offset = g_scroll;
@@ -131,24 +156,67 @@ void render_all(void) {
 
   werase(input_win);
   box(input_win, 0, 0);
-  mvwaddstr(input_win, 1, 1, input);
-  int vis_pos = count_visible_chars(input, input_pos);
-  wmove(input_win, 1, 1 + vis_pos);
+
+  int content_w = inner_w - 2;
+  int input_len = (int)strlen(input);
+  int total_chars = count_visible_chars(input, input_len);
+  int input_lines = total_chars ? (total_chars + content_w - 1) / content_w : 0;
+  int skip_lines = input_lines > INPUT_CONTENT_LINES ? input_lines - INPUT_CONTENT_LINES : 0;
+  int skip_chars = skip_lines * content_w;
+  int skip_bytes = skip_chars ? count_visible_chars_to(input, skip_chars) : 0;
+
+  const char *visible = input + skip_bytes;
+  int rel_pos = input_pos - skip_bytes;
+  if (rel_pos < 0) rel_pos = 0;
+
+  int line1_bytes = 0;
+  if (input_lines > skip_lines) {
+    line1_bytes = count_visible_chars_to(visible, content_w);
+    mvwaddnstr(input_win, 1, 1, visible, line1_bytes);
+  }
+  if (input_lines > skip_lines + 1)
+    mvwaddstr(input_win, 2, 1, visible + line1_bytes);
+
+  int cursor_line, cursor_col;
+  if (line1_bytes == 0) {
+    cursor_line = 1;
+    cursor_col = 1;
+  } else if (!(input_lines > skip_lines + 1) || rel_pos < line1_bytes) {
+    cursor_line = 1;
+    cursor_col = 1 + count_visible_chars(visible, rel_pos);
+  } else {
+    cursor_line = 2;
+    cursor_col = 1 + count_visible_chars(visible + line1_bytes, rel_pos - line1_bytes);
+  }
+  wmove(input_win, cursor_line, cursor_col);
 
   int loading = http_is_loading();
   if (loading) {
-    int idx = (spinner_tick / 4) % SPINNER_FRAMES;
-    attron(A_BOLD);
-    mvaddstr(rows - 1, MARGIN + 1, spinner_frames[idx]);
-    attroff(A_BOLD);
+    for (int s = 0; s < SPINNER_COUNT; s++) {
+      int idx = ((spinner_tick / 4) + s * SPINNER_PHASE) % SPINNER_FRAMES;
+      wattrset(stdscr, COLOR_PAIR(3) | spinner_attrs[s]);
+      mvaddstr(rows - 1, MARGIN + 1 + s, spinner_frames[idx]);
+    }
+    wattrset(stdscr, A_NORMAL);
   } else if (prev_loading) {
-    mvaddstr(rows - 1, MARGIN + 1, " ");
+    for (int s = 0; s < SPINNER_COUNT; s++)
+      mvaddstr(rows - 1, MARGIN + 1 + s, "      ");
   }
   spinner_tick++;
 
   if (loading != prev_loading) {
     curs_set(loading ? 0 : 1);
     prev_loading = loading;
+  }
+
+  const char *prov = agent_provider_name();
+  const char *model = agent_provider_model();
+  if (prov && model) {
+    char info[256];
+    int n = snprintf(info, sizeof(info), "%s/%s", prov, model);
+    attron(A_DIM);
+    mvaddstr(rows - 1, cols - n - 2, info);
+    attroff(A_DIM);
   }
 
   wnoutrefresh(stdscr);

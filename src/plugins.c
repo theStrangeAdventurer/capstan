@@ -149,34 +149,77 @@ Plugin *plugin_load(const char *path) {
   return p;
 }
 
-PluginResult *plugin_execute(Plugin *plugin, const char *input) {
-  // Достаем функицю по ссылке-индексу из специальной таблицы lua на стороне C и
-  // кладем на вершину стека
-  lua_rawgeti(plugin->L, LUA_REGISTRYINDEX, plugin->handler_ref);
+static int l_ctx_replace(lua_State *l) {
+  const char *ui_val = luaL_checkstring(l, 2);
+  const char *llm_val = lua_isnoneornil(l, 3) ? ui_val : luaL_checkstring(l, 3);
+  lua_pushstring(l, ui_val);
+  lua_pushstring(l, llm_val);
+  return 2;
+}
 
-  // Пушим команду на вершину стека
-  // Тут функия уезжает на -2
-  lua_pushstring(plugin->L, input);
+PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end) {
+  lua_newtable(L); // ctx = {}
 
-  // Вызываем функцию - 1 аргумента, 1 результат, 0 ошибок
-  // Стек выглядит так:
-  // [-2] "input"                  первый аргумент
-  // [-3] функция                    функция
-  // lua_pcall берет со стека указанное количество аргументов и вызывает функцию
-  // под ними
-  // После чего кладет результат выполнения функции обратно на стек
-  if (lua_pcall(plugin->L, 1, 2, 0) != LUA_OK) {
-    fprintf(stderr, "Error: %s\n", lua_tostring(plugin->L, -1));
+  lua_pushstring(L, input);
+  lua_setfield(L, -2, "input");
+
+  lua_pushstring(L, plugin->command);
+  lua_setfield(L, -2, "command");
+
+  // ctx.args = {}
+  const char *args_start = input + cmd_end;
+  while (*args_start == ' ')
+    args_start++;
+
+  lua_newtable(L);
+  int arg_idx = 1;
+  const char *p = args_start;
+  while (*p) {
+    while (*p == ' ')
+      p++;
+    if (!*p)
+      break;
+
+    const char *word_start;
+    size_t word_len;
+
+    if (*p == '"') {
+      p++;
+      word_start = p;
+      while (*p && *p != '"')
+        p++;
+      word_len = p - word_start;
+      if (*p == '"')
+        p++;
+    } else {
+      word_start = p;
+      while (*p && *p != ' ' && *p != '"')
+        p++;
+      word_len = p - word_start;
+    }
+
+    lua_pushlstring(L, word_start, word_len);
+    lua_rawseti(L, -2, arg_idx++);
+  }
+  lua_setfield(L, -2, "args");
+
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, plugin->handler_ref);
+  lua_insert(L, -2);
+
+  if (lua_pcall(L, 1, 2, 0) != LUA_OK) {
+    fprintf(stderr, "Plugin error: %s\n", lua_tostring(L, -1));
+    lua_pop(L, 1);
     return NULL;
   }
-  // Теперь на стеке:
-  // [-2] ui_result (первый возврат из Lua)
-  // [-1] raw_result (второй возврат или nil)
-  const char *ui_result = lua_tostring(plugin->L, -2);
+
+  const char *ui_result = lua_tostring(L, -2);
   const char *raw_result = NULL;
 
-  if (!lua_isnil(plugin->L, -1)) {
-    raw_result = lua_tostring(plugin->L, -1);
+  if (!lua_isnil(L, -1)) {
+    raw_result = lua_tostring(L, -1);
   }
 
   if (!raw_result) {
@@ -186,7 +229,7 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input) {
   PluginResult *r = malloc(sizeof(PluginResult));
   r->ui_result = my_strdup(ui_result);
   r->raw_result = my_strdup(raw_result ? raw_result : ui_result);
-  lua_pop(plugin->L, 2);
+  lua_pop(L, 2);
 
   return r;
 }

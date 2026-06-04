@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "dyn_arr.h"
+#include "utils.h"
 #include <lauxlib.h>
 #include <lua.h>
 #include <stdio.h>
@@ -11,6 +12,24 @@
 static Messages messages = {0};
 
 Messages *get_messages(void) { return &messages; }
+
+static char *g_provider_name = NULL;
+static char *g_provider_model = NULL;
+
+static int l_agent_set_info(lua_State *L) {
+  free(g_provider_name);
+  free(g_provider_model);
+  g_provider_name = NULL;
+  g_provider_model = NULL;
+  if (!lua_isnoneornil(L, 1))
+    g_provider_name = my_strdup(luaL_checkstring(L, 1));
+  if (!lua_isnoneornil(L, 2))
+    g_provider_model = my_strdup(luaL_checkstring(L, 2));
+  return 0;
+}
+
+const char *agent_provider_name(void) { return g_provider_name; }
+const char *agent_provider_model(void) { return g_provider_model; }
 
 static Message *find_last_message_by_role(MessageRole role) {
   Message *m = NULL;
@@ -96,6 +115,8 @@ void agent_init(lua_State *L) {
   lua_newtable(L);
   lua_pushcfunction(L, l_agent_append);
   lua_setfield(L, -2, "append");
+  lua_pushcfunction(L, l_agent_set_info);
+  lua_setfield(L, -2, "set_info");
   lua_setglobal(L, "agent");
 }
 

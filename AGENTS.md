@@ -52,9 +52,32 @@ All SSE parsing is in Lua (`ai/providers.lua`). C only passes raw bytes. Provide
 
 ### Plugin model
 
-- Plugin handlers run **synchronously** via `lua_pcall(L, 1, 2, 0)` — they get `input`, return `(ui_result, llm_result)`.
-- `Plugin.is_async`, `is_processing`, `callback` fields exist but are **unused** — async streaming happens outside plugin scope via `http_poll` callbacks.
-- Plugins live in `plugins/*.lua`, returned table has `.id`, `.command`, `.handler(input)`.
+- Plugin handlers receive a **ctx table** (not raw `input` string). Signature: `handler(ctx)`.
+- Handler returns `(ui_result, llm_result)` or calls `ctx:replace(ui_val, llm_val?)`.
+- Plugins live in `plugins/*.lua`, returned table has `.id`, `.command`, `.handler`.
+
+**ctx table fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ctx.input` | string | Full original user input (unchanged) |
+| `ctx.command` | string | Matched command, e.g. `"/ip"` |
+| `ctx.args` | table | Array of space-split arguments after the command |
+| `ctx:replace(ui_val, llm_val?)` | function | Returns `(ui_val, llm_val)` — wraps the two return values for clarity. If `llm_val` is omitted, it defaults to `ui_val`. |
+
+**Command parsing rules:**
+- Commands must be the **first non-whitespace token** in the input.
+- Everything after the command token is split by spaces into `ctx.args` (1-indexed Lua array).
+- Example: `  /hi Fox v2` → `ctx.command = "/hi"`, `ctx.args = {"Fox", "v2"}`.
+- If input has no leading `/` at the start, it is treated as plain text (no plugin invoked).
+
+**Blocking HTTP in plugins:**
+- `http.get()` / `http.post()` use `curl_multi` internally and call `render_all()` in a spin loop — UI shows a braille spinner `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` during the request.
+- `http.post_stream()` is fully async, data arrives via callbacks, no spinner needed.
+
+### Apperance
+- Spinner at `(rows-1, MARGIN+1)` shows during any active curl transfer.
+- Cursor hidden while loading, restored after.
 
 ## Conventions
 
