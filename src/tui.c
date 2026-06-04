@@ -6,6 +6,33 @@
 #include <stdlib.h>
 #include <string.h>
 
+PendingContexts g_pending = {0};
+
+void pending_add(const char *label, char *ui_result, char *raw_result) {
+  if (g_pending.size >= g_pending.capacity) {
+    g_pending.capacity = g_pending.capacity ? g_pending.capacity * 2 : 4;
+    g_pending.items = realloc(g_pending.items,
+                              g_pending.capacity * sizeof(PendingContext));
+  }
+  PendingContext *ctx = &g_pending.items[g_pending.size++];
+  strncpy(ctx->label, label, MAX_BADGE_LABEL - 1);
+  ctx->label[MAX_BADGE_LABEL - 1] = '\0';
+  ctx->ui_result = ui_result;
+  ctx->raw_result = raw_result;
+}
+
+void pending_clear(void) {
+  for (int i = 0; i < g_pending.size; i++) {
+    free(g_pending.items[i].ui_result);
+    if (g_pending.items[i].raw_result != g_pending.items[i].ui_result)
+      free(g_pending.items[i].raw_result);
+  }
+  free(g_pending.items);
+  g_pending.items = NULL;
+  g_pending.size = 0;
+  g_pending.capacity = 0;
+}
+
 void init_tui(void) {
   if (has_colors()) {
     start_color();
@@ -13,6 +40,7 @@ void init_tui(void) {
     init_pair(1, COLOR_CYAN, -1);
     init_pair(2, COLOR_GREEN, -1);
     init_pair(3, COLOR_YELLOW, -1);
+    init_pair(4, COLOR_BLACK, COLOR_YELLOW);
   }
   curs_set(1);
 }
@@ -76,7 +104,8 @@ void render_all(void) {
 
   int margin = MARGIN;
   int input_h = INPUT_WIN_HEIGHT;
-  int msg_h = rows - input_h - 2 * margin;
+  int badge_h = g_pending.size > 0 ? 1 : 0;
+  int msg_h = rows - input_h - 2 * margin - badge_h;
   int inner_w = cols - 2 * margin;
 
   if (msg_h < 1 || inner_w < 1)
@@ -144,6 +173,50 @@ void render_all(void) {
   }
 
   free(line_counts);
+
+  if (g_pending.size > 0) {
+    int badge_y = margin + msg_h;
+    int available = inner_w;
+    int show = g_pending.size;
+    int overflow = 0;
+
+    for (int k = g_pending.size; k >= 0; k--) {
+      int ov = g_pending.size - k;
+      int total = 0;
+      for (int i = 0; i < k; i++) {
+        total += (int)strlen(g_pending.items[i].label) + 2;
+        if (i > 0) total++;
+      }
+      if (ov > 0) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "+%d", ov);
+        total += (int)strlen(buf) + 2;
+        if (k > 0) total++;
+      }
+      if (total <= available || k == 0) {
+        show = k;
+        overflow = ov;
+        break;
+      }
+    }
+
+    int col = margin;
+    for (int i = 0; i < show; i++) {
+      if (i > 0)
+        mvaddch(badge_y, col++, ' ');
+      wattron(stdscr, COLOR_PAIR(4));
+      mvprintw(badge_y, col, " %s ", g_pending.items[i].label);
+      wattroff(stdscr, COLOR_PAIR(4));
+      col += strlen(g_pending.items[i].label) + 2;
+    }
+    if (overflow > 0) {
+      if (show > 0)
+        mvaddch(badge_y, col++, ' ');
+      wattron(stdscr, COLOR_PAIR(4) | A_BOLD);
+      mvprintw(badge_y, col, " +%d ", overflow);
+      wattroff(stdscr, COLOR_PAIR(4) | A_BOLD);
+    }
+  }
 
   int input_y = rows - input_h - margin;
   WINDOW *input_win = newwin(input_h, inner_w, input_y, margin);

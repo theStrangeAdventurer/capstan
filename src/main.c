@@ -145,7 +145,7 @@ int main(int argc, char *argv[]) {
         render_all();
         continue;
       }
-      if (!g_input_buf[0])
+      if (!g_input_buf[0] && g_pending.size == 0)
         continue;
 
       // Real Enter — submit
@@ -153,26 +153,58 @@ int main(int argc, char *argv[]) {
 
       char command[MAX_COMMAND_LEN];
       size_t cmd_end;
-      if (has_command(g_input_buf, command, &cmd_end)) {
+      if (g_input_buf[0] && has_command(g_input_buf, command, &cmd_end)) {
         Plugin *p = plugin_registry_find(command);
         if (p) {
           PluginResult *r = plugin_execute(p, g_input_buf, cmd_end);
           if (r) {
-            add_message(r->ui_result, r->raw_result, MSG_USER);
+            const char *cmd = p->command;
+            if (cmd[0] == '/') cmd++;
+            char label[64];
+            snprintf(label, sizeof(label), "ctx:%s", cmd);
+            pending_add(label, r->ui_result, r->raw_result);
+            free(r);
           }
         } else {
           char err[256];
           snprintf(err, sizeof(err), "Unknown command: %s", command);
-          add_message(err, err, MSG_USER);
+          char *cp_err = my_strdup(err);
+          if (g_pending.size > 0) {
+            for (int i = 0; i < g_pending.size; i++) {
+              add_message(g_pending.items[i].ui_result,
+                         g_pending.items[i].raw_result, MSG_USER);
+              g_pending.items[i].ui_result = NULL;
+              g_pending.items[i].raw_result = NULL;
+            }
+            pending_clear();
+          }
+          add_message(cp_err, cp_err, MSG_USER);
+          char *empty = my_strdup("");
+          add_message(empty, empty, MSG_AGENT);
+          agent_emit(L);
         }
+      } else if (g_pending.size > 0) {
+        for (int i = 0; i < g_pending.size; i++) {
+          add_message(g_pending.items[i].ui_result,
+                     g_pending.items[i].raw_result, MSG_USER);
+          g_pending.items[i].ui_result = NULL;
+          g_pending.items[i].raw_result = NULL;
+        }
+        pending_clear();
+        if (g_input_buf[0]) {
+          char *cp = my_strdup(g_input_buf);
+          add_message(cp, cp, MSG_USER);
+        }
+        char *empty = my_strdup("");
+        add_message(empty, empty, MSG_AGENT);
+        agent_emit(L);
       } else {
         char *cp_input = my_strdup(g_input_buf);
         add_message(cp_input, cp_input, MSG_USER);
+        char *empty = my_strdup("");
+        add_message(empty, empty, MSG_AGENT);
+        agent_emit(L);
       }
-
-      char *empty = my_strdup("");
-      add_message(empty, empty, MSG_AGENT);
-      agent_emit(L);
 
       memset(g_input_buf, 0, INPUT_BUFFER_SIZE);
       g_cursor = 0;
