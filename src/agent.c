@@ -130,7 +130,7 @@ void agent_emit(lua_State *L) {
     lua_newtable(L);
     lua_pushstring(L, msgs->items[i]->role == MSG_USER ? "user" : "assistant");
     lua_setfield(L, -2, "role");
-    lua_pushstring(L, msgs->items[i]->text);
+    lua_pushstring(L, msgs->items[i]->raw_text);
     lua_setfield(L, -2, "content");
     lua_rawseti(L, -2, idx++);
   }
