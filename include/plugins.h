@@ -2,6 +2,7 @@
 #define PLUGINS_H
 
 #include <lua.h>
+#include "popup.h"
 
 extern lua_State *L;
 
@@ -9,22 +10,25 @@ typedef struct Plugin Plugin;
 typedef void (*PluginCallback)(Plugin *plugin, const char *result,
                                void *user_data);
 struct Plugin {
-  // Метаданные
   char *id;
   char *name;
   char *description;
   char *command;
   int is_async;
 
-  // Обработчик
   lua_State *L;
   int handler_ref;
 
-  // Для асинхронных операций
-  int async_id;            // ID асинхронной операции
-  int is_processing;       // Флаг выполнения
-  PluginCallback callback; // Коллбек для результата
-  void *user_data;         // Пользовательские данные
+  int async_id;
+  int is_processing;
+  PluginCallback callback;
+  void *user_data;
+
+  int has_autocomplete;
+  int autocomplete_limit;
+  int autocomplete_multi;
+  char *autocomplete_title;
+  int fetch_ref;
 };
 
 typedef struct {
@@ -33,9 +37,9 @@ typedef struct {
 } PluginResult;
 
 typedef struct {
-  Plugin **plugins; // Массив указателей на плагины
-  int count;        // Сколько всего плагинов загружено
-  int capacity;     // Сколько памяти выделено
+  Plugin **plugins;
+  int count;
+  int capacity;
 } PluginRegistry;
 
 void plugin_registry_add(Plugin *plugin);
@@ -43,12 +47,20 @@ void plugin_registry_add(Plugin *plugin);
 Plugin *plugin_registry_find(const char *command);
 
 void plugin_registry_cleanup(void);
+int plugin_registry_count(void);
+Plugin *plugin_registry_at(int index);
 
 void plugins_init(void);
 
 Plugin *plugin_load(const char *path);
 
-PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end);
+PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
+                             char **pre_args, int pre_arg_count);
+
+int plugin_has_autocomplete(Plugin *plugin);
+void plugin_autocomplete_fetch(Plugin *plugin, const char *input, size_t cmd_end,
+                               PopupItem **out_items, int *out_count,
+                               char **out_title, int *out_limit, int *out_multi);
 
 void plugins_cleanup();
 char *get_plugins_info();

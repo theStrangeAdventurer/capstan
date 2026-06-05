@@ -88,6 +88,10 @@ void plugin_registry_cleanup(void) {
       if (p->handler_ref > 0)
         luaL_unref(p->L, LUA_REGISTRYINDEX, p->handler_ref);
 
+      free(p->autocomplete_title);
+      if (p->fetch_ref > 0)
+        luaL_unref(p->L, LUA_REGISTRYINDEX, p->fetch_ref);
+
       free(p);
     }
   }
@@ -95,6 +99,14 @@ void plugin_registry_cleanup(void) {
   plugins_registry.plugins = NULL;
   plugins_registry.count = 0;
   plugins_registry.capacity = 0;
+}
+
+int plugin_registry_count(void) { return plugins_registry.count; }
+
+Plugin *plugin_registry_at(int index) {
+  if (index < 0 || index >= plugins_registry.count)
+    return NULL;
+  return plugins_registry.plugins[index];
 }
 
 static char *lua_getstr_f_value(lua_State *L, int idx, const char *field) {
@@ -142,6 +154,35 @@ Plugin *plugin_load(const char *path) {
   // данные lua чтобы их не собрал сборщик мусора
   p->handler_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
+  lua_getfield(L, -1, "autocomplete");
+  if (lua_istable(L, -1)) {
+    p->has_autocomplete = 1;
+
+    lua_getfield(L, -1, "limit");
+    p->autocomplete_limit =
+        lua_isnumber(L, -1) ? (int)lua_tointeger(L, -1) : 10;
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "multi");
+    p->autocomplete_multi = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : 1;
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "title");
+    if (lua_isstring(L, -1))
+      p->autocomplete_title = my_strdup(lua_tostring(L, -1));
+    else
+      p->autocomplete_title = NULL;
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "fetch");
+    p->fetch_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  } else {
+    p->has_autocomplete = 0;
+    p->fetch_ref = 0;
+    p->autocomplete_title = NULL;
+  }
+  lua_pop(L, 1);
+
   lua_pop(L, 1); // Это уже саму таблицу плагина удаляем со стека
 
   p->callback = NULL;
@@ -157,7 +198,8 @@ static int l_ctx_replace(lua_State *l) {
   return 2;
 }
 
-PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end) {
+PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
+                             char **pre_args, int pre_arg_count) {
   lua_newtable(L); // ctx = {}
 
   lua_pushstring(L, input);
@@ -167,39 +209,47 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end) 
   lua_setfield(L, -2, "command");
 
   // ctx.args = {}
-  const char *args_start = input + cmd_end;
-  while (*args_start == ' ')
-    args_start++;
-
   lua_newtable(L);
   int arg_idx = 1;
-  const char *p = args_start;
-  while (*p) {
-    while (*p == ' ')
-      p++;
-    if (!*p)
-      break;
 
-    const char *word_start;
-    size_t word_len;
-
-    if (*p == '"') {
-      p++;
-      word_start = p;
-      while (*p && *p != '"')
-        p++;
-      word_len = p - word_start;
-      if (*p == '"')
-        p++;
-    } else {
-      word_start = p;
-      while (*p && *p != ' ' && *p != '"')
-        p++;
-      word_len = p - word_start;
+  if (pre_args && pre_arg_count > 0) {
+    for (int i = 0; i < pre_arg_count; i++) {
+      lua_pushstring(L, pre_args[i]);
+      lua_rawseti(L, -2, arg_idx++);
     }
+  } else {
+    const char *args_start = input + cmd_end;
+    while (*args_start == ' ')
+      args_start++;
 
-    lua_pushlstring(L, word_start, word_len);
-    lua_rawseti(L, -2, arg_idx++);
+    const char *p = args_start;
+    while (*p) {
+      while (*p == ' ')
+        p++;
+      if (!*p)
+        break;
+
+      const char *word_start;
+      size_t word_len;
+
+      if (*p == '"') {
+        p++;
+        word_start = p;
+        while (*p && *p != '"')
+          p++;
+        word_len = p - word_start;
+        if (*p == '"')
+          p++;
+      } else {
+        word_start = p;
+        while (*p && *p != ' ' && *p != '"')
+          p++;
+        word_len = p - word_start;
+      }
+
+      lua_pushlstring(L, word_start, word_len);
+      lua_rawseti(L, -2, arg_idx++);
+    }
   }
   lua_setfield(L, -2, "args");
 
@@ -232,6 +282,107 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end) 
   lua_pop(L, 2);
 
   return r;
+}
+
+int plugin_has_autocomplete(Plugin *plugin) {
+  return plugin->has_autocomplete;
+}
+
+static char *lua_popup_item_str(lua_State *L, int idx, const char *field) {
+  lua_getfield(L, idx, field);
+  const char *s = lua_tostring(L, -1);
+  char *result = s ? my_strdup(s) : my_strdup("");
+  lua_pop(L, 1);
+  return result;
+}
+
+void plugin_autocomplete_fetch(Plugin *plugin, const char *input, size_t cmd_end,
+                               PopupItem **out_items, int *out_count,
+                               char **out_title, int *out_limit,
+                               int *out_multi) {
+  *out_items = NULL;
+  *out_count = 0;
+  *out_title = NULL;
+  *out_limit = plugin->autocomplete_limit;
+  *out_multi = plugin->autocomplete_multi;
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, plugin->fetch_ref);
+
+  // Parse partial args for fetch(args)
+  const char *args_start = input + cmd_end;
+  while (*args_start == ' ')
+    args_start++;
+  lua_newtable(L);
+  int arg_idx = 1;
+  const char *p = args_start;
+  while (*p) {
+    while (*p == ' ')
+      p++;
+    if (!*p)
+      break;
+    const char *word_start;
+    size_t word_len;
+    if (*p == '"') {
+      p++;
+      word_start = p;
+      while (*p && *p != '"')
+        p++;
+      word_len = p - word_start;
+      if (*p == '"')
+        p++;
+    } else {
+      word_start = p;
+      while (*p && *p != ' ' && *p != '"')
+        p++;
+      word_len = p - word_start;
+    }
+    lua_pushlstring(L, word_start, word_len);
+    lua_rawseti(L, -2, arg_idx++);
+  }
+
+  if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+    fprintf(stderr, "autocomplete fetch: %s\n", lua_tostring(L, -1));
+    lua_pop(L, 1);
+    return;
+  }
+
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return;
+  }
+
+  int count = (int)lua_rawlen(L, -1);
+  if (count == 0) {
+    lua_pop(L, 1);
+    return;
+  }
+
+  *out_items = malloc(count * sizeof(PopupItem));
+  for (int i = 0; i < count; i++) {
+    lua_rawgeti(L, -1, i + 1);
+    if (lua_istable(L, -1)) {
+      (*out_items)[i].text = lua_popup_item_str(L, -1, "text");
+      (*out_items)[i].value = lua_popup_item_str(L, -1, "value");
+    } else if (lua_isstring(L, -1)) {
+      const char *s = lua_tostring(L, -1);
+      (*out_items)[i].text = my_strdup(s);
+      (*out_items)[i].value = my_strdup(s);
+    } else {
+      (*out_items)[i].text = my_strdup("");
+      (*out_items)[i].value = my_strdup("");
+    }
+    lua_pop(L, 1);
+  }
+  *out_count = count;
+
+  if (plugin->autocomplete_title)
+    *out_title = my_strdup(plugin->autocomplete_title);
+  else if (plugin->name)
+    *out_title = my_strdup(plugin->name);
+  else
+    *out_title = my_strdup("");
+
+  lua_pop(L, 1);
 }
 
 void plugins_cleanup(void) {

@@ -6,6 +6,27 @@ plugin.description = "Read file contents"
 plugin.command = "/file"
 plugin.async = false
 
+plugin.autocomplete = {
+  fetch = function(args)
+    local dir = args[1] or "."
+    local items = {}
+    local handle = io.popen('ls -1p "' .. dir .. '" 2>/dev/null')
+    if handle then
+      for line in handle:lines() do
+        if line ~= "" then
+          local full = dir .. "/" .. line
+          table.insert(items, {text = line, value = full})
+        end
+      end
+      handle:close()
+    end
+    return items
+  end,
+  title = "Files",
+  limit = 10,
+  multi = true,
+}
+
 function plugin.handler(ctx)
 	local filenames = ctx.args
 	if #filenames == 0 then

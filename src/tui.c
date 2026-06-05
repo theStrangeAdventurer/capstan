@@ -2,6 +2,7 @@
 #include "agent.h"
 #include "curses.h"
 #include "http.h"
+#include "popup.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +42,7 @@ void init_tui(void) {
     init_pair(2, COLOR_GREEN, -1);
     init_pair(3, COLOR_YELLOW, -1);
     init_pair(4, COLOR_BLACK, COLOR_YELLOW);
+    init_pair(5, -1, COLOR_BLACK);
   }
   curs_set(1);
 }
@@ -104,7 +106,7 @@ void render_all(void) {
 
   int margin = MARGIN;
   int input_h = INPUT_WIN_HEIGHT;
-  int badge_h = g_pending.size > 0 ? 1 : 0;
+  int badge_h = (g_pending.size > 0 && !popup_is_active()) ? 1 : 0;
   int msg_h = rows - input_h - 2 * margin - badge_h;
   int inner_w = cols - 2 * margin;
 
@@ -174,7 +176,7 @@ void render_all(void) {
 
   free(line_counts);
 
-  if (g_pending.size > 0) {
+  if (g_pending.size > 0 && !popup_is_active()) {
     int badge_y = margin + msg_h;
     int available = inner_w;
     int show = g_pending.size;
@@ -295,6 +297,7 @@ void render_all(void) {
   wnoutrefresh(stdscr);
   wnoutrefresh(msg_win);
   wnoutrefresh(input_win);
+  popup_render();
   doupdate();
 
   delwin(msg_win);
