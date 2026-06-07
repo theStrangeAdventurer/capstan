@@ -8,7 +8,7 @@
 #include <string.h>
 #include <time.h>
 
-int main(void) {
+int supermain(void) {
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
   http_init(L);

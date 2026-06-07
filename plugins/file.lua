@@ -57,4 +57,17 @@ function plugin.handler(ctx)
 	return ctx:replace(ui_value, llm_value)
 end
 
+plugin.tool = {
+	name = "file_read",
+	description = "Read the contents of a file at the given path",
+	parameters = {
+		type = "object",
+		properties = {
+			path = { type = "string", description = "Path to the file to read" }
+		},
+		required = { "path" }
+	},
+	permission = "file_read"
+}
+
 return plugin

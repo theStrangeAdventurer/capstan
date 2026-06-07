@@ -325,3 +325,99 @@ int get_prev_char_start(const char *str, int pos) {
   }
   return pos;
 }
+
+const char *tui_permit_prompt(const char *tool, const char *target) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  int popup_w = 54;
+  int popup_h = 7;
+  if (cols < popup_w + 4)
+    popup_w = cols - 4;
+  if (popup_w < 30)
+    popup_w = 30;
+
+  int popup_x = (cols - popup_w) / 2;
+  int popup_y = (rows - popup_h) / 2;
+  if (popup_y < 0)
+    popup_y = 0;
+
+  WINDOW *win = newwin(popup_h, popup_w, popup_y, popup_x);
+  if (!win)
+    return "deny";
+
+  wattron(win, COLOR_PAIR(5));
+  werase(win);
+  box(win, 0, 0);
+  mvwprintw(win, 0, 2, " Permit: %s ", tool);
+
+  char target_line[256];
+  snprintf(target_line, sizeof(target_line), "%.*s",
+           popup_w - 6,
+           target);
+  mvwprintw(win, 2, 2, " %s", target_line);
+
+  mvwaddstr(win, 4, 2, "[Y]es   [N]o   [A]lways allow");
+
+  int choice = 0;
+  const char *labels[] = {"Yes", "No", "Always"};
+  int positions[] = {2, 13, 24};
+
+  while (1) {
+    for (int i = 0; i < 3; i++) {
+      if (i == choice)
+        wattron(win, A_REVERSE);
+      mvwprintw(win, 4, positions[i], "[%c]%s",
+                labels[i][0], labels[i] + 1);
+      if (i == choice)
+        wattroff(win, A_REVERSE);
+    }
+    wmove(win, 4, positions[choice]);
+    wnoutrefresh(win);
+    doupdate();
+
+    int ch = wgetch(win);
+    switch (ch) {
+    case KEY_LEFT:
+      if (choice > 0)
+        choice--;
+      break;
+    case KEY_RIGHT:
+      if (choice < 2)
+        choice++;
+      break;
+    case 'y':
+    case 'Y':
+      choice = 0;
+      goto done;
+    case 'n':
+    case 'N':
+      choice = 1;
+      goto done;
+    case 'a':
+    case 'A':
+      choice = 2;
+      goto done;
+    case '\n':
+    case '\r':
+      goto done;
+    case 27:
+      choice = 1;
+      goto done;
+    }
+  }
+
+done:
+  werase(win);
+  wnoutrefresh(win);
+  delwin(win);
+
+  switch (choice) {
+  case 0:
+    return "allow";
+  case 2:
+    return "always";
+  default:
+    return "deny";
+  }
+}

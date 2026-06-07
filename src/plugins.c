@@ -1,7 +1,9 @@
 #include "plugins.h"
 #include "agent.h"
 #include "http.h"
+#include "permit.h"
 #include "utils.h"
+#include <dirent.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
@@ -18,8 +20,27 @@ lua_State *L = NULL;
 void plugins_init(void) {
   L = luaL_newstate();
   luaL_openlibs(L);
+
+  const char *home = getenv("HOME");
+  if (home) {
+    char alter_path[2048];
+    snprintf(alter_path, sizeof(alter_path),
+             "%s/.config/turbo-ai/?.lua", home);
+    lua_getglobal(L, "package");
+    lua_getfield(L, -1, "path");
+    const char *cur = lua_tostring(L, -1);
+    char new_path[4096];
+    snprintf(new_path, sizeof(new_path), "%s;%s;./?.lua;plugins/?.lua",
+             cur, alter_path);
+    lua_pushstring(L, new_path);
+    lua_setfield(L, -3, "path");
+    lua_pop(L, 2);
+  }
+
   http_init(L);
   agent_init(L);
+  permit_init(L);
+  tools_init(L);
   if (luaL_dofile(L, "ai/providers.lua") != LUA_OK) {
     fprintf(stderr, "providers: %s\n", lua_tostring(L, -1));
     lua_pop(L, 1);
@@ -91,6 +112,11 @@ void plugin_registry_cleanup(void) {
       free(p->autocomplete_title);
       if (p->fetch_ref > 0)
         luaL_unref(p->L, LUA_REGISTRYINDEX, p->fetch_ref);
+
+      free(p->tool_name);
+      free(p->tool_desc);
+      free(p->tool_params_json);
+      free(p->tool_permission);
 
       free(p);
     }
@@ -183,7 +209,67 @@ Plugin *plugin_load(const char *path) {
   }
   lua_pop(L, 1);
 
-  lua_pop(L, 1); // Это уже саму таблицу плагина удаляем со стека
+  lua_getfield(L, -1, "tool");
+  if (lua_istable(L, -1)) {
+    p->has_tool = 1;
+
+    lua_getfield(L, -1, "name");
+    p->tool_name = lua_isstring(L, -1)
+                       ? my_strdup(lua_tostring(L, -1))
+                       : my_strdup("");
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "description");
+    p->tool_desc = lua_isstring(L, -1)
+                       ? my_strdup(lua_tostring(L, -1))
+                       : my_strdup("");
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "permission");
+    p->tool_permission = lua_isstring(L, -1)
+                             ? my_strdup(lua_tostring(L, -1))
+                             : my_strdup(p->tool_name);
+    lua_pop(L, 1);
+
+    lua_getfield(L, -1, "parameters");
+    if (lua_istable(L, -1)) {
+      lua_getglobal(L, "require");
+      lua_pushstring(L, "vendor.rxi.json");
+      if (lua_pcall(L, 1, 1, 0) == LUA_OK) {
+        lua_getfield(L, -1, "encode");
+        lua_pushvalue(L, -3);
+        if (lua_pcall(L, 1, 1, 0) == LUA_OK && lua_isstring(L, -1))
+          p->tool_params_json = my_strdup(lua_tostring(L, -1));
+        else
+          p->tool_params_json = my_strdup("{}");
+        lua_pop(L, 2);
+      } else {
+        lua_pop(L, 1);
+        p->tool_params_json = my_strdup("{}");
+      }
+    } else {
+      p->tool_params_json = my_strdup("{}");
+    }
+    lua_pop(L, 1);
+  } else {
+    p->has_tool = 0;
+    p->tool_name = NULL;
+    p->tool_desc = NULL;
+    p->tool_params_json = NULL;
+    p->tool_permission = NULL;
+  }
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "plugins");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "plugins");
+  }
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, p->id);
+  lua_pop(L, 2);
 
   p->callback = NULL;
   p->user_data = NULL;
@@ -383,6 +469,53 @@ void plugin_autocomplete_fetch(Plugin *plugin, const char *input, size_t cmd_end
     *out_title = my_strdup("");
 
   lua_pop(L, 1);
+}
+
+void plugin_registry_remove_by_id(const char *id) {
+  for (int i = 0; i < plugins_registry.count; i++) {
+    Plugin *p = plugins_registry.plugins[i];
+    if (p && strcmp(p->id, id) == 0) {
+      free(p->id);
+      free(p->name);
+      free(p->description);
+      free(p->command);
+      free(p->user_data);
+      if (p->handler_ref > 0)
+        luaL_unref(p->L, LUA_REGISTRYINDEX, p->handler_ref);
+      free(p->autocomplete_title);
+      if (p->fetch_ref > 0)
+        luaL_unref(p->L, LUA_REGISTRYINDEX, p->fetch_ref);
+      free(p->tool_name);
+      free(p->tool_desc);
+      free(p->tool_params_json);
+      free(p->tool_permission);
+      free(p);
+      memmove(&plugins_registry.plugins[i],
+              &plugins_registry.plugins[i + 1],
+              (plugins_registry.count - i - 1) * sizeof(Plugin *));
+      plugins_registry.count--;
+      return;
+    }
+  }
+}
+
+void load_plugins_from(const char *dir_path) {
+  DIR *dir = opendir(dir_path);
+  if (!dir)
+    return;
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (!strstr(entry->d_name, ".lua"))
+      continue;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+    Plugin *p = plugin_load(path);
+    if (p) {
+      plugin_registry_remove_by_id(p->id);
+      plugin_registry_add(p);
+    }
+  }
+  closedir(dir);
 }
 
 void plugins_cleanup(void) {

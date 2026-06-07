@@ -30,4 +30,6 @@ int count_visible_chars(const char *str, int byte_pos);
 void pending_add(const char *label, char *ui_result, char *raw_result);
 void pending_clear(void);
 
+const char *tui_permit_prompt(const char *tool, const char *target);
+
 #endif

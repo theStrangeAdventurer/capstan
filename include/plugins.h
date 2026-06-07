@@ -29,6 +29,12 @@ struct Plugin {
   int autocomplete_multi;
   char *autocomplete_title;
   int fetch_ref;
+
+  int has_tool;
+  char *tool_name;
+  char *tool_desc;
+  char *tool_params_json;
+  char *tool_permission;
 };
 
 typedef struct {
@@ -64,4 +70,6 @@ void plugin_autocomplete_fetch(Plugin *plugin, const char *input, size_t cmd_end
 
 void plugins_cleanup();
 char *get_plugins_info();
+void load_plugins_from(const char *dir_path);
+void plugin_registry_remove_by_id(const char *id);
 #endif

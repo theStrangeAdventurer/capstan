@@ -4,7 +4,6 @@
 #include "popup.h"
 #include "tui.h"
 #include "utils.h"
-#include <dirent.h>
 #include <lauxlib.h>
 #include <locale.h>
 #include <lua.h>
@@ -60,19 +59,14 @@ int main(int argc, char *argv[]) {
 
   plugins_init();
 
-  struct dirent *entry;
-  DIR *dir = opendir("plugins");
-  if (dir) {
-    while ((entry = readdir(dir)) != NULL) {
-      if (strstr(entry->d_name, ".lua")) {
-        char path[512];
-        snprintf(path, sizeof(path), "plugins/%s", entry->d_name);
-        Plugin *p = plugin_load(path);
-        plugin_registry_add(p);
-      }
-    }
-    closedir(dir);
+  const char *home = getenv("HOME");
+  if (home) {
+    char global_plugins[512];
+    snprintf(global_plugins, sizeof(global_plugins),
+             "%s/.config/turbo-ai/plugins", home);
+    load_plugins_from(global_plugins);
   }
+  load_plugins_from("plugins");
 
   render_all();
 
