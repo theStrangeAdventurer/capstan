@@ -1,6 +1,6 @@
-s,@DATADIR@,/Users/alexeyzaytsev/narnia/termai/vendor/ncurses/../ncurses-install/share,g
-s,@TERMINFO@,/Users/alexeyzaytsev/narnia/termai/vendor/ncurses/../ncurses-install/share/terminfo,g
-s,@TERMINFO_DIRS@,/Users/alexeyzaytsev/narnia/termai/vendor/ncurses/../ncurses-install/share/terminfo,g
+s,@DATADIR@,/Users/alxd/narnia/tui-agent/vendor/ncurses-install/share,g
+s,@TERMINFO@,/Users/alxd/narnia/tui-agent/vendor/ncurses-install/share/terminfo,g
+s,@TERMINFO_DIRS@,/Users/alxd/narnia/tui-agent/vendor/ncurses-install/share/terminfo,g
 s,@NCURSES_MAJOR@,6,g
 s,@NCURSES_MINOR@,6,g
 s,@NCURSES_PATCH@,20251230,g

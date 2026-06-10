@@ -52,7 +52,7 @@ THIS		= Makefile
 
 top_srcdir	= ..
 srcdir		= .
-prefix		= /home/alxd/narnia/termai/vendor/ncurses-src/../ncurses-install
+prefix		= /Users/alxd/narnia/tui-agent/vendor/ncurses-install
 exec_prefix	= ${prefix}
 bindir		= ${exec_prefix}/bin
 libdir		= ${exec_prefix}/lib
@@ -63,7 +63,7 @@ includesubdir	= /ncursesw
 INCLUDEDIR	= $(DESTDIR)$(includedir)$(includesubdir)
 
 tabsetdir	= $(datadir)/tabset
-ticdir		= /home/alxd/narnia/termai/vendor/ncurses-src/../ncurses-install/share/terminfo
+ticdir		= /Users/alxd/narnia/tui-agent/vendor/ncurses-install/share/terminfo
 ticfile		= $(ticdir).db
 source		= ${top_srcdir}/misc/terminfo.src
 
@@ -72,7 +72,7 @@ INSTALL_PROGRAM	= ${INSTALL}
 INSTALL_SCRIPT	= ${INSTALL}
 INSTALL_DATA	= ${INSTALL} -m 644
 
-PKG_CONFIG_LIBDIR = /usr/lib/pkgconfig
+PKG_CONFIG_LIBDIR = 
 
 BINDIR		= $(DESTDIR)$(bindir)
 DATADIR		= $(DESTDIR)$(datadir)

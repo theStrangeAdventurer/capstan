@@ -285,7 +285,7 @@ typedef uint32_t mmask_t;	/* cf_cv_typeof_mmask_t */
 
 typedef unsigned char NCURSES_BOOL;
 
-#if 0	/* __cplusplus, etc. */
+#if defined(__cplusplus)	/* __cplusplus, etc. */
 
 /* use the C++ compiler's bool type */
 #define NCURSES_BOOL bool
@@ -296,7 +296,7 @@ typedef unsigned char NCURSES_BOOL;
 #include <stdbool.h>
 /* use whatever the C compiler decides bool really is */
 #define NCURSES_BOOL bool
-#elif !defined(__cplusplus) && !1 /* USE_BUILTIN_BOOL */
+#elif !defined(__cplusplus) && !0 /* USE_BUILTIN_BOOL */
 /* there is no predefined bool - use our own */
 #undef bool
 #define bool NCURSES_BOOL

@@ -53,12 +53,11 @@
 #define PACKAGE "ncurses"
 #define NCURSES_VERSION "6.6"
 #define NCURSES_PATCHDATE 20251230
-#define SYSTEM_NAME "linux-gnu"
+#define SYSTEM_NAME "darwin25.5.0"
 #if 0
 #include <stdlib.h>
 #endif
 #define HAVE_LONG_FILE_NAMES 1
-#define MIXEDCASE_FILENAMES 1
 #define STDC_HEADERS 1
 #define HAVE_SYS_TYPES_H 1
 #define HAVE_SYS_STAT_H 1
@@ -70,12 +69,8 @@
 #define HAVE_STDINT_H 1
 #define HAVE_UNISTD_H 1
 #define HAVE_DIRENT_H 1
-#define HAVE_GPM_H 1
-#define HAVE_LIBDL 1
-#define LIBGPM_SONAME "libgpm.so.2"
-#define HAVE_LIBGPM 1
-#define TERMINFO_DIRS "/home/alxd/narnia/termai/vendor/ncurses-src/../ncurses-install/share/terminfo"
-#define TERMINFO "/home/alxd/narnia/termai/vendor/ncurses-src/../ncurses-install/share/terminfo"
+#define TERMINFO_DIRS "/Users/alxd/narnia/tui-agent/vendor/ncurses-install/share/terminfo"
+#define TERMINFO "/Users/alxd/narnia/tui-agent/vendor/ncurses-install/share/terminfo"
 #define HAVE_BIG_CORE 1
 #define PURE_TERMINFO 1
 #define USE_HOME_TERMINFO 1
@@ -150,11 +145,8 @@
 #define HAVE_GETOPT_H 1
 #define HAVE_LIMITS_H 1
 #define HAVE_LOCALE_H 1
-#define HAVE_MALLOC_H 1
 #define HAVE_MATH_H 1
 #define HAVE_POLL_H 1
-#define HAVE_SYS_AUXV_H 1
-#define HAVE_SYS_FSUID_H 1
 #define HAVE_SYS_IOCTL_H 1
 #define HAVE_SYS_PARAM_H 1
 #define HAVE_SYS_POLL_H 1
@@ -172,23 +164,24 @@
 #define HAVE_STRDUP 1
 #define HAVE_SYS_TIME_SELECT 1
 #define SIG_ATOMIC_T volatile sig_atomic_t
+#define HAVE_ERRNO 1
 #define HAVE_CLOCK_GETTIME 1
 #define HAVE_FPATHCONF 1
 #define HAVE_GETCWD 1
-#define HAVE_GETAUXVAL 1
 #define HAVE_GETEGID 1
 #define HAVE_GETEUID 1
 #define HAVE_GETOPT 1
 #define HAVE_GETUID 1
+#define HAVE_ISSETUGID 1
 #define HAVE_LOCALECONV 1
 #define HAVE_POLL 1
 #define HAVE_REMOVE 1
 #define HAVE_SELECT 1
 #define HAVE_SETBUF 1
 #define HAVE_SETBUFFER 1
-#define HAVE_SETFSUID 1
 #define HAVE_SETVBUF 1
 #define HAVE_SIGACTION 1
+#define HAVE_SIGVEC 1
 #define HAVE_SNPRINTF 1
 #define HAVE_STRDUP 1
 #define HAVE_STRSTR 1
@@ -197,6 +190,8 @@
 #define HAVE_TIMES 1
 #define HAVE_TSEARCH 1
 #define HAVE_VSNPRINTF 1
+#define HAVE_PATH_TTYS 1
+#define HAVE_GETTTYNAM 1
 #define HAVE_ISASCII 1
 #define HAVE_NANOSLEEP 1
 #define HAVE_SGTTY_H 1
@@ -208,7 +203,7 @@
 #define HAVE_UNISTD_H 1
 #define HAVE_MKSTEMP 1
 #define HAVE_SIZECHANGE 1
-#define HAVE_WORKING_POLL 1
+#define HAVE_POSIX_OPENPT 1
 #define HAVE_CONSISTENT_MB_LEN_MAX 1
 #define HAVE_VA_COPY 1
 #define HAVE_UNISTD_H 1
@@ -221,7 +216,7 @@
 #define HAVE_SPEED_T 1
 #define HAVE_TCFLAG_T 1
 #define HAVE_SIGSET_T 1
-#define USE_OPENPTY_HEADER <pty.h>
+#define USE_OPENPTY_HEADER <util.h>
 #define USE_XTERM_PTY 1
 #define USE_STDBOOL_H 1
 #define HAVE_NEW 1

@@ -40,7 +40,7 @@ SHELL		= /bin/sh
 
 
 srcdir		= .
-prefix		= /home/alxd/narnia/termai/vendor/ncurses-src/../ncurses-install
+prefix		= /Users/alxd/narnia/tui-agent/vendor/ncurses-install
 exec_prefix	= ${prefix}
 datarootdir	= ${prefix}/share
 datadir		= ${datarootdir}

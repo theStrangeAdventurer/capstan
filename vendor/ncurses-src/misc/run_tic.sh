@@ -43,7 +43,7 @@ echo "** Building terminfo database, please wait..."
 #	make install.data
 
 # Symbols which are not overridden by misc/Makefile:
-: "${prefix:=/home/alxd/narnia/termai/vendor/ncurses-src/../ncurses-install}"
+: "${prefix:=/Users/alxd/narnia/tui-agent/vendor/ncurses-install}"
 : "${exec_prefix:=${prefix}}"
 : "${top_srcdir:=..}"
 : "${srcdir:=.}"
@@ -54,7 +54,7 @@ echo "** Building terminfo database, please wait..."
 
 : "${ext_funcs:=1}"
 : "${tic_path:=tic}"
-: "${ticdir:=/home/alxd/narnia/termai/vendor/ncurses-src/../ncurses-install/share/terminfo}"
+: "${ticdir:=/Users/alxd/narnia/tui-agent/vendor/ncurses-install/share/terminfo}"
 : "${tic_source:=${top_srcdir}/misc/terminfo.src}"
 
 # Symbols which $DESTDIR and/or install-prefix may affect:
@@ -85,7 +85,7 @@ then
 			;;
 		esac
 		export PATH
-		if test shared = shared
+		if test normal = shared
 		then
 			SHLIB="sh $srcdir/shlib"
 			tic_path="$SHLIB tic"
@@ -110,7 +110,7 @@ SHLIB_PATH=$PATH
 export SHLIB_PATH
 
 # Set a variable to simplify environment update in the shlib script.
-SHLIB_HOST=linux-gnu
+SHLIB_HOST=darwin25.5.0
 export SHLIB_HOST
 
 # Don't use user's TERMINFO or TERMINFO_DIRS variables.  The explicit "-o"

@@ -46,7 +46,7 @@ THIS		= Makefile
 
 
 srcdir		= .
-prefix		= /home/alxd/narnia/termai/vendor/ncurses-src/../ncurses-install
+prefix		= /Users/alxd/narnia/tui-agent/vendor/ncurses-install
 exec_prefix	= ${prefix}
 includedir	= ${prefix}/include
 includesubdir	= /ncursesw
@@ -56,14 +56,14 @@ INCLUDEDIR	= $(DESTDIR)$(includedir)$(includesubdir)
 INSTALL		= /usr/bin/install -c
 INSTALL_DATA	= ${INSTALL} -m 644
 
-AWK		= gawk
+AWK		= awk
 LN_S		= ln -s -f
 
 CC		= gcc
-CFLAGS		= -O2 --param max-inline-insns-single=1200 
-CPPFLAGS	= -DHAVE_CONFIG_H -I. -I. -I../include -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=600 -DNDEBUG
+CFLAGS		= -O2 -Qunused-arguments -Wno-error=implicit-function-declaration -no-cpp-precomp 
+CPPFLAGS	= -DHAVE_CONFIG_H -I. -I. -I../include -D_DARWIN_C_SOURCE -DNDEBUG
 
-CTAGS		= 
+CTAGS		= ctags
 ETAGS		= 
 
 VERSION		= 6.6

@@ -1,2 +1,34 @@
 build
 vendor/ncurses-install
+
+# Build artifacts
+vendor/ncurses-src/obj_s/
+vendor/ncurses-src/obj_g/
+vendor/ncurses-src/objects/
+vendor/ncurses-src/lib/
+vendor/ncurses-src/progs/clear
+vendor/ncurses-src/progs/infocmp
+vendor/ncurses-src/progs/tabs
+vendor/ncurses-src/progs/tic
+vendor/ncurses-src/progs/toe
+vendor/ncurses-src/progs/tput
+vendor/ncurses-src/progs/tset
+vendor/ncurses-src/progs/capconvert
+vendor/ncurses-src/progs/modules
+vendor/ncurses-src/panel/headers
+vendor/ncurses-src/panel/modules
+vendor/ncurses-src/panel/llib-*
+vendor/ncurses-src/test/programs
+vendor/ncurses-src/test/modules
+vendor/ncurses-src/test/tracemunch
+vendor/ncurses-src/test/tput-*
+vendor/lua-5.5.0/src/*.o
+vendor/lua-5.5.0/src/lua
+vendor/lua-5.5.0/src/luac
+vendor/lua-5.5.0/src/liblua.a
+
+# macOS resource forks
+._*
+
+# Stale tooling
+compile_commands.json

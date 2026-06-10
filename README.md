@@ -1,39 +1,47 @@
-### Как собрать скачанный ncurses
+# tui-agent
+
+CLI LLM agent — like opencode / claude code.
+
+## Build
 
 ```sh
-cd vendor/ncurses-src
-./configure \
-  --with-shared \
-  --with-termlib \
-  --without-tests \
-  --prefix=$(pwd)/../ncurses-install
+./build.sh
 ```
 
-### Как скачать и собрать lua
+The script handles everything: checks dependencies, builds ncurses + Lua from `vendor/`, then compiles the project.
 
-> [link](https://www.lua.org/download.html)
+Binary is `build/termai`.
 
+## System dependencies
+
+### macOS
+- Xcode Command Line Tools (`xcode-select --install`)
+- libcurl (included in macOS SDK)
+
+### Linux (Debian/Ubuntu)
 ```sh
-cd vendor
-curl -L -R -O https://www.lua.org/ftp/lua-5.5.0.tar.gz
-tar zxf lua-5.5.0.tar.gz
-cd lua-5.5.0
-make all test
-
+sudo apt install build-essential libcurl4-openssl-dev
 ```
 
-#### Build
+### Linux (Fedora)
+```sh
+sudo dnf install gcc make libcurl-devel
+```
 
-##### Linux
-make -j$(nproc)
-
-##### MacOS
-make -j$(sysctl -n hw.ncpu)
-
-make install
-
-#### Compile_commands
+## Run
 
 ```sh
-bear -- make
+./build/termai
+```
+
+Requires `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` environment variable.
+
+## Project structure
+
+```
+src/        C sources (single gcc invocation)
+include/    headers
+ai/         Lua AI core (providers, tool calls)
+plugins/    Lua plugins (commands: /file, /shell, /write, etc.)
+vendor/     third-party: ncurses + Lua source, rxi/json.lua
 ```
