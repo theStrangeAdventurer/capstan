@@ -152,13 +152,9 @@ All SSE parsing is in Lua (`ai/providers.lua`). C only passes raw bytes. Provide
 
 ### Setup
 
-µnit is included as a git submodule at `vendor/munit`.
-
-On first clone:
-
-```sh
-git submodule update --init --recursive
-```
+µnit is vendored at `vendor/munit/` (`munit.h` + `munit.c`, copied directly
+from [upstream](https://github.com/nemequ/munit)). No git submodule, no
+installation — files are part of the repo.
 
 ### Run
 

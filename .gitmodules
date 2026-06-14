@@ -1,3 +1,0 @@
-[submodule "vendor/munit"]
-	path = vendor/munit
-	url = https://github.com/nemequ/munit.git
