@@ -148,6 +148,87 @@ All SSE parsing is in Lua (`ai/providers.lua`). C only passes raw bytes. Provide
 - Spinner at `(rows-1, MARGIN+1)` shows during any active curl transfer.
 - Cursor hidden while loading, restored after.
 
+## Testing
+
+### Setup
+
+µnit is included as a git submodule at `vendor/munit`.
+
+On first clone:
+
+```sh
+git submodule update --init --recursive
+```
+
+### Run
+
+```sh
+make test
+```
+
+Test binary does **not** link ncurses, Lua, or curl — only the pure C modules
+that have no UI or Lua dependencies.
+
+### Currently tested modules
+
+| Module | Tests | File |
+|--------|-------|------|
+| `input.c` | 12 tests (ASCII insert, UTF-8 nav, backspace, clear) | `test/test_input.c` |
+| `scroll.c` | 9 tests (up/down, clamp, reset, set) | `test/test_scroll.c` |
+| `utils.c` | 5 tests (my_strdup, replace_with) | `test/test_utils.c` |
+
+### Adding new tests
+
+1. Create `test/test_<module>.c` with a `MunitTest` array and exported `MunitSuite`.
+2. Add the `.c` file to `TEST_SRCS` in the Makefile.
+3. Register the suite in `test/test_main.c`.
+
+Example test file:
+
+```c
+#include "munit.h"
+#include "my_module.h"
+
+static MunitResult test_something(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  munit_assert_int(my_func(), ==, 42);
+  return MUNIT_OK;
+}
+
+static MunitTest tests[] = {
+  {"/something", test_something, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}
+};
+
+MunitSuite my_module_suite = {"/my_module", tests, NULL, 1, MUNIT_SUITE_OPTION_NONE};
+```
+
+### Testable vs untestable modules
+
+Modules that depend on ncurses, Lua, or curl cannot be unit-tested without
+those libraries. The current split:
+
+| Testable (no deps) | Untestable (needs ncurses/Lua/curl) |
+|---------------------|--------------------------------------|
+| `input.c` | `tui.c` (ncurses) |
+| `scroll.c` | `agent.c` (Lua) |
+| `utils.c` | `plugins.c` (Lua) |
+| `dispatch.c` (logic only) | `http.c` (curl) |
+| `permit.c` (`permit_pattern_match`) | `popup.c` (ncurses) |
+
+To make more modules testable, extract pure-logic functions that don't call
+ncurses/Lua/curl APIs, and put them in separate source files.
+
+### Test policy
+
+- **New feature → new tests.** If the added logic can be tested without
+  ncurses/Lua/curl, it must have unit tests. If it requires dependencies —
+  extract the pure-logic part into a separate function/module so it becomes
+  testable.
+- **Changed code → update tests.** If you modify a function that has tests,
+  run `make test` and fix any breakage. If the change adds new behavior,
+  add a new test case for it.
+
 ## Conventions
 
 - C99, `-Wall -Wextra -Werror`, `-D_POSIX_C_SOURCE=200112L`

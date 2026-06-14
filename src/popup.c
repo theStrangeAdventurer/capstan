@@ -1,4 +1,5 @@
 #include "popup.h"
+#include "plugins.h"
 #include "tui.h"
 #include "utils.h"
 #include <ncursesw/curses.h>
@@ -20,15 +21,22 @@ static struct {
   char *title;
   int multi;
 
+  struct Plugin *plugin;
+  size_t cmd_end;
+
   WINDOW *win;
   int last_rows;
   int last_cols;
 } g_popup;
 
 void popup_open(PopupItem *items, int count, const char *title,
-                int max_visible, int multi) {
+                 int max_visible, int multi) {
+  popup_open_with_plugin(items, count, title, max_visible, multi, NULL, 0);
+}
+
+void popup_open_with_plugin(PopupItem *items, int count, const char *title,
+                            int max_visible, int multi, struct Plugin *plugin, size_t cmd_end) {
   g_popup.active = 1;
-  g_popup.cancelled = 0;
   g_popup.cancelled = 0;
   g_popup.cursor = 0;
   g_popup.scroll = 0;
@@ -36,6 +44,8 @@ void popup_open(PopupItem *items, int count, const char *title,
   g_popup.multi = multi;
   g_popup.last_rows = -1;
   g_popup.last_cols = -1;
+  g_popup.plugin = plugin;
+  g_popup.cmd_end = cmd_end;
 
   if (g_popup.win) {
     delwin(g_popup.win);
@@ -145,6 +155,8 @@ void popup_close(void) {
   g_popup.title = NULL;
   g_popup.item_count = 0;
   g_popup.active = 0;
+  g_popup.plugin = NULL;
+  g_popup.cmd_end = 0;
 }
 
 void popup_render(void) {
@@ -217,3 +229,7 @@ void popup_render(void) {
   wmove(win, 1 + (g_popup.cursor - g_popup.scroll), 4);
   wnoutrefresh(win);
 }
+
+struct Plugin *popup_get_plugin(void) { return g_popup.plugin; }
+
+size_t popup_get_cmd_end(void) { return g_popup.cmd_end; }

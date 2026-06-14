@@ -2,7 +2,10 @@
 #include "agent.h"
 #include "curses.h"
 #include "http.h"
+#include "input.h"
 #include "popup.h"
+#include "scroll.h"
+#include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -98,9 +101,9 @@ static int count_visible_chars_to(const char *str, int max_chars) {
 }
 
 void render_all(void) {
-  int scroll_offset = g_scroll;
-  const char *input = g_input_buf;
-  int input_pos = g_cursor;
+  int scroll_offset = scroll_get();
+  const char *input = input_get_text();
+  int input_pos = input_get_cursor();
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
@@ -302,28 +305,6 @@ void render_all(void) {
 
   delwin(msg_win);
   delwin(input_win);
-}
-
-int count_visible_chars(const char *str, int byte_pos) {
-  int chars = 0;
-  for (int i = 0; i < byte_pos && str[i]; i++) {
-    // Это классический способ работать с UTF8 символами,
-    // по сути эта проверка позволяет игногировать все хвосты многобайтовых
-    // символов и считать только их головы
-    if ((str[i] & 0xC0) != 0x80)
-      chars++;
-  }
-  return chars;
-}
-
-int get_prev_char_start(const char *str, int pos) {
-  if (pos <= 0)
-    return pos;
-  pos--;
-  while (pos > 0 && (str[pos] & 0xC0) == 0x80) {
-    pos--;
-  }
-  return pos;
 }
 
 const char *tui_permit_prompt(const char *tool, const char *target) {
