@@ -30,8 +30,8 @@ case "$OS" in
 esac
 
 echo -e "${CYAN}╔══════════════════════════════════════════╗"
-echo -e "║  tui-agent build (${OS_NAME} ${ARCH})     ║"
-echo -e "║  jobs: ${JOBS}                              ║"
+printf "\033[0;36m║  %-8s %-29s║\n" "build:" "${OS_NAME} ${ARCH}"
+printf "║  %-8s %-29s║\n" "jobs:" "${JOBS}"
 echo -e "╚══════════════════════════════════════════╝${NC}"
 
 # ── 1. Check system dependencies ────────────────────────────────
@@ -173,9 +173,9 @@ echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════╗"
 echo -e "║  Build successful!                      ║"
 echo -e "╠══════════════════════════════════════════╣"
-echo -e "║  binary:  build/termai                  ║"
-echo -e "║  size:    ${SIZE}                         ║"
-echo -e "║  arch:    ${BIN_ARCH}                        ║"
+printf "\033[0;32m║  %-10s %-28s║\n" "binary:" "build/termai"
+printf "║  %-10s %-28s║\n" "size:" "$SIZE"
+printf "║  %-10s %-28s║\n" "arch:" "$BIN_ARCH"
 echo -e "╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  Run:  ${GREEN}./build/termai${NC}"

@@ -2,10 +2,12 @@
 #include "dispatch.h"
 #include "http.h"
 #include "input.h"
+#include "mode.h"
 #include "plugins.h"
 #include "popup.h"
 #include "scroll.h"
 #include "tui.h"
+#include "visual.h"
 #include <lauxlib.h>
 #include <locale.h>
 #include <lua.h>
@@ -23,6 +25,7 @@ int main(int argc, char *argv[]) {
   (void)argv;
 
   setlocale(LC_ALL, "");
+  set_escdelay(50);
   initscr();
   noecho();
   timeout(0);
@@ -74,6 +77,73 @@ int main(int argc, char *argv[]) {
           scroll_up(3);
         else if (event.bstate & BUTTON5_PRESSED)
           scroll_down(3);
+      }
+      render_all();
+      continue;
+    }
+
+    if (ch == '\t') {
+      if (mode_get() == FOCUS_MESSAGES)
+        visual_exit();
+      mode_toggle();
+      if (mode_get() == FOCUS_MESSAGES)
+        visual_enter();
+      render_all();
+      continue;
+    }
+
+    if (mode_get() == FOCUS_MESSAGES) {
+      if (ch == KEY_PPAGE) {
+        scroll_up(5);
+        int vc_line;
+        visual_get_cursor(&vc_line, NULL);
+        visual_set_cursor_line(vc_line + 5);
+      } else if (ch == KEY_NPAGE) {
+        scroll_down(5);
+        int vc_line;
+        visual_get_cursor(&vc_line, NULL);
+        visual_set_cursor_line(vc_line - 5);
+      } else if (ch == '0')
+        visual_move_line_start();
+      else if (ch == '$')
+        visual_move_line_end();
+      else if (ch == 'w')
+        visual_move_word_forward();
+      else if (ch == 'b')
+        visual_move_word_backward();
+      else if (visual_is_active()) {
+        if (ch == KEY_UP || ch == 'k')
+          visual_move_up();
+        else if (ch == KEY_DOWN || ch == 'j')
+          visual_move_down();
+        else if (ch == KEY_LEFT || ch == 'h')
+          visual_move_left();
+        else if (ch == KEY_RIGHT || ch == 'l')
+          visual_move_right();
+        else if (ch == 'y') {
+          Messages *msgs = get_messages();
+          const char **texts = malloc(msgs->size * sizeof(const char *));
+          for (size_t i = 0; i < msgs->size; i++)
+            texts[i] = msgs->items[i]->text;
+          visual_yank(texts, (int)msgs->size);
+          free(texts);
+        } else if (ch == 27)
+          visual_exit_selection();
+      } else {
+        if (ch == KEY_UP || ch == 'k')
+          visual_move_up();
+        else if (ch == KEY_DOWN || ch == 'j')
+          visual_move_down();
+        else if (ch == KEY_LEFT || ch == 'h')
+          visual_move_left();
+        else if (ch == KEY_RIGHT || ch == 'l')
+          visual_move_right();
+        else if (ch == 'v')
+          visual_enter_selection();
+        else if (ch == 27) {
+          mode_set(FOCUS_INPUT);
+          visual_exit();
+        }
       }
       render_all();
       continue;

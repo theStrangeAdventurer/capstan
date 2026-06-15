@@ -232,3 +232,7 @@ ncurses/Lua/curl APIs, and put them in separate source files.
 - `my_strdup()` instead of POSIX `strdup()`
 - ncurses + Lua linked statically (`.a`), libcurl dynamic (`-lcurl`)
 - Dynamic arrays: double capacity when full (not fixed increment)
+
+## Focus modes
+
+See [specs/focus-modes.md](specs/focus-modes.md)

@@ -3,9 +3,12 @@
 #include "curses.h"
 #include "http.h"
 #include "input.h"
+#include "linemap.h"
+#include "mode.h"
 #include "popup.h"
 #include "scroll.h"
 #include "utils.h"
+#include "visual.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -132,6 +135,35 @@ void render_all(void) {
     total_lines += l;
   }
 
+  const char **msgs_texts = malloc(msgs->size * sizeof(const char *));
+  int *msgs_roles = malloc(msgs->size * sizeof(int));
+  for (size_t i = 0; i < msgs->size; i++) {
+    msgs_texts[i] = msgs->items[i]->text;
+    msgs_roles[i] = msgs->items[i]->role;
+  }
+  linemap_build(NULL, msgs_roles, (int)msgs->size, msgs_texts, inner_w);
+  visual_set_texts(msgs_texts, (int)msgs->size);
+  free(msgs_roles);
+
+  if (visual_cursor_visible()) {
+    int vc_line, vc_col;
+    visual_get_cursor(&vc_line, &vc_col);
+    int visual_top = total_lines - msg_h - scroll_offset;
+    if (visual_top < 0) visual_top = 0;
+    int visual_bottom = visual_top + msg_h - 1;
+    if (vc_line < visual_top) {
+      int new_scroll = total_lines - vc_line - msg_h;
+      if (new_scroll < 0) new_scroll = 0;
+      scroll_set(new_scroll);
+      scroll_offset = scroll_get();
+    } else if (vc_line > visual_bottom) {
+      int new_scroll = total_lines - vc_line - 1;
+      if (new_scroll < 0) new_scroll = 0;
+      scroll_set(new_scroll);
+      scroll_offset = scroll_get();
+    }
+  }
+
   int max_scroll = total_lines > msg_h ? total_lines - msg_h : 0;
   if (scroll_offset > max_scroll)
     scroll_offset = max_scroll;
@@ -141,6 +173,10 @@ void render_all(void) {
   int top_line = total_lines - msg_h - scroll_offset;
   if (top_line < 0)
     top_line = 0;
+
+  int sel_sl = -1, sel_sc = -1, sel_el = -1, sel_ec = -1;
+  if (visual_is_active())
+    visual_selection_range(&sel_sl, &sel_sc, &sel_el, &sel_ec);
 
   int global_line = 0;
   int win_row = 0;
@@ -165,6 +201,27 @@ void render_all(void) {
 
       if (global_line >= top_line && win_row < msg_h) {
         mvwaddnstr(msg_win, win_row, 0, p, line_end - p);
+
+        if (visual_is_active() && global_line >= sel_sl &&
+            global_line <= sel_el) {
+          int line_char_count = 0;
+          for (const char *c = p; c < line_end; c++) {
+            if ((*c & 0xC0) != 0x80)
+              line_char_count++;
+          }
+
+          int h_start = (global_line == sel_sl) ? sel_sc : 0;
+          int h_end = (global_line == sel_el) ? sel_ec : line_char_count;
+
+          if (h_start < 0) h_start = 0;
+          if (h_end > line_char_count) h_end = line_char_count;
+
+          if (h_end > h_start) {
+            mvwchgat(msg_win, win_row, h_start, h_end - h_start,
+                     A_REVERSE, cp, NULL);
+          }
+        }
+
         win_row++;
       }
 
@@ -178,6 +235,17 @@ void render_all(void) {
   }
 
   free(line_counts);
+
+  if (visual_cursor_visible()) {
+    int vc_line, vc_col;
+    visual_get_cursor(&vc_line, &vc_col);
+    int vis_row = vc_line - top_line;
+    if (vis_row >= 0 && vis_row < msg_h) {
+      wattron(msg_win, A_REVERSE);
+      mvwaddch(msg_win, vis_row, vc_col, ' ');
+      wattroff(msg_win, A_REVERSE);
+    }
+  }
 
   if (g_pending.size > 0 && !popup_is_active()) {
     int badge_y = margin + msg_h;
@@ -233,7 +301,13 @@ void render_all(void) {
   }
 
   werase(input_win);
+  if (mode_get() == FOCUS_INPUT)
+    wattron(input_win, A_BOLD);
+  else
+    wattron(input_win, A_DIM);
   box(input_win, 0, 0);
+  wattroff(input_win, A_BOLD);
+  wattroff(input_win, A_DIM);
 
   int content_w = inner_w - 2;
   int input_len = (int)strlen(input);
@@ -247,6 +321,10 @@ void render_all(void) {
   int rel_pos = input_pos - skip_bytes;
   if (rel_pos < 0) rel_pos = 0;
 
+  int dim_content = mode_get() == FOCUS_MESSAGES;
+  if (dim_content)
+    wattron(input_win, A_DIM);
+
   int line1_bytes = 0;
   if (input_lines > skip_lines) {
     line1_bytes = count_visible_chars_to(visible, content_w);
@@ -255,18 +333,28 @@ void render_all(void) {
   if (input_lines > skip_lines + 1)
     mvwaddstr(input_win, 2, 1, visible + line1_bytes);
 
-  int cursor_line, cursor_col;
-  if (line1_bytes == 0) {
-    cursor_line = 1;
-    cursor_col = 1;
-  } else if (!(input_lines > skip_lines + 1) || rel_pos < line1_bytes) {
-    cursor_line = 1;
-    cursor_col = 1 + count_visible_chars(visible, rel_pos);
-  } else {
-    cursor_line = 2;
-    cursor_col = 1 + count_visible_chars(visible + line1_bytes, rel_pos - line1_bytes);
+  if (dim_content)
+    wattroff(input_win, A_DIM);
+
+  if (mode_get() == FOCUS_INPUT) {
+    int cursor_line, cursor_col;
+    if (line1_bytes == 0) {
+      cursor_line = 1;
+      cursor_col = 1;
+    } else if (!(input_lines > skip_lines + 1) || rel_pos < line1_bytes) {
+      cursor_line = 1;
+      cursor_col = 1 + count_visible_chars(visible, rel_pos);
+    } else {
+      cursor_line = 2;
+      cursor_col = 1 + count_visible_chars(visible + line1_bytes, rel_pos - line1_bytes);
+    }
+    wmove(input_win, cursor_line, cursor_col);
   }
-  wmove(input_win, cursor_line, cursor_col);
+
+  {
+    move(rows - 1, 0);
+    clrtoeol();
+  }
 
   int loading = http_is_loading();
   if (loading) {
@@ -276,16 +364,38 @@ void render_all(void) {
       mvaddstr(rows - 1, MARGIN + 1 + s, spinner_frames[idx]);
     }
     wattrset(stdscr, A_NORMAL);
-  } else if (prev_loading) {
-    for (int s = 0; s < SPINNER_COUNT; s++)
-      mvaddstr(rows - 1, MARGIN + 1 + s, "      ");
   }
+
+  {
+    const char *mode_hint;
+    if (mode_get() == FOCUS_MESSAGES) {
+      if (visual_is_active())
+        mode_hint = "-- VISUAL -- y:yank  Esc:cancel";
+      else
+        mode_hint = "-- MESSAGES -- v:select  Esc:focus";
+    } else {
+      mode_hint = "-- INSERT -- Tab:focus";
+    }
+    int hint_len = (int)strlen(mode_hint);
+    int hint_x = MARGIN + 1 + SPINNER_COUNT + 2;
+    if (hint_x + hint_len < cols - 20) {
+      attron(A_BOLD);
+      mvaddnstr(rows - 1, hint_x, mode_hint, hint_len);
+      attroff(A_BOLD);
+    }
+  }
+
   spinner_tick++;
 
-  if (loading != prev_loading) {
-    curs_set(loading ? 0 : 1);
+  if (loading)
+    curs_set(0);
+  else if (mode_get() == FOCUS_MESSAGES)
+    curs_set(0);
+  else
+    curs_set(1);
+
+  if (loading != prev_loading)
     prev_loading = loading;
-  }
 
   const char *prov = agent_provider_name();
   const char *model = agent_provider_model();
