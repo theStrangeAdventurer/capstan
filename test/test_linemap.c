@@ -17,13 +17,17 @@ static MunitResult test_single_line(const MunitParameter params[], void *data) {
     const char *texts[] = {"hello"};
     int roles[] = {0};
     linemap_build(NULL, roles, 1, texts, 80);
-    munit_assert_int(linemap_count(), ==, 1);
-    const LineInfo *li = linemap_get(0);
+    munit_assert_int(linemap_count(), ==, 3);
+    const LineInfo *l0 = linemap_get(0);
+    munit_assert_int(l0->role, ==, LINE_PADDING);
+    const LineInfo *li = linemap_get(1);
     munit_assert_not_null(li);
     munit_assert_int(li->byte_start, ==, 0);
     munit_assert_int(li->byte_end, ==, 5);
     munit_assert_int(li->char_count, ==, 5);
     munit_assert_int(li->role, ==, 0);
+    const LineInfo *l2 = linemap_get(2);
+    munit_assert_int(l2->role, ==, LINE_PADDING);
     linemap_free();
     return MUNIT_OK;
 }
@@ -34,15 +38,17 @@ static MunitResult test_multiline_newline(const MunitParameter params[], void *d
     const char *texts[] = {"hello\nworld"};
     int roles[] = {0};
     linemap_build(NULL, roles, 1, texts, 80);
-    munit_assert_int(linemap_count(), ==, 2);
-    const LineInfo *l0 = linemap_get(0);
-    munit_assert_int(l0->byte_start, ==, 0);
-    munit_assert_int(l0->byte_end, ==, 5);
-    munit_assert_int(l0->char_count, ==, 5);
+    munit_assert_int(linemap_count(), ==, 4);
+    munit_assert_int(linemap_get(0)->role, ==, LINE_PADDING);
     const LineInfo *l1 = linemap_get(1);
-    munit_assert_int(l1->byte_start, ==, 6);
-    munit_assert_int(l1->byte_end, ==, 11);
+    munit_assert_int(l1->byte_start, ==, 0);
+    munit_assert_int(l1->byte_end, ==, 5);
     munit_assert_int(l1->char_count, ==, 5);
+    const LineInfo *l2 = linemap_get(2);
+    munit_assert_int(l2->byte_start, ==, 6);
+    munit_assert_int(l2->byte_end, ==, 11);
+    munit_assert_int(l2->char_count, ==, 5);
+    munit_assert_int(linemap_get(3)->role, ==, LINE_PADDING);
     linemap_free();
     return MUNIT_OK;
 }
@@ -53,11 +59,11 @@ static MunitResult test_word_wrap(const MunitParameter params[], void *data) {
     const char *texts[] = {"abcdef"};
     int roles[] = {0};
     linemap_build(NULL, roles, 1, texts, 3);
-    munit_assert_int(linemap_count(), ==, 2);
-    const LineInfo *l0 = linemap_get(0);
-    munit_assert_int(l0->char_count, ==, 3);
-    const LineInfo *l1 = linemap_get(1);
-    munit_assert_int(l1->char_count, ==, 3);
+    munit_assert_int(linemap_count(), ==, 4);
+    munit_assert_int(linemap_get(0)->role, ==, LINE_PADDING);
+    munit_assert_int(linemap_get(1)->char_count, ==, 3);
+    munit_assert_int(linemap_get(2)->char_count, ==, 3);
+    munit_assert_int(linemap_get(3)->role, ==, LINE_PADDING);
     linemap_free();
     return MUNIT_OK;
 }
@@ -68,10 +74,12 @@ static MunitResult test_empty_text_message(const MunitParameter params[], void *
     const char *texts[] = {""};
     int roles[] = {1};
     linemap_build(NULL, roles, 1, texts, 80);
-    munit_assert_int(linemap_count(), ==, 1);
-    const LineInfo *li = linemap_get(0);
+    munit_assert_int(linemap_count(), ==, 3);
+    munit_assert_int(linemap_get(0)->role, ==, LINE_PADDING);
+    const LineInfo *li = linemap_get(1);
     munit_assert_int(li->char_count, ==, 0);
     munit_assert_int(li->role, ==, 1);
+    munit_assert_int(linemap_get(2)->role, ==, LINE_PADDING);
     linemap_free();
     return MUNIT_OK;
 }
@@ -80,11 +88,33 @@ static MunitResult test_multiple_messages(const MunitParameter params[], void *d
     (void)params;
     (void)data;
     const char *texts[] = {"hi", "bye"};
+    int roles[] = {0, 0};
+    linemap_build(NULL, roles, 2, texts, 80);
+    munit_assert_int(linemap_count(), ==, 6);
+    munit_assert_int(linemap_get(0)->role, ==, LINE_PADDING);
+    munit_assert_int(linemap_get(1)->msg_index, ==, 0);
+    munit_assert_int(linemap_get(2)->role, ==, LINE_PADDING);
+    munit_assert_int(linemap_get(3)->role, ==, LINE_PADDING);
+    munit_assert_int(linemap_get(4)->msg_index, ==, 1);
+    munit_assert_int(linemap_get(5)->role, ==, LINE_PADDING);
+    linemap_free();
+    return MUNIT_OK;
+}
+
+static MunitResult test_multiple_mixed(const MunitParameter params[], void *data) {
+    (void)params;
+    (void)data;
+    const char *texts[] = {"hi", "bye"};
     int roles[] = {0, 1};
     linemap_build(NULL, roles, 2, texts, 80);
-    munit_assert_int(linemap_count(), ==, 2);
-    munit_assert_int(linemap_get(0)->msg_index, ==, 0);
-    munit_assert_int(linemap_get(1)->msg_index, ==, 1);
+    munit_assert_int(linemap_count(), ==, 6);
+    munit_assert_int(linemap_get(0)->role, ==, LINE_PADDING);
+    munit_assert_int(linemap_get(1)->msg_index, ==, 0);
+    munit_assert_int(linemap_get(2)->role, ==, LINE_PADDING);
+    munit_assert_int(linemap_get(3)->role, ==, LINE_PADDING);
+    munit_assert_int(linemap_get(4)->msg_index, ==, 1);
+    munit_assert_int(linemap_get(4)->role, ==, 1);
+    munit_assert_int(linemap_get(5)->role, ==, LINE_PADDING);
     linemap_free();
     return MUNIT_OK;
 }
@@ -95,9 +125,10 @@ static MunitResult test_utf8_chars(const MunitParameter params[], void *data) {
     const char *texts[] = {"привет"};
     int roles[] = {0};
     linemap_build(NULL, roles, 1, texts, 3);
-    munit_assert_int(linemap_count(), ==, 2);
-    const LineInfo *l0 = linemap_get(0);
-    munit_assert_int(l0->char_count, ==, 3);
+    munit_assert_int(linemap_count(), ==, 4);
+    munit_assert_int(linemap_get(0)->role, ==, LINE_PADDING);
+    munit_assert_int(linemap_get(1)->char_count, ==, 3);
+    munit_assert_int(linemap_get(3)->role, ==, LINE_PADDING);
     linemap_free();
     return MUNIT_OK;
 }
@@ -108,10 +139,12 @@ static MunitResult test_wrap_with_newline(const MunitParameter params[], void *d
     const char *texts[] = {"abc\ndefgh"};
     int roles[] = {0};
     linemap_build(NULL, roles, 1, texts, 3);
-    munit_assert_int(linemap_count(), ==, 3);
-    munit_assert_int(linemap_get(0)->char_count, ==, 3);
+    munit_assert_int(linemap_count(), ==, 5);
+    munit_assert_int(linemap_get(0)->role, ==, LINE_PADDING);
     munit_assert_int(linemap_get(1)->char_count, ==, 3);
-    munit_assert_int(linemap_get(2)->char_count, ==, 2);
+    munit_assert_int(linemap_get(2)->char_count, ==, 3);
+    munit_assert_int(linemap_get(3)->char_count, ==, 2);
+    munit_assert_int(linemap_get(4)->role, ==, LINE_PADDING);
     linemap_free();
     return MUNIT_OK;
 }
@@ -123,7 +156,10 @@ static MunitResult test_get_out_of_bounds(const MunitParameter params[], void *d
     int roles[] = {0};
     linemap_build(NULL, roles, 1, texts, 80);
     munit_assert_null(linemap_get(-1));
-    munit_assert_null(linemap_get(1));
+    munit_assert_null(linemap_get(3));
+    munit_assert_not_null(linemap_get(0));
+    munit_assert_not_null(linemap_get(1));
+    munit_assert_not_null(linemap_get(2));
     linemap_free();
     return MUNIT_OK;
 }
@@ -134,10 +170,12 @@ static MunitResult test_long_wrap(const MunitParameter params[], void *data) {
     const char *texts[] = {"abcdefghij"};
     int roles[] = {0};
     linemap_build(NULL, roles, 1, texts, 4);
-    munit_assert_int(linemap_count(), ==, 3);
-    munit_assert_int(linemap_get(0)->char_count, ==, 4);
+    munit_assert_int(linemap_count(), ==, 5);
+    munit_assert_int(linemap_get(0)->role, ==, LINE_PADDING);
     munit_assert_int(linemap_get(1)->char_count, ==, 4);
-    munit_assert_int(linemap_get(2)->char_count, ==, 2);
+    munit_assert_int(linemap_get(2)->char_count, ==, 4);
+    munit_assert_int(linemap_get(3)->char_count, ==, 2);
+    munit_assert_int(linemap_get(4)->role, ==, LINE_PADDING);
     linemap_free();
     return MUNIT_OK;
 }
@@ -149,6 +187,7 @@ static MunitTest tests[] = {
     {"/word_wrap", test_word_wrap, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/empty_text", test_empty_text_message, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/multiple_messages", test_multiple_messages, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/multiple_mixed", test_multiple_mixed, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/utf8", test_utf8_chars, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/wrap_newline", test_wrap_with_newline, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/out_of_bounds", test_get_out_of_bounds, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

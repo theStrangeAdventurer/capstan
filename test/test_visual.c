@@ -53,7 +53,7 @@ static MunitResult test_enter_cursor_at_last_line(const MunitParameter params[],
     setup(NULL, NULL);
     int line, col;
     visual_get_cursor(&line, &col);
-    munit_assert_int(line, ==, linemap_count() - 1);
+    munit_assert_int(line, ==, 7);
     teardown(NULL);
     return MUNIT_OK;
 }
@@ -65,7 +65,7 @@ static MunitResult test_move_up(const MunitParameter params[], void *data) {
     visual_move_up();
     int line;
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, linemap_count() - 2);
+    munit_assert_int(line, ==, 4);
     teardown(NULL);
     return MUNIT_OK;
 }
@@ -79,7 +79,7 @@ static MunitResult test_move_up_boundary(const MunitParameter params[], void *da
         visual_move_up();
     int line;
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, 0);
+    munit_assert_int(line, ==, 1);
     teardown(NULL);
     return MUNIT_OK;
 }
@@ -93,7 +93,7 @@ static MunitResult test_move_down_boundary(const MunitParameter params[], void *
         visual_move_down();
     int line;
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, count - 1);
+    munit_assert_int(line, ==, 7);
     teardown(NULL);
     return MUNIT_OK;
 }
@@ -204,10 +204,10 @@ static MunitResult test_set_cursor_line_clamp(const MunitParameter params[], voi
     visual_set_cursor_line(-5);
     int line;
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, 0);
+    munit_assert_int(line, ==, 1);
     visual_set_cursor_line(9999);
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, linemap_count() - 1);
+    munit_assert_int(line, ==, 7);
     teardown(NULL);
     return MUNIT_OK;
 }
@@ -257,13 +257,14 @@ static MunitResult test_line_end(const MunitParameter params[], void *data) {
     (void)params;
     (void)data;
     setup(NULL, NULL);
+    visual_set_cursor_line(7);
     visual_move_line_start();
     int col;
     visual_get_cursor(NULL, &col);
     munit_assert_int(col, ==, 0);
     visual_move_line_end();
     visual_get_cursor(NULL, &col);
-    const LineInfo *li = linemap_get(2);
+    const LineInfo *li = linemap_get(7);
     munit_assert_int(col, ==, li->char_count - 1);
     teardown(NULL);
     return MUNIT_OK;
@@ -273,7 +274,7 @@ static MunitResult test_word_forward(const MunitParameter params[], void *data) 
     (void)params;
     (void)data;
     setup(NULL, NULL);
-    visual_set_cursor_line(0);
+    visual_set_cursor_line(1);
     visual_move_line_start();
     int col;
     visual_get_cursor(NULL, &col);
@@ -289,18 +290,18 @@ static MunitResult test_word_forward_wrap(const MunitParameter params[], void *d
     (void)params;
     (void)data;
     setup(NULL, NULL);
-    visual_set_cursor_line(0);
+    visual_set_cursor_line(1);
     int line;
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, 0);
-    const LineInfo *li = linemap_get(0);
+    munit_assert_int(line, ==, 1);
+    const LineInfo *li = linemap_get(1);
     visual_move_line_end();
     int col;
     visual_get_cursor(NULL, &col);
     munit_assert_int(col, ==, li->char_count - 1);
     visual_move_word_forward();
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, 1);
+    munit_assert_int(line, ==, 4);
     visual_get_cursor(NULL, &col);
     munit_assert_int(col, ==, 0);
     teardown(NULL);
@@ -311,8 +312,8 @@ static MunitResult test_word_backward(const MunitParameter params[], void *data)
     (void)params;
     (void)data;
     setup(NULL, NULL);
-    visual_set_cursor_line(1);
-    const LineInfo *li = linemap_get(1);
+    visual_set_cursor_line(4);
+    const LineInfo *li = linemap_get(4);
     visual_move_line_end();
     int col;
     visual_get_cursor(NULL, &col);
@@ -334,14 +335,14 @@ static MunitResult test_word_backward_wrap(const MunitParameter params[], void *
     (void)params;
     (void)data;
     setup(NULL, NULL);
-    visual_set_cursor_line(1);
+    visual_set_cursor_line(4);
     visual_move_line_start();
     int line;
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, 1);
+    munit_assert_int(line, ==, 4);
     visual_move_word_backward();
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, 0);
+    munit_assert_int(line, ==, 1);
     int col;
     visual_get_cursor(NULL, &col);
     munit_assert_int(col, ==, 6);
@@ -357,7 +358,7 @@ static MunitResult test_word_forward_boundary(const MunitParameter params[], voi
         visual_move_word_forward();
     int line;
     visual_get_cursor(&line, NULL);
-    munit_assert_int(line, ==, linemap_count() - 1);
+    munit_assert_int(line, ==, 7);
     teardown(NULL);
     return MUNIT_OK;
 }
@@ -370,7 +371,7 @@ static MunitResult test_word_backward_boundary(const MunitParameter params[], vo
         visual_move_word_backward();
     int line, col;
     visual_get_cursor(&line, &col);
-    munit_assert_int(line, ==, 0);
+    munit_assert_int(line, ==, 1);
     munit_assert_int(col, ==, 0);
     teardown(NULL);
     return MUNIT_OK;

@@ -4,6 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+static int is_padding_line(int idx) {
+    const LineInfo *li = linemap_get(idx);
+    return li && li->role == LINE_PADDING;
+}
+
 static const char **g_texts = NULL;
 static int g_texts_count = 0;
 static int g_texts_owned = 0;
@@ -24,9 +29,12 @@ int visual_is_active(void) { return g_visual.selecting; }
 void visual_enter(void) {
     g_visual.active = 1;
     g_visual.selecting = 0;
-    g_visual.cursor_line = linemap_count() - 1;
-    if (g_visual.cursor_line < 0)
-        g_visual.cursor_line = 0;
+    int line = linemap_count() - 1;
+    while (line > 0 && is_padding_line(line))
+        line--;
+    if (line < 0)
+        line = 0;
+    g_visual.cursor_line = line;
     const LineInfo *li = linemap_get(g_visual.cursor_line);
     g_visual.cursor_col = li ? li->char_count : 0;
 }
@@ -45,21 +53,25 @@ void visual_enter_selection(void) {
 void visual_exit_selection(void) { g_visual.selecting = 0; }
 
 void visual_move_up(void) {
-    if (g_visual.cursor_line > 0) {
-        g_visual.cursor_line--;
-        const LineInfo *li = linemap_get(g_visual.cursor_line);
-        if (g_visual.cursor_col > (li ? li->char_count : 0))
-            g_visual.cursor_col = li ? li->char_count : 0;
-    }
+    int target = g_visual.cursor_line - 1;
+    while (target >= 0 && is_padding_line(target))
+        target--;
+    if (target < 0) return;
+    g_visual.cursor_line = target;
+    const LineInfo *li = linemap_get(g_visual.cursor_line);
+    if (g_visual.cursor_col > (li ? li->char_count : 0))
+        g_visual.cursor_col = li ? li->char_count : 0;
 }
 
 void visual_move_down(void) {
-    if (g_visual.cursor_line < linemap_count() - 1) {
-        g_visual.cursor_line++;
-        const LineInfo *li = linemap_get(g_visual.cursor_line);
-        if (g_visual.cursor_col > (li ? li->char_count : 0))
-            g_visual.cursor_col = li ? li->char_count : 0;
-    }
+    int target = g_visual.cursor_line + 1;
+    while (target < linemap_count() && is_padding_line(target))
+        target++;
+    if (target >= linemap_count()) return;
+    g_visual.cursor_line = target;
+    const LineInfo *li = linemap_get(g_visual.cursor_line);
+    if (g_visual.cursor_col > (li ? li->char_count : 0))
+        g_visual.cursor_col = li ? li->char_count : 0;
 }
 
 void visual_move_left(void) {
@@ -94,7 +106,7 @@ void visual_set_texts(const char **texts, int count) {
 
 static const char *get_current_line_text(int *out_len) {
     const LineInfo *li = linemap_get(g_visual.cursor_line);
-    if (!li || !g_texts || li->msg_index >= (size_t)g_texts_count) {
+    if (!li || li->role == LINE_PADDING || !g_texts || li->msg_index >= (size_t)g_texts_count) {
         *out_len = 0;
         return NULL;
     }
@@ -153,7 +165,11 @@ void visual_move_word_forward(void) {
     }
 
     if (g_visual.cursor_line < linemap_count() - 1) {
-        g_visual.cursor_line++;
+        int target = g_visual.cursor_line + 1;
+        while (target < linemap_count() && is_padding_line(target))
+            target++;
+        if (target >= linemap_count()) return;
+        g_visual.cursor_line = target;
         const LineInfo *li = linemap_get(g_visual.cursor_line);
         g_visual.cursor_col = 0;
         int next_len;
@@ -192,7 +208,11 @@ void visual_move_word_backward(void) {
     }
 
     if (g_visual.cursor_line > 0) {
-        g_visual.cursor_line--;
+        int target = g_visual.cursor_line - 1;
+        while (target >= 0 && is_padding_line(target))
+            target--;
+        if (target < 0) return;
+        g_visual.cursor_line = target;
         const LineInfo *li = linemap_get(g_visual.cursor_line);
         int new_len;
         const char *new_line = get_current_line_text(&new_len);
@@ -220,6 +240,18 @@ void visual_get_cursor(int *line, int *col) {
 void visual_set_cursor_line(int line) {
     if (line < 0) line = 0;
     if (line >= linemap_count()) line = linemap_count() - 1;
+
+    if (is_padding_line(line)) {
+        int fwd = line;
+        while (fwd < linemap_count() && is_padding_line(fwd))
+            fwd++;
+        if (fwd < linemap_count())
+            line = fwd;
+        else
+            while (line >= 0 && is_padding_line(line))
+                line--;
+    }
+
     g_visual.cursor_line = line;
     const LineInfo *li = linemap_get(g_visual.cursor_line);
     if (g_visual.cursor_col > (li ? li->char_count : 0))
@@ -285,7 +317,7 @@ void visual_yank(const char **msgs_texts, int msgs_count) {
 
     for (int line = sl; line <= el; line++) {
         const LineInfo *li = linemap_get(line);
-        if (!li || li->msg_index >= (size_t)msgs_count)
+        if (!li || li->role == LINE_PADDING || li->msg_index >= (size_t)msgs_count)
             continue;
 
         const char *text = msgs_texts[li->msg_index];

@@ -38,36 +38,39 @@ void linemap_build(void **msgs_data, int *msgs_roles, int msgs_count,
         const char *text = msgs_texts[i];
         int role = msgs_roles[i];
 
+        linemap_append(i, 0, 0, 0, LINE_PADDING);
+
         if (!text || !*text) {
             linemap_append(i, 0, 0, 0, role);
-            continue;
-        }
+        } else {
+            const char *p = text;
+            while (*p) {
+                const char *line_start = p;
+                int col = 0;
+                const char *line_end = p;
 
-        const char *p = text;
-        while (*p) {
-            const char *line_start = p;
-            int col = 0;
-            const char *line_end = p;
+                while (*line_end && *line_end != '\n') {
+                    int is_char = (*line_end & 0xC0) != 0x80;
+                    if (is_char && col >= width)
+                        break;
+                    line_end++;
+                    if (is_char)
+                        col++;
+                }
 
-            while (*line_end && *line_end != '\n') {
-                int is_char = (*line_end & 0xC0) != 0x80;
-                if (is_char && col >= width)
-                    break;
-                line_end++;
-                if (is_char)
-                    col++;
+                int byte_start = (int)(line_start - text);
+                int byte_end = (int)(line_end - text);
+                int char_count = count_line_chars(line_start, line_end);
+
+                linemap_append(i, byte_start, byte_end, char_count, role);
+
+                if (*line_end == '\n')
+                    line_end++;
+                p = line_end;
             }
-
-            int byte_start = (int)(line_start - text);
-            int byte_end = (int)(line_end - text);
-            int char_count = count_line_chars(line_start, line_end);
-
-            linemap_append(i, byte_start, byte_end, char_count, role);
-
-            if (*line_end == '\n')
-                line_end++;
-            p = line_end;
         }
+
+        linemap_append(i, 0, 0, 0, LINE_PADDING);
     }
 }
 

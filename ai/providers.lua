@@ -2,7 +2,7 @@ local json = require("vendor.rxi.json")
 
 local M = {}
 
-M.provider = "deepseek"
+M.provider = os.getenv("AI_PROVIDER") or "deepseek"
 
 M.providers = {
     deepseek = {
@@ -14,6 +14,11 @@ M.providers = {
         api_key = os.getenv("OPENAI_API_KEY"),
         endpoint = "https://api.openai.com/v1/chat/completions",
         model = "gpt-4o",
+    },
+    openrouter = {
+        api_key = os.getenv("OPENROUTER_API_KEY"),
+        endpoint = "https://openrouter.ai/api/v1/chat/completions",
+        model = os.getenv("OPENROUTER_MODEL") or "openai/gpt-4o",
     },
 }
 
@@ -201,6 +206,10 @@ end
 
 _G.on_messages = function(messages)
     local active = M.providers[M.provider]
+    if not active then
+        agent.append("Unknown provider: " .. M.provider, "error")
+        return
+    end
     agent.set_info(M.provider, active.model)
 
     local msgs = {}

@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+#define LINE_PADDING  -1
+
 typedef struct {
     size_t msg_index;
     int byte_start;

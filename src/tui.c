@@ -115,6 +115,7 @@ void render_all(void) {
   int badge_h = (g_pending.size > 0 && !popup_is_active()) ? 1 : 0;
   int msg_h = rows - input_h - 2 * margin - badge_h;
   int inner_w = cols - 2 * margin;
+  int text_w = inner_w - 2 * MSG_PAD_H;
 
   if (msg_h < 1 || inner_w < 1)
     return;
@@ -130,9 +131,9 @@ void render_all(void) {
   int total_lines = 0;
 
   for (size_t i = 0; i < msgs->size; i++) {
-    int l = count_message_lines(msgs->items[i]->text, inner_w);
+    int l = count_message_lines(msgs->items[i]->text, text_w);
     line_counts[i] = l;
-    total_lines += l;
+    total_lines += l + 2;
   }
 
   const char **msgs_texts = malloc(msgs->size * sizeof(const char *));
@@ -141,7 +142,7 @@ void render_all(void) {
     msgs_texts[i] = msgs->items[i]->text;
     msgs_roles[i] = msgs->items[i]->role;
   }
-  linemap_build(NULL, msgs_roles, (int)msgs->size, msgs_texts, inner_w);
+  linemap_build(NULL, msgs_roles, (int)msgs->size, msgs_texts, text_w);
   visual_set_texts(msgs_texts, (int)msgs->size);
   free(msgs_roles);
 
@@ -183,8 +184,24 @@ void render_all(void) {
 
   for (size_t i = 0; i < msgs->size && win_row < msg_h; i++) {
     Message *msg = msgs->items[i];
-    int cp = msg->role == MSG_USER ? 1 : 2;
-    wattron(msg_win, COLOR_PAIR(cp));
+    int is_user = msg->role == MSG_USER;
+
+    if (global_line >= top_line && win_row < msg_h) {
+      if (is_user) {
+        wattron(msg_win, COLOR_PAIR(5));
+        mvwhline(msg_win, win_row, 0, ' ', inner_w);
+        wattroff(msg_win, COLOR_PAIR(5));
+      } else {
+        mvwaddch(msg_win, win_row, 0, ' ');
+      }
+      win_row++;
+    }
+    global_line++;
+
+    if (is_user)
+      wattron(msg_win, COLOR_PAIR(5));
+    else
+      wattron(msg_win, A_DIM);
 
     const char *p = msg->text;
     for (int l = 0; l < line_counts[i]; l++) {
@@ -192,7 +209,7 @@ void render_all(void) {
       int col = 0;
       while (*line_end && *line_end != '\n') {
         int is_char = (*line_end & 0xC0) != 0x80;
-        if (is_char && col >= inner_w)
+        if (is_char && col >= text_w)
           break;
         line_end++;
         if (is_char)
@@ -200,7 +217,9 @@ void render_all(void) {
       }
 
       if (global_line >= top_line && win_row < msg_h) {
-        mvwaddnstr(msg_win, win_row, 0, p, line_end - p);
+        if (is_user)
+          mvwhline(msg_win, win_row, 0, ' ', inner_w);
+        mvwaddnstr(msg_win, win_row, MSG_PAD_H, p, line_end - p);
 
         if (visual_is_active() && global_line >= sel_sl &&
             global_line <= sel_el) {
@@ -217,8 +236,8 @@ void render_all(void) {
           if (h_end > line_char_count) h_end = line_char_count;
 
           if (h_end > h_start) {
-            mvwchgat(msg_win, win_row, h_start, h_end - h_start,
-                     A_REVERSE, cp, NULL);
+            mvwchgat(msg_win, win_row, h_start + MSG_PAD_H,
+                     h_end - h_start, A_REVERSE, is_user ? 5 : 0, NULL);
           }
         }
 
@@ -231,7 +250,22 @@ void render_all(void) {
       global_line++;
     }
 
-    wattroff(msg_win, COLOR_PAIR(cp));
+    if (is_user)
+      wattroff(msg_win, COLOR_PAIR(5));
+    else
+      wattroff(msg_win, A_DIM);
+
+    if (global_line >= top_line && win_row < msg_h) {
+      if (is_user) {
+        wattron(msg_win, COLOR_PAIR(5));
+        mvwhline(msg_win, win_row, 0, ' ', inner_w);
+        wattroff(msg_win, COLOR_PAIR(5));
+      } else {
+        mvwaddch(msg_win, win_row, 0, ' ');
+      }
+      win_row++;
+    }
+    global_line++;
   }
 
   free(line_counts);
@@ -242,7 +276,7 @@ void render_all(void) {
     int vis_row = vc_line - top_line;
     if (vis_row >= 0 && vis_row < msg_h) {
       wattron(msg_win, A_REVERSE);
-      mvwaddch(msg_win, vis_row, vc_col, ' ');
+      mvwaddch(msg_win, vis_row, vc_col + MSG_PAD_H, ' ');
       wattroff(msg_win, A_REVERSE);
     }
   }

@@ -4,6 +4,7 @@
 #define INPUT_WIN_HEIGHT   4
 #define INPUT_CONTENT_LINES 2
 #define MARGIN              1
+#define MSG_PAD_H           1
 #define MAX_BADGE_LABEL     64
 
 typedef struct {
