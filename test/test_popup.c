@@ -1,0 +1,408 @@
+#include "munit.h"
+#include "popup.h"
+#include "popup_internal.h"
+#include "utils.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static void open_popup(int count, int multi) {
+  PopupItem *items = malloc(count * sizeof(PopupItem));
+  for (int i = 0; i < count; i++) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "item%d", i);
+    items[i].text = my_strdup(buf);
+    items[i].value = my_strdup(buf);
+  }
+  popup_open_with_plugin(items, count, "Test", 5, multi, NULL, 0);
+  for (int i = 0; i < count; i++) {
+    free(items[i].text);
+    free(items[i].value);
+  }
+  free(items);
+}
+
+static MunitResult test_open_active(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  munit_assert_int(popup_is_active(), ==, 1);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_close_data_inactive(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_close_data();
+  munit_assert_int(popup_is_active(), ==, 0);
+  return MUNIT_OK;
+}
+
+static MunitResult test_j_down(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(5, 0);
+  munit_assert_int(g_popup.cursor, ==, 0);
+  popup_handle_key('j');
+  munit_assert_int(g_popup.cursor, ==, 1);
+  popup_handle_key('j');
+  munit_assert_int(g_popup.cursor, ==, 2);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_k_up(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(5, 0);
+  g_popup.cursor = 2;
+  popup_handle_key('k');
+  munit_assert_int(g_popup.cursor, ==, 1);
+  popup_handle_key('k');
+  munit_assert_int(g_popup.cursor, ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_j_clamp_bottom(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  g_popup.cursor = 2;
+  popup_handle_key('j');
+  munit_assert_int(g_popup.cursor, ==, 2);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_k_clamp_top(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('k');
+  munit_assert_int(g_popup.cursor, ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_g_top(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(10, 0);
+  g_popup.cursor = 7;
+  popup_handle_key('g');
+  munit_assert_int(g_popup.cursor, ==, 0);
+  munit_assert_int(g_popup.scroll, ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_G_bottom(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(10, 0);
+  popup_handle_key('G');
+  munit_assert_int(g_popup.cursor, ==, 9);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_ctrl_u(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(20, 0);
+  g_popup.cursor = 10;
+  popup_handle_key(0x15);
+  munit_assert_int(g_popup.cursor, ==, 5);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_ctrl_d(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(20, 0);
+  g_popup.cursor = 3;
+  popup_handle_key(0x04);
+  munit_assert_int(g_popup.cursor, ==, 8);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_ctrl_u_clamp(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(20, 0);
+  g_popup.cursor = 2;
+  popup_handle_key(0x15);
+  munit_assert_int(g_popup.cursor, ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_ctrl_d_clamp(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(8, 0);
+  g_popup.cursor = 6;
+  popup_handle_key(0x04);
+  munit_assert_int(g_popup.cursor, ==, 7);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_scroll_down(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(10, 0);
+  g_popup.max_visible = 5;
+  g_popup.cursor = 4;
+  popup_handle_key(POPUP_KEY_DOWN);
+  munit_assert_int(g_popup.cursor, ==, 5);
+  munit_assert_int(g_popup.scroll, ==, 1);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_scroll_up(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(10, 0);
+  g_popup.max_visible = 5;
+  g_popup.cursor = 1;
+  g_popup.scroll = 1;
+  popup_handle_key(POPUP_KEY_UP);
+  munit_assert_int(g_popup.cursor, ==, 0);
+  munit_assert_int(g_popup.scroll, ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_l_selects_non_multi(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('l');
+  munit_assert_int(g_popup.selected[0], ==, 1);
+  munit_assert_int(g_popup.selected[1], ==, 0);
+  munit_assert_int(g_popup.selected[2], ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_l_only_one_selected(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('l');
+  popup_handle_key('j');
+  popup_handle_key('l');
+  munit_assert_int(g_popup.selected[0], ==, 0);
+  munit_assert_int(g_popup.selected[1], ==, 1);
+  munit_assert_int(g_popup.selected[2], ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_h_deselects_non_multi(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('l');
+  munit_assert_int(g_popup.selected[0], ==, 1);
+  popup_handle_key('h');
+  munit_assert_int(g_popup.selected[0], ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_l_confirms_when_selected(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('l');
+  int ret = popup_handle_key('l');
+  munit_assert_int(ret, ==, 0);
+  munit_assert_int(popup_is_active(), ==, 0);
+  int sel_count;
+  char **sel = popup_get_selected(&sel_count);
+  munit_assert_int(sel_count, ==, 1);
+  munit_assert_string_equal(sel[0], "item0");
+  popup_free_selected(sel, sel_count);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_enter_selects_none(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('j');
+  int ret = popup_handle_key('\n');
+  munit_assert_int(ret, ==, 0);
+  munit_assert_int(g_popup.selected[1], ==, 1);
+  int sel_count;
+  char **sel = popup_get_selected(&sel_count);
+  munit_assert_int(sel_count, ==, 1);
+  munit_assert_string_equal(sel[0], "item1");
+  popup_free_selected(sel, sel_count);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_l_selects_multi(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 1);
+  popup_handle_key('l');
+  munit_assert_int(g_popup.selected[0], ==, 1);
+  popup_handle_key('j');
+  popup_handle_key('l');
+  munit_assert_int(g_popup.selected[1], ==, 1);
+  munit_assert_int(g_popup.selected[2], ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_h_deselects_multi(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 1);
+  popup_handle_key('l');
+  munit_assert_int(g_popup.selected[0], ==, 1);
+  popup_handle_key('h');
+  munit_assert_int(g_popup.selected[0], ==, 0);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_multi_multiple(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 1);
+  popup_handle_key('l');
+  popup_handle_key('j');
+  popup_handle_key('l');
+  int sel_count;
+  char **sel = popup_get_selected(&sel_count);
+  munit_assert_int(sel_count, ==, 2);
+  munit_assert_string_equal(sel[0], "item0");
+  munit_assert_string_equal(sel[1], "item1");
+  popup_free_selected(sel, sel_count);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_l_confirms_multi(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 1);
+  popup_handle_key('l');
+  popup_handle_key('j');
+  popup_handle_key('l');
+  int ret = popup_handle_key('l');
+  munit_assert_int(ret, ==, 0);
+  munit_assert_int(popup_is_active(), ==, 0);
+  int sel_count;
+  char **sel = popup_get_selected(&sel_count);
+  munit_assert_int(sel_count, ==, 2);
+  popup_free_selected(sel, sel_count);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_esc_cancels(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('l');
+  int ret = popup_handle_key(27);
+  munit_assert_int(ret, ==, 0);
+  munit_assert_int(popup_is_active(), ==, 0);
+  int sel_count;
+  char **sel = popup_get_selected(&sel_count);
+  munit_assert_ptr_null(sel);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_get_selected_values(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('j');
+  popup_handle_key('l');
+  int sel_count;
+  char **sel = popup_get_selected(&sel_count);
+  munit_assert_int(sel_count, ==, 1);
+  munit_assert_string_equal(sel[0], "item1");
+  popup_free_selected(sel, sel_count);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_drill_down_replaces(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('j');
+  PopupItem items[2] = {
+    {my_strdup("new0"), my_strdup("new0")},
+    {my_strdup("new1"), my_strdup("new1")},
+  };
+  popup_drill_down(items, 2, "New");
+  for (int i = 0; i < 2; i++) { free(items[i].text); free(items[i].value); }
+  munit_assert_int(popup_is_active(), ==, 1);
+  munit_assert_int(g_popup.item_count, ==, 2);
+  munit_assert_int(g_popup.cursor, ==, 0);
+  munit_assert_int(g_popup.scroll, ==, 0);
+  munit_assert_string_equal(g_popup.items[0].text, "new0");
+  munit_assert_string_equal(g_popup.items[1].text, "new1");
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_enter_multi_no_selection(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 1);
+  popup_handle_key('j');
+  int ret = popup_handle_key('\n');
+  munit_assert_int(ret, ==, 0);
+  munit_assert_int(g_popup.selected[1], ==, 1);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_G_scroll(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(10, 0);
+  g_popup.max_visible = 5;
+  popup_handle_key('G');
+  munit_assert_int(g_popup.cursor, ==, 9);
+  munit_assert_int(g_popup.scroll, ==, 5);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_ctrl_d_scroll(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(20, 0);
+  g_popup.max_visible = 5;
+  g_popup.cursor = 3;
+  popup_handle_key(0x04);
+  munit_assert_int(g_popup.cursor, ==, 8);
+  munit_assert_int(g_popup.scroll, ==, 4);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitTest tests[] = {
+  {"/open_active", test_open_active, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/close_data_inactive", test_close_data_inactive, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/j_down", test_j_down, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/k_up", test_k_up, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/j_clamp_bottom", test_j_clamp_bottom, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/k_clamp_top", test_k_clamp_top, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/g_top", test_g_top, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/G_bottom", test_G_bottom, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/G_scroll", test_G_scroll, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/ctrl_u", test_ctrl_u, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/ctrl_d", test_ctrl_d, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/ctrl_u_clamp", test_ctrl_u_clamp, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/ctrl_d_clamp", test_ctrl_d_clamp, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/ctrl_d_scroll", test_ctrl_d_scroll, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/scroll_down", test_scroll_down, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/scroll_up", test_scroll_up, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/l_selects_non_multi", test_l_selects_non_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/l_only_one_selected", test_l_only_one_selected, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/h_deselects_non_multi", test_h_deselects_non_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/l_confirms_when_selected", test_l_confirms_when_selected, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/enter_selects_none", test_enter_selects_none, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/l_selects_multi", test_l_selects_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/h_deselects_multi", test_h_deselects_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/multi_multiple", test_multi_multiple, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/l_confirms_multi", test_l_confirms_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/enter_multi_no_selection", test_enter_multi_no_selection, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/esc_cancels", test_esc_cancels, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/get_selected_values", test_get_selected_values, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/drill_down_replaces", test_drill_down_replaces, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}
+};
+
+MunitSuite popup_suite = {"/popup", tests, NULL, 1, MUNIT_SUITE_OPTION_NONE};

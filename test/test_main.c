@@ -3,6 +3,7 @@
 extern MunitSuite input_suite;
 extern MunitSuite linemap_suite;
 extern MunitSuite mode_suite;
+extern MunitSuite popup_suite;
 extern MunitSuite scroll_suite;
 extern MunitSuite utils_suite;
 extern MunitSuite visual_suite;
@@ -12,6 +13,7 @@ int main(int argc, char *argv[]) {
     input_suite,
     linemap_suite,
     mode_suite,
+    popup_suite,
     scroll_suite,
     utils_suite,
     visual_suite,

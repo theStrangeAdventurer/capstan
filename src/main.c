@@ -32,6 +32,7 @@ int main(int argc, char *argv[]) {
   keypad(stdscr, TRUE);
   mousemask(ALL_MOUSE_EVENTS, NULL);
   init_tui();
+  popup_init();
 
   plugins_init();
 

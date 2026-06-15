@@ -174,6 +174,47 @@ void dispatch_popup_result(void) {
       char buf[INPUT_BUFFER_SIZE];
       snprintf(buf, INPUT_BUFFER_SIZE, "%s ", selected[0]);
       input_set_text(buf);
+      popup_free_selected(selected, sel_count);
+    } else if (plugin_has_autocomplete(p)) {
+      int is_dir = 0;
+      const char *dir_path = NULL;
+      for (int i = 0; i < sel_count; i++) {
+        size_t len = strlen(selected[i]);
+        if (len > 0 && selected[i][len - 1] == '/') {
+          is_dir = 1;
+          dir_path = selected[i];
+          break;
+        }
+      }
+      if (is_dir && dir_path) {
+        char fake_input[INPUT_BUFFER_SIZE];
+        snprintf(fake_input, sizeof(fake_input), "%s %s", p->command, dir_path);
+        size_t fake_cmd_end = strlen(p->command);
+        PopupItem *items;
+        int count;
+        char *title;
+        int limit, multi;
+        plugin_autocomplete_fetch(p, fake_input, fake_cmd_end,
+                                  &items, &count, &title, &limit, &multi);
+        if (count > 0) {
+          popup_drill_down(items, count, title);
+          for (int i = 0; i < count; i++) {
+            free(items[i].text);
+            free(items[i].value);
+          }
+          free(items);
+        }
+        free(title);
+        popup_free_selected(selected, sel_count);
+        return;
+      }
+      PluginResult *r =
+          plugin_execute(p, input_get_text(), cmd_end, selected, sel_count);
+      if (r) {
+        add_plugin_result(p, r);
+      }
+      input_clear();
+      popup_free_selected(selected, sel_count);
     } else {
       PluginResult *r =
           plugin_execute(p, input_get_text(), cmd_end, selected, sel_count);
@@ -181,8 +222,8 @@ void dispatch_popup_result(void) {
         add_plugin_result(p, r);
       }
       input_clear();
+      popup_free_selected(selected, sel_count);
     }
-    popup_free_selected(selected, sel_count);
   }
   popup_close();
 }

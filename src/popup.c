@@ -1,162 +1,35 @@
-#include "popup.h"
-#include "plugins.h"
+#include "popup_internal.h"
 #include "tui.h"
-#include "utils.h"
 #include <ncursesw/curses.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
-static struct {
-  int active;
-  int cancelled;
+#if POPUP_KEY_UP != KEY_UP
+#error "POPUP_KEY_UP != KEY_UP"
+#endif
+#if POPUP_KEY_DOWN != KEY_DOWN
+#error "POPUP_KEY_DOWN != KEY_DOWN"
+#endif
+#if POPUP_KEY_LEFT != KEY_LEFT
+#error "POPUP_KEY_LEFT != KEY_LEFT"
+#endif
+#if POPUP_KEY_RIGHT != KEY_RIGHT
+#error "POPUP_KEY_RIGHT != KEY_RIGHT"
+#endif
 
-  PopupItem *items;
-  int item_count;
-  int *selected;
+static void popup_win_destroy(void *win) { delwin((WINDOW *)win); }
 
-  int cursor;
-  int scroll;
-  int max_visible;
-  char *title;
-  int multi;
-
-  struct Plugin *plugin;
-  size_t cmd_end;
-
-  WINDOW *win;
-  int last_rows;
-  int last_cols;
-} g_popup;
-
-void popup_open(PopupItem *items, int count, const char *title,
-                 int max_visible, int multi) {
-  popup_open_with_plugin(items, count, title, max_visible, multi, NULL, 0);
-}
-
-void popup_open_with_plugin(PopupItem *items, int count, const char *title,
-                            int max_visible, int multi, struct Plugin *plugin, size_t cmd_end) {
-  g_popup.active = 1;
-  g_popup.cancelled = 0;
-  g_popup.cursor = 0;
-  g_popup.scroll = 0;
-  g_popup.max_visible = max_visible > 0 ? max_visible : POPUP_DEFAULT_LIMIT;
-  g_popup.multi = multi;
-  g_popup.last_rows = -1;
-  g_popup.last_cols = -1;
-  g_popup.plugin = plugin;
-  g_popup.cmd_end = cmd_end;
-
-  if (g_popup.win) {
-    delwin(g_popup.win);
-    g_popup.win = NULL;
-  }
-
-  free(g_popup.title);
-  g_popup.title = title ? my_strdup(title) : my_strdup("");
-
-  g_popup.item_count = count;
-  g_popup.items = malloc(count * sizeof(PopupItem));
-  g_popup.selected = malloc(count * sizeof(int));
-  for (int i = 0; i < count; i++) {
-    g_popup.items[i].text = my_strdup(items[i].text ? items[i].text : "");
-    g_popup.items[i].value = my_strdup(items[i].value ? items[i].value : "");
-    g_popup.selected[i] = 0;
-  }
-}
-
-int popup_is_active(void) { return g_popup.active; }
-
-int popup_handle_key(int ch) {
-  switch (ch) {
-  case KEY_UP:
-    if (g_popup.cursor > 0) {
-      g_popup.cursor--;
-      if (g_popup.cursor < g_popup.scroll)
-        g_popup.scroll = g_popup.cursor;
-    }
-    break;
-  case KEY_DOWN:
-    if (g_popup.cursor < g_popup.item_count - 1) {
-      g_popup.cursor++;
-      if (g_popup.cursor >= g_popup.scroll + g_popup.max_visible)
-        g_popup.scroll = g_popup.cursor - g_popup.max_visible + 1;
-    }
-    break;
-  case KEY_LEFT:
-    if (g_popup.multi && g_popup.selected[g_popup.cursor])
-      g_popup.selected[g_popup.cursor] = 0;
-    break;
-  case KEY_RIGHT:
-    if (g_popup.multi && !g_popup.selected[g_popup.cursor])
-      g_popup.selected[g_popup.cursor] = 1;
-    break;
-  case '\n':
-  case '\r': {
-    int any = 0;
-    if (g_popup.multi) {
-      for (int i = 0; i < g_popup.item_count; i++)
-        if (g_popup.selected[i]) { any = 1; break; }
-    }
-    if (!any)
-      g_popup.selected[g_popup.cursor] = 1;
-    g_popup.cancelled = 0;
-    g_popup.active = 0;
-    return 0;
-  }
-  case 27:
-    g_popup.cancelled = 1;
-    g_popup.active = 0;
-    return 0;
-  }
-  return 1;
-}
-
-char **popup_get_selected(int *count) {
-  *count = 0;
-  if (g_popup.cancelled)
-    return NULL;
-  int n = 0;
-  for (int i = 0; i < g_popup.item_count; i++)
-    if (g_popup.selected[i]) n++;
-  if (n == 0)
-    return NULL;
-  char **result = malloc(n * sizeof(char *));
-  int idx = 0;
-  for (int i = 0; i < g_popup.item_count; i++)
-    if (g_popup.selected[i])
-      result[idx++] = my_strdup(g_popup.items[i].value);
-  *count = n;
-  return result;
-}
-
-void popup_free_selected(char **selected, int count) {
-  for (int i = 0; i < count; i++)
-    free(selected[i]);
-  free(selected);
-}
+void popup_init(void) { popup_set_win_cleanup(popup_win_destroy); }
 
 void popup_close(void) {
-  for (int i = 0; i < g_popup.item_count; i++) {
-    free(g_popup.items[i].text);
-    free(g_popup.items[i].value);
-  }
-  free(g_popup.items);
-  free(g_popup.selected);
-  free(g_popup.title);
   if (g_popup.win) {
     werase(g_popup.win);
     wnoutrefresh(g_popup.win);
     delwin(g_popup.win);
     g_popup.win = NULL;
   }
-  g_popup.items = NULL;
-  g_popup.selected = NULL;
-  g_popup.title = NULL;
-  g_popup.item_count = 0;
-  g_popup.active = 0;
-  g_popup.plugin = NULL;
-  g_popup.cmd_end = 0;
+  g_popup.last_rows = -1;
+  g_popup.last_cols = -1;
+  popup_close_data();
 }
 
 void popup_render(void) {
@@ -229,7 +102,3 @@ void popup_render(void) {
   wmove(win, 1 + (g_popup.cursor - g_popup.scroll), 4);
   wnoutrefresh(win);
 }
-
-struct Plugin *popup_get_plugin(void) { return g_popup.plugin; }
-
-size_t popup_get_cmd_end(void) { return g_popup.cmd_end; }
