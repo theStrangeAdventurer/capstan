@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "dyn_arr.h"
+#include "popup.h"
 #include "utils.h"
 #include <lauxlib.h>
 #include <lua.h>
@@ -138,7 +139,7 @@ void agent_emit(lua_State *L) {
   if (lua_isfunction(L, -1)) {
     lua_pushvalue(L, -2);
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-      fprintf(stderr, "on_messages: %s\n", lua_tostring(L, -1));
+      popup_show_message("Agent Error", lua_tostring(L, -1), 1);
       lua_pop(L, 1);
     }
   } else {

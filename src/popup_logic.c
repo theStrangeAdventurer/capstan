@@ -3,7 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef POPUP_NCURSES
+#include <ncursesw/curses.h>
+#endif
+
 PopupState g_popup = {0};
+MsgPopup g_msgpopup = {0};
 
 static void (*g_win_cleanup_fn)(void *) = NULL;
 
@@ -25,6 +30,8 @@ void popup_open(PopupItem *items, int count, const char *title,
 void popup_open_with_plugin(PopupItem *items, int count, const char *title,
                             int max_visible, int multi, struct Plugin *plugin,
                             size_t cmd_end) {
+  if (g_msgpopup.active)
+    return;
   g_popup.active = 1;
   g_popup.cancelled = 0;
   g_popup.cursor = 0;
@@ -54,6 +61,9 @@ void popup_open_with_plugin(PopupItem *items, int count, const char *title,
 int popup_is_active(void) { return g_popup.active; }
 
 void popup_drill_down(PopupItem *items, int count, const char *title) {
+  if (g_msgpopup.active)
+    return;
+
   for (int i = 0; i < g_popup.item_count; i++) {
     free(g_popup.items[i].text);
     free(g_popup.items[i].value);
@@ -221,3 +231,44 @@ void popup_close_data(void) {
 struct Plugin *popup_get_plugin(void) { return g_popup.plugin; }
 
 size_t popup_get_cmd_end(void) { return g_popup.cmd_end; }
+
+void popup_show_message(const char *title, const char *text, int is_error) {
+  popup_close_message();
+  g_msgpopup.active = 1;
+  g_msgpopup.is_error = is_error;
+  g_msgpopup.title = title ? my_strdup(title) : my_strdup("");
+  g_msgpopup.text = text ? my_strdup(text) : my_strdup("");
+  g_msgpopup.win = NULL;
+  g_msgpopup.last_rows = -1;
+  g_msgpopup.last_cols = -1;
+}
+
+int popup_is_message_active(void) { return g_msgpopup.active; }
+
+void popup_close_message(void) {
+#ifdef POPUP_NCURSES
+  if (g_msgpopup.win) {
+    werase(g_msgpopup.win);
+    wnoutrefresh(g_msgpopup.win);
+    delwin(g_msgpopup.win);
+    g_msgpopup.win = NULL;
+  }
+#endif
+  free(g_msgpopup.title);
+  free(g_msgpopup.text);
+  g_msgpopup.title = NULL;
+  g_msgpopup.text = NULL;
+  g_msgpopup.active = 0;
+  g_msgpopup.is_error = 0;
+  g_msgpopup.last_rows = -1;
+  g_msgpopup.last_cols = -1;
+}
+
+int popup_message_handle_key(int ch) {
+  (void)ch;
+  if (ch == '\n' || ch == '\r' || ch == 27) {
+    popup_close_message();
+    return 0;
+  }
+  return 1;
+}

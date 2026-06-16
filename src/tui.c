@@ -49,6 +49,7 @@ void init_tui(void) {
     init_pair(3, COLOR_YELLOW, -1);
     init_pair(4, COLOR_BLACK, COLOR_YELLOW);
     init_pair(5, -1, COLOR_BLACK);
+    init_pair(6, COLOR_RED, COLOR_BLACK);
   }
   curs_set(1);
 }
@@ -112,7 +113,7 @@ void render_all(void) {
 
   int margin = MARGIN;
   int input_h = INPUT_WIN_HEIGHT;
-  int badge_h = (g_pending.size > 0 && !popup_is_active()) ? 1 : 0;
+  int badge_h = (g_pending.size > 0 && !popup_is_active() && !popup_is_message_active()) ? 1 : 0;
   int msg_h = rows - input_h - 2 * margin - badge_h;
   int inner_w = cols - 2 * margin;
   int text_w = inner_w - 2 * MSG_PAD_H;
@@ -281,7 +282,7 @@ void render_all(void) {
     }
   }
 
-  if (g_pending.size > 0 && !popup_is_active()) {
+  if (g_pending.size > 0 && !popup_is_active() && !popup_is_message_active()) {
     int badge_y = margin + msg_h;
     int available = inner_w;
     int show = g_pending.size;
@@ -444,6 +445,7 @@ void render_all(void) {
   wnoutrefresh(stdscr);
   wnoutrefresh(msg_win);
   wnoutrefresh(input_win);
+  popup_render_message();
   popup_render();
   doupdate();
 

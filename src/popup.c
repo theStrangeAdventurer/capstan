@@ -102,3 +102,90 @@ void popup_render(void) {
   wmove(win, 1 + (g_popup.cursor - g_popup.scroll), 4);
   wnoutrefresh(win);
 }
+
+void popup_render_message(void) {
+  if (!g_msgpopup.active)
+    return;
+
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+  int inner_w = cols - 2 * MARGIN;
+  int input_y = rows - INPUT_WIN_HEIGHT - MARGIN;
+
+  int max_text_w = inner_w > 60 ? 56 : inner_w - 8;
+  if (max_text_w < 20) max_text_w = 20;
+
+  int line_count = 1;
+  int line_col = 0;
+  for (const char *p = g_msgpopup.text; *p; p++) {
+    if (*p == '\n') { line_count++; line_col = 0; }
+    else if ((*p & 0xC0) != 0x80) {
+      line_col++;
+      if (line_col > max_text_w) { line_count++; line_col = 1; }
+    }
+  }
+
+  int popup_h = line_count + 4;
+  int popup_w = max_text_w + 4;
+  if (popup_w < POPUP_MIN_WIDTH) popup_w = POPUP_MIN_WIDTH;
+  int popup_x = MARGIN + (inner_w - popup_w) / 2;
+  int popup_y = input_y - popup_h;
+  if (popup_y < 0) popup_y = 0;
+
+  if (!g_msgpopup.win || g_msgpopup.last_rows != rows ||
+      g_msgpopup.last_cols != cols) {
+    if (g_msgpopup.win) delwin(g_msgpopup.win);
+    g_msgpopup.win = newwin(popup_h, popup_w, popup_y, popup_x);
+    g_msgpopup.last_rows = rows;
+    g_msgpopup.last_cols = cols;
+  }
+  if (!g_msgpopup.win) return;
+
+  WINDOW *win = g_msgpopup.win;
+  werase(win);
+  wbkgd(win, COLOR_PAIR(5));
+  wresize(win, popup_h, popup_w);
+  mvwin(win, popup_y, popup_x);
+
+  if (g_msgpopup.is_error) {
+    wattron(win, COLOR_PAIR(6));
+    box(win, 0, 0);
+    wattroff(win, COLOR_PAIR(6));
+  } else {
+    box(win, 0, 0);
+  }
+
+  if (g_msgpopup.title && g_msgpopup.title[0]) {
+    int title_len = (int)strlen(g_msgpopup.title);
+    int max_title = popup_w - 4;
+    if (title_len > max_title) title_len = max_title;
+    if (title_len > 0) {
+      wattron(win, A_BOLD);
+      mvwprintw(win, 0, 2, " %.*s ", title_len, g_msgpopup.title);
+      wattroff(win, A_BOLD);
+    }
+  }
+
+  if (g_msgpopup.is_error) wattron(win, COLOR_PAIR(6));
+
+  const char *p = g_msgpopup.text;
+  int ty = 2;
+  while (*p && ty < popup_h - 1) {
+    const char *le = p;
+    int lc = 0;
+    while (*le && *le != '\n') {
+      int is_char = (*le & 0xC0) != 0x80;
+      if (is_char && lc >= max_text_w) break;
+      le++;
+      if (is_char) lc++;
+    }
+    mvwaddnstr(win, ty, 2, p, le - p);
+    ty++;
+    if (*le == '\n') le++;
+    p = le;
+  }
+
+  if (g_msgpopup.is_error) wattroff(win, COLOR_PAIR(6));
+
+  wnoutrefresh(win);
+}

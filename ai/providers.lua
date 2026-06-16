@@ -10,15 +10,10 @@ M.providers = {
         endpoint = "https://api.deepseek.com/v1/chat/completions",
         model = "deepseek-chat",
     },
-    openai = {
-        api_key = os.getenv("OPENAI_API_KEY"),
-        endpoint = "https://api.openai.com/v1/chat/completions",
-        model = "gpt-4o",
-    },
     openrouter = {
         api_key = os.getenv("OPENROUTER_API_KEY"),
         endpoint = "https://openrouter.ai/api/v1/chat/completions",
-        model = os.getenv("OPENROUTER_MODEL") or "openai/gpt-4o",
+        model = os.getenv("OPENROUTER_MODEL") or "minimax/minimax-m3",
     },
 }
 
@@ -68,7 +63,15 @@ M.stream = function(provider_name, on_result)
         end
     end
 
-    return function(raw, is_done)
+    return function(raw, is_done, err, body)
+        if err then
+            local msg = err
+            if body and body ~= "" then
+                msg = err .. "\n" .. body
+            end
+            popup.error("API Error", msg)
+            return
+        end
         if is_done then
             if #buf > 0 then
                 local chunk = on_chunk(buf)
@@ -207,7 +210,7 @@ end
 _G.on_messages = function(messages)
     local active = M.providers[M.provider]
     if not active then
-        agent.append("Unknown provider: " .. M.provider, "error")
+        popup.error("Provider", "Unknown provider: " .. M.provider)
         return
     end
     agent.set_info(M.provider, active.model)

@@ -33,6 +33,18 @@ typedef struct {
 
 extern PopupState g_popup;
 
+typedef struct {
+  int active;
+  int is_error;
+  char *title;
+  char *text;
+  void *win;
+  int last_rows;
+  int last_cols;
+} MsgPopup;
+
+extern MsgPopup g_msgpopup;
+
 void popup_set_win_cleanup(void (*fn)(void *));
 void popup_close_data(void);
 

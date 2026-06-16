@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "http.h"
+#include "popup.h"
 #include "tui.h"
 
 typedef struct {
@@ -24,6 +25,8 @@ typedef struct {
   lua_State *L;
   int callback_ref;
   struct curl_slist *headers;
+  char err_buf[4096 + 1];
+  size_t err_len;
 } StreamCtx;
 
 static CURLM *multi_handle = NULL;
@@ -93,14 +96,28 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
   if (total == 0)
     return 0;
 
+  size_t room = sizeof(ctx->err_buf) - 1 - ctx->err_len;
+  if (room > 0) {
+    size_t copy = total < room ? total : room;
+    memcpy(ctx->err_buf + ctx->err_len, chunk_ptr, copy);
+    ctx->err_len += copy;
+    ctx->err_buf[ctx->err_len] = '\0';
+  }
+
+  lua_getglobal(ctx->L, "debug");
+  lua_getfield(ctx->L, -1, "traceback");
+  lua_remove(ctx->L, -2);
   lua_rawgeti(ctx->L, LUA_REGISTRYINDEX, ctx->callback_ref);
   lua_pushlstring(ctx->L, chunk_ptr, total);
   lua_pushboolean(ctx->L, 0);
-  if (lua_pcall(ctx->L, 2, 0, 0) != LUA_OK) {
-    fprintf(stderr, "stream cb error: %s\n", lua_tostring(ctx->L, -1));
-    lua_pop(ctx->L, 1);
+
+  int msgh = lua_gettop(ctx->L) - 3;
+  if (lua_pcall(ctx->L, 2, 0, msgh) != LUA_OK) {
+    popup_show_message("Stream Error", lua_tostring(ctx->L, -1), 1);
+    lua_settop(ctx->L, lua_gettop(ctx->L) - 2);
     return 0;
   }
+  lua_settop(ctx->L, lua_gettop(ctx->L) - 1);
   return total;
 }
 
@@ -140,6 +157,8 @@ static int l_http_post_stream(lua_State *L) {
   ctx->L = L;
   ctx->callback_ref = callback_ref;
   ctx->headers = headers;
+  ctx->err_buf[0] = '\0';
+  ctx->err_len = 0;
 
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, stream_write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, ctx);
@@ -289,16 +308,49 @@ int http_poll(lua_State *L) {
     int cb_ref = found->callback_ref;
     struct curl_slist *h = found->headers;
     CURL *e = found->easy;
+    char *err_body = NULL;
+    if (found->err_len > 0) {
+      err_body = malloc(found->err_len + 1);
+      memcpy(err_body, found->err_buf, found->err_len + 1);
+    }
     free(found);
     streams[found_idx] = NULL;
 
+    long http_status = 0;
+    curl_easy_getinfo(e, CURLINFO_RESPONSE_CODE, &http_status);
+    CURLcode curl_rc = msg->data.result;
+
+    lua_getglobal(L, "debug");
+    lua_getfield(L, -1, "traceback");
+    lua_remove(L, -2);
     lua_rawgeti(L, LUA_REGISTRYINDEX, cb_ref);
     lua_pushnil(L);
     lua_pushboolean(L, 1);
-    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-      fprintf(stderr, "stream done cb error: %s\n", lua_tostring(L, -1));
-      lua_pop(L, 1);
+
+    int nargs = 2;
+    if (curl_rc != CURLE_OK) {
+      nargs = 3;
+      lua_pushfstring(L, "Connection error: %s", curl_easy_strerror(curl_rc));
+    } else if (http_status > 0 && (http_status < 200 || http_status >= 300)) {
+      nargs = 3;
+      lua_pushfstring(L, "HTTP %d", (int)http_status);
     }
+
+    if (err_body) {
+      nargs = 4;
+      lua_pushstring(L, err_body);
+    }
+
+    int msgh = lua_gettop(L) - nargs - 1;
+
+    if (lua_pcall(L, nargs, 0, msgh) != LUA_OK) {
+      popup_show_message("Stream Error", lua_tostring(L, -1), 1);
+      lua_settop(L, lua_gettop(L) - 2);
+    } else {
+      lua_settop(L, lua_gettop(L) - 1);
+    }
+
+    free(err_body);
 
     luaL_unref(L, LUA_REGISTRYINDEX, cb_ref);
     curl_slist_free_all(h);

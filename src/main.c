@@ -58,6 +58,12 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
+    if (popup_is_message_active()) {
+      popup_message_handle_key(ch);
+      render_all();
+      continue;
+    }
+
     if (popup_is_active()) {
       int still_active = popup_handle_key(ch);
       if (!still_active)

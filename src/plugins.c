@@ -2,6 +2,7 @@
 #include "agent.h"
 #include "http.h"
 #include "permit.h"
+#include "popup.h"
 #include "utils.h"
 #include <dirent.h>
 #include <lauxlib.h>
@@ -16,6 +17,16 @@
 #define PLUGIN_CAPACITY_INCREMENT 10
 
 lua_State *L = NULL;
+
+static int l_popup_info(lua_State *l) {
+  popup_show_message(luaL_checkstring(l, 1), luaL_checkstring(l, 2), 0);
+  return 0;
+}
+
+static int l_popup_error(lua_State *l) {
+  popup_show_message(luaL_checkstring(l, 1), luaL_checkstring(l, 2), 1);
+  return 0;
+}
 
 void plugins_init(void) {
   L = luaL_newstate();
@@ -41,8 +52,16 @@ void plugins_init(void) {
   agent_init(L);
   permit_init(L);
   tools_init(L);
+
+  lua_newtable(L);
+  lua_pushcfunction(L, l_popup_info);
+  lua_setfield(L, -2, "info");
+  lua_pushcfunction(L, l_popup_error);
+  lua_setfield(L, -2, "error");
+  lua_setglobal(L, "popup");
+
   if (luaL_dofile(L, "ai/providers.lua") != LUA_OK) {
-    fprintf(stderr, "providers: %s\n", lua_tostring(L, -1));
+    popup_show_message("Startup Error", lua_tostring(L, -1), 1);
     lua_pop(L, 1);
   }
 }
@@ -346,7 +365,7 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
   lua_insert(L, -2);
 
   if (lua_pcall(L, 1, 2, 0) != LUA_OK) {
-    fprintf(stderr, "Plugin error: %s\n", lua_tostring(L, -1));
+    popup_show_message("Plugin Error", lua_tostring(L, -1), 1);
     lua_pop(L, 1);
     return NULL;
   }

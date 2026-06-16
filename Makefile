@@ -3,7 +3,7 @@ NCURSES_DIR = vendor/ncurses-install
 LUA_DIR = vendor/lua-5.5.0
 MUNIT_DIR = vendor/munit
 
-CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
+CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -DPOPUP_NCURSES
 # -L - флаг для динамических библиотек, в нашем случае нужна статика
 # LDFLAGS = -L$(NCURSES_DIR)/lib -lncursesw 
 # А НАМ НУЖНО СТАТИЧЕСКИ
@@ -35,3 +35,14 @@ $(TEST_TARGET): $(TEST_SRCS)
 
 clean:
 	rm -rf build
+
+HTTP_LUA_FLAGS = -Iinclude -I$(LUA_DIR)/src -I$(MUNIT_DIR) -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
+HTTP_LUA_SRCS = test/test_http_stack.c test/test_main_http_stack.c vendor/munit/munit.c
+HTTP_LUA_TARGET = build/test_http_stack
+
+test-http-lua: $(HTTP_LUA_TARGET)
+	./$(HTTP_LUA_TARGET)
+
+$(HTTP_LUA_TARGET): $(HTTP_LUA_SRCS)
+	mkdir -p build
+	$(CC) $(HTTP_LUA_FLAGS) $(HTTP_LUA_SRCS) $(LUA_DIR)/src/liblua.a -lm -o $(HTTP_LUA_TARGET)

@@ -28,4 +28,10 @@ void popup_render(void);
 struct Plugin *popup_get_plugin(void);
 size_t popup_get_cmd_end(void);
 
+void popup_show_message(const char *title, const char *text, int is_error);
+int  popup_is_message_active(void);
+void popup_close_message(void);
+int  popup_message_handle_key(int ch);
+void popup_render_message(void);
+
 #endif
