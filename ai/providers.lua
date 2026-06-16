@@ -24,6 +24,12 @@ M.default_on_chunk = function(raw_event)
     if not ok then return nil end
     if not event.choices or not event.choices[1] then return nil end
     local delta = event.choices[1].delta
+    if delta.reasoning_content and delta.reasoning_content ~= "" then
+        return {type = "reasoning", content = delta.reasoning_content}
+    end
+    if delta.reasoning and delta.reasoning ~= "" then
+        return {type = "reasoning", content = delta.reasoning}
+    end
     if delta.content then
         return {type = "text", content = delta.content}
     end
@@ -36,12 +42,24 @@ end
 M.stream = function(provider_name, on_result)
     local buf = ""
     local accumulated_text = ""
+    local accumulated_reasoning = ""
+    local reasoning_active = false
     local tool_calls_accum = {}
     local prov = M.providers[provider_name]
     local on_chunk = prov.on_chunk or M.default_on_chunk
 
     local function process_chunk(chunk)
-        if chunk.type == "text" and chunk.content then
+        if chunk.type == "reasoning" then
+            accumulated_reasoning = accumulated_reasoning .. chunk.content
+            if not reasoning_active then
+                reasoning_active = true
+                agent.set_thinking(true)
+            end
+        elseif chunk.type == "text" and chunk.content then
+            if reasoning_active then
+                reasoning_active = false
+                agent.set_thinking(false)
+            end
             accumulated_text = accumulated_text .. chunk.content
             on_result({type = "text", content = chunk.content}, false)
         elseif chunk.type == "tool_calls" then
@@ -65,6 +83,7 @@ M.stream = function(provider_name, on_result)
 
     return function(raw, is_done, err, body)
         if err then
+            if reasoning_active then agent.set_thinking(false) end
             local msg = err
             if body and body ~= "" then
                 msg = err .. "\n" .. body
@@ -73,6 +92,10 @@ M.stream = function(provider_name, on_result)
             return
         end
         if is_done then
+            if reasoning_active then
+                reasoning_active = false
+                agent.set_thinking(false)
+            end
             if #buf > 0 then
                 local chunk = on_chunk(buf)
                 if chunk then process_chunk(chunk) end

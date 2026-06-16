@@ -76,20 +76,6 @@ static int count_message_lines(const char *text, int width) {
 
 static int spinner_tick = 0;
 static int prev_loading = 0;
-static const char *spinner_frames[] = {
-  "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"
-};
-#define SPINNER_FRAMES 10
-#define SPINNER_COUNT  6
-#define SPINNER_PHASE  2
-static const int spinner_attrs[SPINNER_COUNT] = {
-  A_BOLD,  // bright orange
-  0,       // orange dimmed
-  A_DIM,   // yellow dimmed
-  0,       // yellow
-  A_BOLD,  // orange
-  0,       // orange dimmed
-};
 
 static int count_visible_chars_to(const char *str, int max_chars) {
   int bytes = 0, chars = 0;
@@ -393,11 +379,24 @@ void render_all(void) {
 
   int loading = http_is_loading();
   if (loading) {
-    for (int s = 0; s < SPINNER_COUNT; s++) {
-      int idx = ((spinner_tick / 4) + s * SPINNER_PHASE) % SPINNER_FRAMES;
-      wattrset(stdscr, COLOR_PAIR(3) | spinner_attrs[s]);
-      mvaddstr(rows - 1, MARGIN + 1 + s, spinner_frames[idx]);
-    }
+    int thinking = agent_is_thinking();
+    int phase = (spinner_tick / 8) % 8;
+    const char *dots[] = {" ", "·", "•", "●", "●", "•", "·", " "};
+    int dot_attrs[] = {0, A_DIM, 0, A_BOLD, A_BOLD, 0, A_DIM, 0};
+
+    wattrset(stdscr, dot_attrs[phase]);
+    if (thinking)
+      wattron(stdscr, COLOR_PAIR(6));
+    mvaddstr(rows - 1, MARGIN + 1, dots[phase]);
+    if (thinking)
+      wattroff(stdscr, COLOR_PAIR(6));
+
+    const char *label = thinking ? "Thinking" : "Answering";
+    int label_attr = A_ITALIC | A_DIM;
+    if (thinking)
+      label_attr |= COLOR_PAIR(6);
+    wattrset(stdscr, label_attr);
+    mvaddstr(rows - 1, MARGIN + 1 + 5, label);
     wattrset(stdscr, A_NORMAL);
   }
 
@@ -412,7 +411,9 @@ void render_all(void) {
       mode_hint = "-- INSERT -- Tab:focus";
     }
     int hint_len = (int)strlen(mode_hint);
-    int hint_x = MARGIN + 1 + SPINNER_COUNT + 2;
+    int hint_x = MARGIN + 1 + 5 + 9 + 2;
+    if (loading)
+      hint_x += 2;
     if (hint_x + hint_len < cols - 20) {
       attron(A_BOLD);
       mvaddnstr(rows - 1, hint_x, mode_hint, hint_len);

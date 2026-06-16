@@ -16,6 +16,15 @@ Messages *get_messages(void) { return &messages; }
 
 static char *g_provider_name = NULL;
 static char *g_provider_model = NULL;
+static int g_thinking = 0;
+
+void agent_set_thinking(int active) { g_thinking = active; }
+int  agent_is_thinking(void)      { return g_thinking; }
+
+static int l_agent_set_thinking(lua_State *L) {
+  agent_set_thinking(lua_toboolean(L, 1));
+  return 0;
+}
 
 static int l_agent_set_info(lua_State *L) {
   free(g_provider_name);
@@ -118,6 +127,8 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "append");
   lua_pushcfunction(L, l_agent_set_info);
   lua_setfield(L, -2, "set_info");
+  lua_pushcfunction(L, l_agent_set_thinking);
+  lua_setfield(L, -2, "set_thinking");
   lua_setglobal(L, "agent");
 }
 
