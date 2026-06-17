@@ -225,6 +225,18 @@ ncurses/Lua/curl APIs, and put them in separate source files.
   run `make test` and fix any breakage. If the change adds new behavior,
   add a new test case for it.
 
+## Specs
+
+- **New feature → new spec.** Add or update a focused markdown spec in `specs/`
+  for every user-visible feature. The spec should cover behavior, architecture
+  decisions, constraints, and test notes.
+- Link feature specs from this section so future agents can discover them.
+
+Feature specs:
+
+- [Focus modes](specs/focus-modes.md)
+- [Editor command](specs/editor-command.md)
+
 ## Conventions
 
 - C99, `-Wall -Wextra -Werror`, `-D_POSIX_C_SOURCE=200112L`
@@ -232,7 +244,3 @@ ncurses/Lua/curl APIs, and put them in separate source files.
 - `my_strdup()` instead of POSIX `strdup()`
 - ncurses + Lua linked statically (`.a`), libcurl dynamic (`-lcurl`)
 - Dynamic arrays: double capacity when full (not fixed increment)
-
-## Focus modes
-
-See [specs/focus-modes.md](specs/focus-modes.md)

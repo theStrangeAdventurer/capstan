@@ -1,5 +1,6 @@
 #include "dispatch.h"
 #include "agent.h"
+#include "editor.h"
 #include "input.h"
 #include "plugins.h"
 #include "popup.h"
@@ -85,6 +86,14 @@ static int try_command_with_plugin(const char *input, size_t cmd_end) {
   if (!has_command(input, command, &ce))
     return 0;
 
+  if (strcmp(command, "/editor") == 0) {
+    const char *prompt = input + cmd_end;
+    if (*prompt == ' ')
+      prompt++;
+    editor_open_prompt(prompt);
+    return 2;
+  }
+
   Plugin *p = plugin_registry_find(command);
   if (p) {
     if (plugin_has_autocomplete(p)) {
@@ -115,26 +124,28 @@ static int try_command_with_plugin(const char *input, size_t cmd_end) {
 
   if (strcmp(command, "/") == 0) {
     int pc = plugin_registry_count();
-    if (pc > 0) {
-      PopupItem *items = malloc(pc * sizeof(PopupItem));
+    int builtins = 1;
+    int count = pc + builtins;
+    if (count > 0) {
+      PopupItem *items = malloc(count * sizeof(PopupItem));
+      items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
+      items[0].value = my_strdup("/editor");
       for (int i = 0; i < pc; i++) {
         Plugin *pp = plugin_registry_at(i);
         char buf[256];
         snprintf(buf, sizeof(buf), "%s  %s", pp->command,
                  pp->description ? pp->description : "");
-        items[i].text = my_strdup(buf);
-        items[i].value = my_strdup(pp->command);
+        items[i + builtins].text = my_strdup(buf);
+        items[i + builtins].value = my_strdup(pp->command);
       }
-      popup_open_with_plugin(items, pc, "Commands", 10, 0, NULL, 0);
-      for (int i = 0; i < pc; i++) {
+      popup_open_with_plugin(items, count, "Commands", 10, 0, NULL, 0);
+      for (int i = 0; i < count; i++) {
         free(items[i].text);
         free(items[i].value);
       }
       free(items);
       return 1;
     }
-    add_error_and_emit("No plugins loaded");
-    return 1;
   }
 
   char err[256];
@@ -153,7 +164,9 @@ void dispatch_submit(void) {
   char command[MAX_COMMAND_LEN];
   size_t cmd_end;
   if (text[0] && has_command(text, command, &cmd_end)) {
-    try_command_with_plugin(text, cmd_end);
+    int handled = try_command_with_plugin(text, cmd_end);
+    if (handled == 2)
+      return;
   } else if (g_pending.size > 0) {
     flush_pending_and_send(text, text);
   } else {
