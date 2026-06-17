@@ -77,6 +77,15 @@ static int count_message_lines(const char *text, int width) {
 static int spinner_tick = 0;
 static int prev_loading = 0;
 
+static const char *mode_label(void) {
+  if (mode_get() == FOCUS_MESSAGES) {
+    if (visual_is_active())
+      return " VISUAL ";
+    return " MESSAGES ";
+  }
+  return " INSERT ";
+}
+
 static int count_visible_chars_to(const char *str, int max_chars) {
   int bytes = 0, chars = 0;
   while (str[bytes]) {
@@ -330,6 +339,36 @@ void render_all(void) {
   wattroff(input_win, A_BOLD);
   wattroff(input_win, A_DIM);
 
+  {
+    const char *label = mode_label();
+    int label_len = (int)strlen(label);
+    int label_x = 2;
+    int label_attr = A_BOLD;
+    if (mode_get() == FOCUS_MESSAGES && !visual_is_active())
+      label_attr |= A_DIM;
+
+    wattron(input_win, label_attr);
+    if (label_x + label_len < inner_w - 1)
+      mvwaddnstr(input_win, 0, label_x, label, label_len);
+    wattroff(input_win, label_attr);
+
+    UsageStats usage = agent_usage();
+    if (http_is_loading() && usage.context_limit > 0 &&
+        usage.total_tokens > usage.prompt_tokens) {
+      usage.prompt_tokens = usage.total_tokens;
+    }
+    char usage_buf[32];
+    int usage_len = usage_format(usage, usage_buf, sizeof(usage_buf));
+    if (usage_len > 0) {
+      int usage_x = inner_w - usage_len - 2;
+      if (usage_x > label_x + label_len + 1) {
+        wattron(input_win, A_DIM);
+        mvwaddnstr(input_win, 0, usage_x, usage_buf, usage_len);
+        wattroff(input_win, A_DIM);
+      }
+    }
+  }
+
   int content_w = inner_w - 2;
   int input_len = (int)strlen(input);
   int total_chars = count_visible_chars(input, input_len);
@@ -398,27 +437,6 @@ void render_all(void) {
     wattrset(stdscr, label_attr);
     mvaddstr(rows - 1, MARGIN + 1 + 5, label);
     wattrset(stdscr, A_NORMAL);
-  }
-
-  {
-    const char *mode_hint;
-    if (mode_get() == FOCUS_MESSAGES) {
-      if (visual_is_active())
-        mode_hint = "-- VISUAL -- y:yank  Esc:cancel";
-      else
-        mode_hint = "-- MESSAGES -- v:select  Esc:focus";
-    } else {
-      mode_hint = "-- INSERT -- Tab:focus";
-    }
-    int hint_len = (int)strlen(mode_hint);
-    int hint_x = MARGIN + 1 + 5 + 9 + 2;
-    if (loading)
-      hint_x += 2;
-    if (hint_x + hint_len < cols - 20) {
-      attron(A_BOLD);
-      mvaddnstr(rows - 1, hint_x, mode_hint, hint_len);
-      attroff(A_BOLD);
-    }
   }
 
   spinner_tick++;

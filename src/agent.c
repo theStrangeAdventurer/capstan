@@ -17,6 +17,7 @@ Messages *get_messages(void) { return &messages; }
 static char *g_provider_name = NULL;
 static char *g_provider_model = NULL;
 static int g_thinking = 0;
+static UsageStats g_usage = {0};
 
 void agent_set_thinking(int active) { g_thinking = active; }
 int  agent_is_thinking(void)      { return g_thinking; }
@@ -40,6 +41,15 @@ static int l_agent_set_info(lua_State *L) {
 
 const char *agent_provider_name(void) { return g_provider_name; }
 const char *agent_provider_model(void) { return g_provider_model; }
+UsageStats agent_usage(void) { return g_usage; }
+
+static int l_agent_set_usage(lua_State *L) {
+  g_usage.prompt_tokens = (int)luaL_optinteger(L, 1, 0);
+  g_usage.completion_tokens = (int)luaL_optinteger(L, 2, 0);
+  g_usage.total_tokens = (int)luaL_optinteger(L, 3, 0);
+  g_usage.context_limit = (int)luaL_optinteger(L, 4, 0);
+  return 0;
+}
 
 static Message *find_last_message_by_role(MessageRole role) {
   Message *m = NULL;
@@ -129,6 +139,8 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "set_info");
   lua_pushcfunction(L, l_agent_set_thinking);
   lua_setfield(L, -2, "set_thinking");
+  lua_pushcfunction(L, l_agent_set_usage);
+  lua_setfield(L, -2, "set_usage");
   lua_setglobal(L, "agent");
 }
 

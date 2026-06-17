@@ -13,7 +13,7 @@ CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/in
 LDFLAGS = $(LUA_DIR)/src/liblua.a $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DIR)/lib/libtinfow.a -lm  -lcurl
 
 TEST_CFLAGS = -Iinclude -I$(MUNIT_DIR) -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
-TEST_SRCS = src/input.c src/linemap.c src/mode.c src/popup_logic.c src/scroll.c src/utils.c src/visual.c test/test_main.c test/test_input.c test/test_linemap.c test/test_mode.c test/test_popup.c test/test_scroll.c test/test_utils.c test/test_visual.c vendor/munit/munit.c
+TEST_SRCS = src/input.c src/linemap.c src/mode.c src/popup_logic.c src/scroll.c src/usage.c src/utils.c src/visual.c test/test_main.c test/test_input.c test/test_linemap.c test/test_mode.c test/test_popup.c test/test_scroll.c test/test_usage.c test/test_utils.c test/test_visual.c vendor/munit/munit.c
 
 SRCS = $(wildcard src/*.c)
 
