@@ -1,5 +1,6 @@
 #include "tui.h"
 #include "agent.h"
+#include "app_config.h"
 #include "curses.h"
 #include "http.h"
 #include "input.h"
@@ -99,6 +100,30 @@ static int count_visible_chars_to(const char *str, int max_chars) {
   return bytes;
 }
 
+static int centered_x(int width, const char *text) {
+  int text_w = count_visible_chars(text, (int)strlen(text));
+  int x = (width - text_w) / 2;
+  return x > 0 ? x : 0;
+}
+
+static void render_empty_banner(WINDOW *win, int height, int width) {
+  if (height < 3 || width < 1)
+    return;
+
+  int title_y = height / 2 - 1;
+  int tagline_y = title_y + 1;
+  int title_x = centered_x(width, APP_BANNER_TITLE);
+  int tagline_x = centered_x(width, APP_BANNER_TAGLINE);
+
+  wattron(win, A_BOLD | COLOR_PAIR(1));
+  mvwaddstr(win, title_y, title_x, APP_BANNER_TITLE);
+  wattroff(win, A_BOLD | COLOR_PAIR(1));
+
+  wattron(win, A_DIM);
+  mvwaddstr(win, tagline_y, tagline_x, APP_BANNER_TAGLINE);
+  wattroff(win, A_DIM);
+}
+
 void render_all(void) {
   int scroll_offset = scroll_get();
   const char *input = input_get_text();
@@ -177,6 +202,10 @@ void render_all(void) {
 
   int global_line = 0;
   int win_row = 0;
+
+  if (msgs->size == 0) {
+    render_empty_banner(msg_win, msg_h, inner_w);
+  }
 
   for (size_t i = 0; i < msgs->size && win_row < msg_h; i++) {
     Message *msg = msgs->items[i];

@@ -161,22 +161,22 @@ banner "[4/4] Building tui-agent"
 rm -rf build
 make -j"$JOBS"
 
-if [ ! -f "build/termai" ]; then
+if [ ! -f "build/capstan" ]; then
     die "Build failed — no binary produced"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────
-SIZE=$(ls -lh build/termai | awk '{print $5}')
-BIN_ARCH=$(file build/termai | grep -o 'arm64\|x86_64' || echo "$ARCH")
+SIZE=$(ls -lh build/capstan | awk '{print $5}')
+BIN_ARCH=$(file build/capstan | grep -o 'arm64\|x86_64' || echo "$ARCH")
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════╗"
 echo -e "║  Build successful!                      ║"
 echo -e "╠══════════════════════════════════════════╣"
-printf "\033[0;32m║  %-10s %-28s║\n" "binary:" "build/termai"
+printf "\033[0;32m║  %-10s %-28s║\n" "binary:" "build/capstan"
 printf "║  %-10s %-28s║\n" "size:" "$SIZE"
 printf "║  %-10s %-28s║\n" "arch:" "$BIN_ARCH"
 echo -e "╚══════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  Run:  ${GREEN}./build/termai${NC}"
+echo -e "  Run:  ${GREEN}./build/capstan${NC}"
 echo ""

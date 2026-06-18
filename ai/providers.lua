@@ -420,6 +420,9 @@ _G.on_messages = function(messages)
     agent.set_usage(0, 0, 0, active.context_limit or 0)
 
     local msgs = {}
+    if _G.system_prompt and _G.system_prompt ~= "" then
+        table.insert(msgs, {role = "system", content = _G.system_prompt})
+    end
     for _, m in ipairs(messages) do
         table.insert(msgs, {role = m.role, content = m.content})
     end

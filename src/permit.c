@@ -1,3 +1,4 @@
+#include "app_config.h"
 #include "permit.h"
 #include "dyn_arr.h"
 #include "tui.h"
@@ -19,18 +20,11 @@ extern lua_State *L;
 
 static PermEntries g_entries = {0};
 
-static const char *g_config_dir = NULL;
-
 const char *permit_config_dir(void) {
-  if (!g_config_dir) {
-    const char *home = getenv("HOME");
-    if (home) {
-      static char path[512];
-      snprintf(path, sizeof(path), "%s/.config/turbo-ai", home);
-      g_config_dir = path;
-    }
-  }
-  return g_config_dir;
+  static char path[512];
+  if (app_config_dir(path, sizeof(path)) != 0)
+    return NULL;
+  return path;
 }
 
 int permit_pattern_match(const char *pattern, const char *target) {
@@ -215,14 +209,24 @@ static int l_permit_grant(lua_State *L) {
 }
 
 static int l_permit_save(lua_State *L) {
-  mkdir(".turbo-ai", 0755);
-  permit_save(".turbo-ai/permissions.lua");
+  char path[512];
+  if (app_config_ensure_dir() != 0 ||
+      app_config_path(path, sizeof(path), "permissions.lua") != 0) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  permit_save(path);
   lua_pushboolean(L, 1);
   return 1;
 }
 
 static int l_permit_load(lua_State *L) {
-  permit_load(".turbo-ai/permissions.lua");
+  char path[512];
+  if (app_config_path(path, sizeof(path), "permissions.lua") != 0) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  permit_load(path);
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -236,7 +240,9 @@ static int l_permit_prompt(lua_State *L) {
 }
 
 void permit_init(lua_State *L) {
-  permit_load(".turbo-ai/permissions.lua");
+  char path[512];
+  if (app_config_path(path, sizeof(path), "permissions.lua") == 0)
+    permit_load(path);
 
   lua_newtable(L);
 

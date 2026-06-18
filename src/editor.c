@@ -1,3 +1,4 @@
+#include "app_config.h"
 #include "editor.h"
 #include "input.h"
 #include <ncursesw/curses.h>
@@ -70,7 +71,8 @@ int editor_open_prompt(const char *initial_text) {
     return -1;
   }
 
-  char path[] = "/tmp/termai-editor-XXXXXX";
+  char path[64];
+  snprintf(path, sizeof(path), "%s", APP_EDITOR_TEMP_TEMPLATE);
   int fd = mkstemp(path);
   if (fd < 0) {
     input_set_text("Failed to create editor temp file");

@@ -77,7 +77,7 @@ LDFLAGS = vendor/lua-5.5.0/src/liblua.a
 ```
 vendor/ncurses-install/    # ncurses headers + static .a libs (gitignored)
 vendor/lua-5.5.0/src/*.o  # Lua object files (gitignored)
-build/termai               # final binary (gitignored)
+build/capstan              # final binary (gitignored)
 ```
 
 ## Architecture — non-obvious
@@ -165,6 +165,26 @@ make test
 Test binary does **not** link ncurses, Lua, or curl — only the pure C modules
 that have no UI or Lua dependencies.
 
+### Build smoke test
+
+```sh
+make test-build
+```
+
+This builds `build/capstan`, copies only that binary into a fresh
+`/tmp/capstan-build-smoke.*` directory, and runs the copied binary with
+`--self-test-embedded` from an isolated working directory. The check verifies
+that the embedded system prompt and built-in plugin commands are available
+without `ai/` or `plugins/` beside the binary.
+
+The smoke directory is intentionally left on disk. The script prints a command
+like this so you can launch the copied binary manually and verify the interactive
+plugins:
+
+```sh
+cd /tmp/capstan-build-smoke.XXXXXX/run && HOME=/tmp/capstan-build-smoke.XXXXXX/home /tmp/capstan-build-smoke.XXXXXX/bin/capstan
+```
+
 ### Currently tested modules
 
 | Module | Tests | File |
@@ -234,6 +254,7 @@ ncurses/Lua/curl APIs, and put them in separate source files.
 
 Feature specs:
 
+- [Embedded runtime assets](specs/embedded-runtime-assets.md)
 - [Focus modes](specs/focus-modes.md)
 - [Editor command](specs/editor-command.md)
 

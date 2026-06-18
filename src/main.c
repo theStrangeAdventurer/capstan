@@ -1,4 +1,5 @@
 #include "agent.h"
+#include "app_config.h"
 #include "dispatch.h"
 #include "http.h"
 #include "input.h"
@@ -20,9 +21,45 @@
 #include <time.h>
 #include <unistd.h>
 
+static int run_embedded_self_test(void) {
+  plugins_init();
+  load_embedded_plugins();
+
+  const char *expected[] = {"/file", "/write", "/hi", "/ip",
+                            "/post", "/shell", "/stream"};
+  int ok = 1;
+
+  printf("binary: %s\n", APP_BINARY_NAME);
+  printf("plugins: %d\n", plugin_registry_count());
+
+  for (size_t i = 0; i < sizeof(expected) / sizeof(expected[0]); i++) {
+    Plugin *p = plugin_registry_find(expected[i]);
+    if (!p) {
+      printf("missing plugin: %s\n", expected[i]);
+      ok = 0;
+      continue;
+    }
+    printf("plugin: %s %s\n", p->command, p->id);
+  }
+
+  lua_getglobal(L, "system_prompt");
+  if (!lua_isstring(L, -1) || lua_rawlen(L, -1) == 0) {
+    printf("missing system_prompt\n");
+    ok = 0;
+  } else {
+    printf("system_prompt: ok\n");
+  }
+  lua_pop(L, 1);
+
+  plugins_cleanup();
+  return ok ? 0 : 1;
+}
+
 int main(int argc, char *argv[]) {
-  (void)argc;
-  (void)argv;
+  if (argc == 2 && strcmp(argv[1], "--self-test-embedded") == 0) {
+    setlocale(LC_ALL, "");
+    return run_embedded_self_test();
+  }
 
   setlocale(LC_ALL, "");
   set_escdelay(50);
@@ -35,15 +72,11 @@ int main(int argc, char *argv[]) {
   popup_init();
 
   plugins_init();
+  load_embedded_plugins();
 
-  const char *home = getenv("HOME");
-  if (home) {
-    char global_plugins[512];
-    snprintf(global_plugins, sizeof(global_plugins),
-             "%s/.config/turbo-ai/plugins", home);
+  char global_plugins[512];
+  if (app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
     load_plugins_from(global_plugins);
-  }
-  load_plugins_from("plugins");
 
   input_init();
   scroll_reset();

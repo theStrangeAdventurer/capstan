@@ -10,7 +10,7 @@ CLI LLM agent — like opencode / claude code.
 
 The script handles everything: checks dependencies, builds ncurses + Lua from `vendor/`, then compiles the project.
 
-Binary is `build/termai`.
+Binary is `build/capstan`.
 
 ## System dependencies
 
@@ -31,7 +31,7 @@ sudo dnf install gcc make libcurl-devel
 ## Run
 
 ```sh
-./build/termai
+./build/capstan
 ```
 
 Requires `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` environment variable.

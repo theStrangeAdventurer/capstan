@@ -12,7 +12,7 @@ function plugin.handler(ctx)
 
 	http.post_stream(
 		"https://httpbin.org/post",
-		json.encode({msg = "streaming from termai", ts = os.time()}),
+		json.encode({msg = "streaming from capstan", ts = os.time()}),
 		{["Content-Type"] = "application/json"},
 		function(raw, is_done)
 			if is_done then

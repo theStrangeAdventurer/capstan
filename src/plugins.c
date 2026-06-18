@@ -1,5 +1,7 @@
 #include "plugins.h"
 #include "agent.h"
+#include "app_config.h"
+#include "embedded_assets.h"
 #include "http.h"
 #include "permit.h"
 #include "popup.h"
@@ -11,12 +13,116 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 
 #define PLUGIN_RESPONSE_MAX_SIZE 4096
 #define PLUGIN_CAPACITY_INCREMENT 10
 
 lua_State *L = NULL;
+
+static int file_exists(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static char *read_file(const char *path, size_t *out_size) {
+  FILE *f = fopen(path, "rb");
+  if (!f)
+    return NULL;
+
+  if (fseek(f, 0, SEEK_END) != 0) {
+    fclose(f);
+    return NULL;
+  }
+
+  long size = ftell(f);
+  if (size < 0) {
+    fclose(f);
+    return NULL;
+  }
+  rewind(f);
+
+  char *buf = malloc((size_t)size + 1);
+  if (!buf) {
+    fclose(f);
+    return NULL;
+  }
+
+  size_t n = fread(buf, 1, (size_t)size, f);
+  fclose(f);
+  if (n != (size_t)size) {
+    free(buf);
+    return NULL;
+  }
+
+  buf[n] = '\0';
+  if (out_size)
+    *out_size = n;
+  return buf;
+}
+
+static int lua_dobuffer_named(lua_State *l, const char *name, const char *data,
+                              size_t size) {
+  if (luaL_loadbuffer(l, data, size, name) != LUA_OK)
+    return LUA_ERRSYNTAX;
+  return lua_pcall(l, 0, LUA_MULTRET, 0);
+}
+
+static int lua_doasset_or_file(lua_State *l, const char *asset_path,
+                               const char *override_path) {
+  if (override_path && file_exists(override_path))
+    return luaL_dofile(l, override_path);
+
+  const EmbeddedAsset *asset = embedded_asset_find(asset_path);
+  if (!asset) {
+    lua_pushfstring(l, "missing embedded asset: %s", asset_path);
+    return LUA_ERRFILE;
+  }
+
+  return lua_dobuffer_named(l, asset_path, asset->data, asset->size);
+}
+
+static int l_require_embedded_json(lua_State *l) {
+  const EmbeddedAsset *asset = embedded_asset_find("vendor/rxi/json.lua");
+  if (!asset)
+    return luaL_error(l, "missing embedded asset: vendor/rxi/json.lua");
+
+  lua_settop(l, 0);
+  if (lua_dobuffer_named(l, "vendor/rxi/json.lua", asset->data, asset->size) !=
+      LUA_OK) {
+    const char *err = lua_tostring(l, -1);
+    return luaL_error(l, "%s", err ? err : "failed to load vendor.rxi.json");
+  }
+
+  return lua_gettop(l);
+}
+
+static void register_embedded_modules(void) {
+  lua_getglobal(L, "package");
+  lua_getfield(L, -1, "preload");
+  lua_pushcfunction(L, l_require_embedded_json);
+  lua_setfield(L, -2, "vendor.rxi.json");
+  lua_pop(L, 2);
+}
+
+static void load_system_prompt(void) {
+  const EmbeddedAsset *asset = embedded_asset_find("ai/system_prompt.txt");
+  const char *data = asset ? asset->data : "";
+  size_t size = asset ? asset->size : 0;
+  char *override = NULL;
+
+  char path[512];
+  if (app_config_path(path, sizeof(path), "system_prompt.txt") == 0) {
+    override = read_file(path, &size);
+    if (override)
+      data = override;
+  }
+
+  lua_pushlstring(L, data, size);
+  lua_setglobal(L, "system_prompt");
+  free(override);
+}
 
 static int l_popup_info(lua_State *l) {
   popup_show_message(luaL_checkstring(l, 1), luaL_checkstring(l, 2), 0);
@@ -35,8 +141,8 @@ void plugins_init(void) {
   const char *home = getenv("HOME");
   if (home) {
     char alter_path[2048];
-    snprintf(alter_path, sizeof(alter_path),
-             "%s/.config/turbo-ai/?.lua", home);
+    snprintf(alter_path, sizeof(alter_path), "%s/.config/%s/?.lua", home,
+             APP_CONFIG_DIR_NAME);
     lua_getglobal(L, "package");
     lua_getfield(L, -1, "path");
     const char *cur = lua_tostring(L, -1);
@@ -47,6 +153,8 @@ void plugins_init(void) {
     lua_setfield(L, -3, "path");
     lua_pop(L, 2);
   }
+
+  register_embedded_modules();
 
   http_init(L);
   agent_init(L);
@@ -60,7 +168,16 @@ void plugins_init(void) {
   lua_setfield(L, -2, "error");
   lua_setglobal(L, "popup");
 
-  if (luaL_dofile(L, "ai/providers.lua") != LUA_OK) {
+  load_system_prompt();
+
+  char provider_override[512];
+  const char *provider_path = NULL;
+  if (app_config_path(provider_override, sizeof(provider_override),
+                      "providers.lua") == 0) {
+    provider_path = provider_override;
+  }
+
+  if (lua_doasset_or_file(L, "ai/providers.lua", provider_path) != LUA_OK) {
     popup_show_message("Startup Error", lua_tostring(L, -1), 1);
     lua_pop(L, 1);
   }
@@ -168,8 +285,9 @@ static char *lua_getstr_f_value(lua_State *L, int idx, const char *field) {
   return result;
 }
 
-Plugin *plugin_load(const char *path) {
-  if (luaL_dofile(L, path) !=
+static Plugin *plugin_load_from_chunk(const char *name, const char *data,
+                                      size_t size) {
+  if (lua_dobuffer_named(L, name, data, size) !=
       LUA_OK) { // Выполняет lua файл и кладет результат выполнения на стек lua
     fprintf(stderr, "Error loading plugin: %s\n", lua_tostring(L, -1));
     return NULL;
@@ -292,6 +410,18 @@ Plugin *plugin_load(const char *path) {
 
   p->callback = NULL;
   p->user_data = NULL;
+  return p;
+}
+
+Plugin *plugin_load(const char *path) {
+  size_t size = 0;
+  char *data = read_file(path, &size);
+  if (!data) {
+    fprintf(stderr, "Error reading plugin: %s\n", path);
+    return NULL;
+  }
+  Plugin *p = plugin_load_from_chunk(path, data, size);
+  free(data);
   return p;
 }
 
@@ -535,6 +665,25 @@ void load_plugins_from(const char *dir_path) {
     }
   }
   closedir(dir);
+}
+
+void load_embedded_plugins(void) {
+  size_t count = 0;
+  const EmbeddedAsset *assets = embedded_assets(&count);
+  for (size_t i = 0; i < count; i++) {
+    const char *path = assets[i].path;
+    if (strncmp(path, "plugins/", 8) != 0)
+      continue;
+    size_t len = strlen(path);
+    if (len < 4 || strcmp(path + len - 4, ".lua") != 0)
+      continue;
+
+    Plugin *p = plugin_load_from_chunk(path, assets[i].data, assets[i].size);
+    if (p) {
+      plugin_registry_remove_by_id(p->id);
+      plugin_registry_add(p);
+    }
+  }
 }
 
 void plugins_cleanup(void) {

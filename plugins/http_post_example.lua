@@ -9,7 +9,7 @@ plugin.async = false
 
 function plugin.handler(ctx)
 	local payload = json.encode({
-		message = "Hello from termai",
+		message = "Hello from capstan",
 		timestamp = os.time()
 	})
 
