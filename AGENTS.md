@@ -258,6 +258,7 @@ Feature specs:
 - [Focus modes](specs/focus-modes.md)
 - [Editor command](specs/editor-command.md)
 - [Popups](specs/popups.md)
+- [Fetch plugin](specs/fetch-plugin.md)
 
 ## Conventions
 

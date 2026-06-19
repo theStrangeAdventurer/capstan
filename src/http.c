@@ -86,6 +86,19 @@ static struct curl_slist *parse_headers(lua_State *L, int index) {
   return headers;
 }
 
+static void configure_http_handle(CURL *easy, const char *url) {
+  curl_easy_setopt(easy, CURLOPT_URL, url);
+  curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(easy, CURLOPT_MAXREDIRS, 10L);
+#if LIBCURL_VERSION_NUM >= 0x075500
+  curl_easy_setopt(easy, CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+#else
+  curl_easy_setopt(easy, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+  curl_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#endif
+}
+
 /**
  * Колбек для стриминга: получает сырые байты и сразу зовёт Lua callback
  */
@@ -142,7 +155,7 @@ static int l_http_post_stream(lua_State *L) {
   int callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
   CURL *easy = curl_easy_init();
-  curl_easy_setopt(easy, CURLOPT_URL, url);
+  configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
   if (body) {
     curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)body_len);
@@ -189,7 +202,7 @@ static int l_http_post(lua_State *L) {
   struct curl_slist *headers = parse_headers(L, 3);
 
   CURL *easy = curl_easy_init();
-  curl_easy_setopt(easy, CURLOPT_URL, url);
+  configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
 
   if (body) {
@@ -236,7 +249,7 @@ static int l_http_get(lua_State *L) {
   struct curl_slist *headers = parse_headers(L, 2);
 
   CURL *easy = curl_easy_init();
-  curl_easy_setopt(easy, CURLOPT_URL, url);
+  configure_http_handle(easy, url);
   if (headers) {
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
   }

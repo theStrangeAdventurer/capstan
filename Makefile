@@ -44,8 +44,8 @@ $(TEST_TARGET): $(TEST_SRCS)
 clean:
 	rm -rf build
 
-HTTP_LUA_FLAGS = -Iinclude -I$(LUA_DIR)/src -I$(MUNIT_DIR) -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
-HTTP_LUA_SRCS = test/test_http_stack.c test/test_main_http_stack.c vendor/munit/munit.c
+HTTP_LUA_FLAGS = -Iinclude -I$(LUA_DIR)/src -I$(MUNIT_DIR) -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
+HTTP_LUA_SRCS = src/http.c test/test_http_stack.c test/test_fetch_plugin.c test/test_http_redirect.c test/test_main_http_stack.c vendor/munit/munit.c
 HTTP_LUA_TARGET = build/test_http_stack
 
 test-http-lua: $(HTTP_LUA_TARGET)
@@ -53,4 +53,4 @@ test-http-lua: $(HTTP_LUA_TARGET)
 
 $(HTTP_LUA_TARGET): $(HTTP_LUA_SRCS)
 	mkdir -p build
-	$(CC) $(HTTP_LUA_FLAGS) $(HTTP_LUA_SRCS) $(LUA_DIR)/src/liblua.a -lm -o $(HTTP_LUA_TARGET)
+	$(CC) $(HTTP_LUA_FLAGS) $(HTTP_LUA_SRCS) $(LUA_DIR)/src/liblua.a -lm -lcurl -o $(HTTP_LUA_TARGET)

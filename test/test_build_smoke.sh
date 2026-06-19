@@ -24,7 +24,7 @@ output=$(
 
 printf '%s\n' "$output"
 
-for command in /file /write /hi /ip /post /shell /stream; do
+for command in /file /write /hi /ip /post /shell /stream /fetch; do
   printf '%s\n' "$output" | grep -q "plugin: $command" || {
     echo "missing embedded plugin command: $command" >&2
     exit 1
