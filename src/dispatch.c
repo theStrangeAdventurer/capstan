@@ -154,6 +154,62 @@ static int try_command_with_plugin(const char *input, size_t cmd_end) {
   return 1;
 }
 
+int dispatch_tab(void) {
+  const char *text = input_get_text();
+  char command[MAX_COMMAND_LEN];
+  size_t cmd_end;
+
+  if (!text[0] || !has_command(text, command, &cmd_end))
+    return 0;
+
+  if (strcmp(command, "/") == 0) {
+    int pc = plugin_registry_count();
+    int builtins = 1;
+    int count = pc + builtins;
+    if (count <= 0)
+      return 0;
+
+    PopupItem *items = malloc(count * sizeof(PopupItem));
+    items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
+    items[0].value = my_strdup("/editor");
+    for (int i = 0; i < pc; i++) {
+      Plugin *pp = plugin_registry_at(i);
+      char buf[256];
+      snprintf(buf, sizeof(buf), "%s  %s", pp->command,
+               pp->description ? pp->description : "");
+      items[i + builtins].text = my_strdup(buf);
+      items[i + builtins].value = my_strdup(pp->command);
+    }
+    popup_open_with_plugin(items, count, "Commands", 10, 0, NULL, 0);
+    for (int i = 0; i < count; i++) {
+      free(items[i].text);
+      free(items[i].value);
+    }
+    free(items);
+    return 1;
+  }
+
+  Plugin *p = plugin_registry_find(command);
+  if (!p || !plugin_has_autocomplete(p))
+    return 0;
+
+  PopupItem *items;
+  int count;
+  char *title;
+  int limit, multi;
+  plugin_autocomplete_fetch(p, text, cmd_end, &items, &count,
+                            &title, &limit, &multi);
+  if (count > 0)
+    popup_open_with_plugin(items, count, title, limit, multi, p, cmd_end);
+  for (int i = 0; i < count; i++) {
+    free(items[i].text);
+    free(items[i].value);
+  }
+  free(items);
+  free(title);
+  return count > 0;
+}
+
 void dispatch_submit(void) {
   const char *text = input_get_text();
   if (!text[0] && g_pending.size == 0)

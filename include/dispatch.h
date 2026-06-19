@@ -7,6 +7,7 @@
 
 int has_command(const char *input, char *command, size_t *cmd_end);
 void dispatch_submit(void);
+int dispatch_tab(void);
 void dispatch_popup_result(void);
 
 #endif

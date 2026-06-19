@@ -26,6 +26,8 @@ static MunitResult test_open_active(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(3, 0);
   munit_assert_int(popup_is_active(), ==, 1);
+  munit_assert_int(g_popup.selected[0], ==, 1);
+  munit_assert_int(g_popup.selected[1], ==, 0);
   popup_close_data();
   return MUNIT_OK;
 }
@@ -44,8 +46,12 @@ static MunitResult test_j_down(const MunitParameter p[], void *d) {
   munit_assert_int(g_popup.cursor, ==, 0);
   popup_handle_key('j');
   munit_assert_int(g_popup.cursor, ==, 1);
+  munit_assert_int(g_popup.selected[0], ==, 0);
+  munit_assert_int(g_popup.selected[1], ==, 1);
   popup_handle_key('j');
   munit_assert_int(g_popup.cursor, ==, 2);
+  munit_assert_int(g_popup.selected[1], ==, 0);
+  munit_assert_int(g_popup.selected[2], ==, 1);
   popup_close_data();
   return MUNIT_OK;
 }
@@ -166,10 +172,12 @@ static MunitResult test_scroll_up(const MunitParameter p[], void *d) {
   return MUNIT_OK;
 }
 
-static MunitResult test_l_selects_non_multi(const MunitParameter p[], void *d) {
+static MunitResult test_l_confirms_non_multi(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(3, 0);
-  popup_handle_key('l');
+  int ret = popup_handle_key('l');
+  munit_assert_int(ret, ==, 0);
+  munit_assert_int(popup_is_active(), ==, 0);
   munit_assert_int(g_popup.selected[0], ==, 1);
   munit_assert_int(g_popup.selected[1], ==, 0);
   munit_assert_int(g_popup.selected[2], ==, 0);
@@ -180,9 +188,7 @@ static MunitResult test_l_selects_non_multi(const MunitParameter p[], void *d) {
 static MunitResult test_l_only_one_selected(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(3, 0);
-  popup_handle_key('l');
   popup_handle_key('j');
-  popup_handle_key('l');
   munit_assert_int(g_popup.selected[0], ==, 0);
   munit_assert_int(g_popup.selected[1], ==, 1);
   munit_assert_int(g_popup.selected[2], ==, 0);
@@ -190,13 +196,12 @@ static MunitResult test_l_only_one_selected(const MunitParameter p[], void *d) {
   return MUNIT_OK;
 }
 
-static MunitResult test_h_deselects_non_multi(const MunitParameter p[], void *d) {
+static MunitResult test_h_keeps_non_multi_selected(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(3, 0);
-  popup_handle_key('l');
   munit_assert_int(g_popup.selected[0], ==, 1);
   popup_handle_key('h');
-  munit_assert_int(g_popup.selected[0], ==, 0);
+  munit_assert_int(g_popup.selected[0], ==, 1);
   popup_close_data();
   return MUNIT_OK;
 }
@@ -204,7 +209,6 @@ static MunitResult test_h_deselects_non_multi(const MunitParameter p[], void *d)
 static MunitResult test_l_confirms_when_selected(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(3, 0);
-  popup_handle_key('l');
   int ret = popup_handle_key('l');
   munit_assert_int(ret, ==, 0);
   munit_assert_int(popup_is_active(), ==, 0);
@@ -223,6 +227,23 @@ static MunitResult test_enter_selects_none(const MunitParameter p[], void *d) {
   popup_handle_key('j');
   int ret = popup_handle_key('\n');
   munit_assert_int(ret, ==, 0);
+  munit_assert_int(g_popup.selected[1], ==, 1);
+  int sel_count;
+  char **sel = popup_get_selected(&sel_count);
+  munit_assert_int(sel_count, ==, 1);
+  munit_assert_string_equal(sel[0], "item1");
+  popup_free_selected(sel, sel_count);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_tab_confirms_current(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  open_popup(3, 0);
+  popup_handle_key('j');
+  int ret = popup_handle_key('\t');
+  munit_assert_int(ret, ==, 0);
+  munit_assert_int(popup_is_active(), ==, 0);
   munit_assert_int(g_popup.selected[1], ==, 1);
   int sel_count;
   char **sel = popup_get_selected(&sel_count);
@@ -293,7 +314,6 @@ static MunitResult test_l_confirms_multi(const MunitParameter p[], void *d) {
 static MunitResult test_esc_cancels(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(3, 0);
-  popup_handle_key('l');
   int ret = popup_handle_key(27);
   munit_assert_int(ret, ==, 0);
   munit_assert_int(popup_is_active(), ==, 0);
@@ -308,7 +328,6 @@ static MunitResult test_get_selected_values(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(3, 0);
   popup_handle_key('j');
-  popup_handle_key('l');
   int sel_count;
   char **sel = popup_get_selected(&sel_count);
   munit_assert_int(sel_count, ==, 1);
@@ -332,6 +351,8 @@ static MunitResult test_drill_down_replaces(const MunitParameter p[], void *d) {
   munit_assert_int(g_popup.item_count, ==, 2);
   munit_assert_int(g_popup.cursor, ==, 0);
   munit_assert_int(g_popup.scroll, ==, 0);
+  munit_assert_int(g_popup.selected[0], ==, 1);
+  munit_assert_int(g_popup.selected[1], ==, 0);
   munit_assert_string_equal(g_popup.items[0].text, "new0");
   munit_assert_string_equal(g_popup.items[1].text, "new1");
   popup_close_data();
@@ -389,11 +410,12 @@ static MunitTest tests[] = {
   {"/ctrl_d_scroll", test_ctrl_d_scroll, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/scroll_down", test_scroll_down, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/scroll_up", test_scroll_up, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
-  {"/l_selects_non_multi", test_l_selects_non_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/l_confirms_non_multi", test_l_confirms_non_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/l_only_one_selected", test_l_only_one_selected, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
-  {"/h_deselects_non_multi", test_h_deselects_non_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/h_keeps_non_multi_selected", test_h_keeps_non_multi_selected, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/l_confirms_when_selected", test_l_confirms_when_selected, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/enter_selects_none", test_enter_selects_none, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/tab_confirms_current", test_tab_confirms_current, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/l_selects_multi", test_l_selects_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/h_deselects_multi", test_h_deselects_multi, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/multi_multiple", test_multi_multiple, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

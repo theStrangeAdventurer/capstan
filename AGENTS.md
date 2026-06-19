@@ -257,6 +257,7 @@ Feature specs:
 - [Embedded runtime assets](specs/embedded-runtime-assets.md)
 - [Focus modes](specs/focus-modes.md)
 - [Editor command](specs/editor-command.md)
+- [Popups](specs/popups.md)
 
 ## Conventions
 

@@ -122,12 +122,19 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    if (ch == '\t') {
+    if (mode_is_focus_toggle_key(ch)) {
       if (mode_get() == FOCUS_MESSAGES)
         visual_exit();
       mode_toggle();
       if (mode_get() == FOCUS_MESSAGES)
         visual_enter();
+      render_all();
+      continue;
+    }
+
+    if (ch == '\t') {
+      if (mode_get() == FOCUS_INPUT)
+        dispatch_tab();
       render_all();
       continue;
     }

@@ -573,6 +573,7 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
     case 'A':
       choice = 2;
       goto done;
+    case '\t':
     case '\n':
     case '\r':
       goto done;

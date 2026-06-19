@@ -45,12 +45,21 @@ static MunitResult test_toggle_back(const MunitParameter params[], void *data) {
     return MUNIT_OK;
 }
 
+static MunitResult test_focus_toggle_key(const MunitParameter params[], void *data) {
+    (void)params;
+    (void)data;
+    munit_assert_int(mode_is_focus_toggle_key(APP_KEY_SHIFT_TAB), ==, 1);
+    munit_assert_int(mode_is_focus_toggle_key('\t'), ==, 0);
+    return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/set_input", test_set_input, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/set_messages", test_set_messages, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/toggle", test_toggle, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/toggle_back", test_toggle_back, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/focus_toggle_key", test_focus_toggle_key, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}
 };
 

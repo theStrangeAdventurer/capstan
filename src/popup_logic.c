@@ -22,6 +22,14 @@ static void popup_win_cleanup(void) {
   }
 }
 
+static void popup_sync_single_selection(void) {
+  if (g_popup.multi || !g_popup.selected || g_popup.item_count <= 0)
+    return;
+
+  for (int i = 0; i < g_popup.item_count; i++)
+    g_popup.selected[i] = (i == g_popup.cursor);
+}
+
 void popup_open(PopupItem *items, int count, const char *title,
                 int max_visible, int multi) {
   popup_open_with_plugin(items, count, title, max_visible, multi, NULL, 0);
@@ -56,6 +64,7 @@ void popup_open_with_plugin(PopupItem *items, int count, const char *title,
     g_popup.items[i].value = my_strdup(items[i].value ? items[i].value : "");
     g_popup.selected[i] = 0;
   }
+  popup_sync_single_selection();
 }
 
 int popup_is_active(void) { return g_popup.active; }
@@ -84,6 +93,7 @@ void popup_drill_down(PopupItem *items, int count, const char *title) {
     g_popup.items[i].value = my_strdup(items[i].value ? items[i].value : "");
     g_popup.selected[i] = 0;
   }
+  popup_sync_single_selection();
   g_popup.title = title ? my_strdup(title) : my_strdup("");
 
   popup_win_cleanup();
@@ -111,7 +121,7 @@ int popup_handle_key(int ch) {
     break;
   case POPUP_KEY_LEFT:
   case 'h':
-    if (g_popup.selected[g_popup.cursor])
+    if (g_popup.multi && g_popup.selected[g_popup.cursor])
       g_popup.selected[g_popup.cursor] = 0;
     break;
   case POPUP_KEY_RIGHT:
@@ -157,6 +167,7 @@ int popup_handle_key(int ch) {
         g_popup.scroll = g_popup.cursor - g_popup.max_visible + 1;
     }
     break;
+  case '\t':
   case '\n':
   case '\r': {
     int any = 0;
@@ -178,6 +189,7 @@ int popup_handle_key(int ch) {
     g_popup.active = 0;
     return 0;
   }
+  popup_sync_single_selection();
   return 1;
 }
 
