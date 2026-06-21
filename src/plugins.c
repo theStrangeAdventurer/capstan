@@ -3,6 +3,7 @@
 #include "app_config.h"
 #include "embedded_assets.h"
 #include "http.h"
+#include "log.h"
 #include "permit.h"
 #include "popup.h"
 #include "utils.h"
@@ -160,6 +161,7 @@ void plugins_init(void) {
   agent_init(L);
   permit_init(L);
   tools_init(L);
+  log_init(L);
 
   lua_newtable(L);
   lua_pushcfunction(L, l_popup_info);

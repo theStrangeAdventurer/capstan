@@ -4,6 +4,27 @@ local M = {}
 
 M.provider = os.getenv("AI_PROVIDER") or "deepseek"
 
+local function runtime_log(category, message)
+    if _G.capstan and _G.capstan.log then
+        _G.capstan.log(category, message or "")
+    end
+end
+
+local function compact(value, limit)
+    local s = tostring(value or "")
+    s = s:gsub("%s+", " ")
+    limit = limit or 240
+    if #s > limit then
+        return s:sub(1, limit) .. "...<truncated>"
+    end
+    return s
+end
+
+local function raw_logging_enabled()
+    local v = os.getenv("CAPSTAN_LOG_RAW")
+    return v == "1" or v == "true" or v == "yes"
+end
+
 local function env_context_limit(...)
     for i = 1, select("#", ...) do
         local value = os.getenv(select(i, ...))
@@ -167,23 +188,30 @@ M.default_on_chunk = function(raw_event)
     local data = raw_event:match("^data: (.*)")
     if not data or data == "[DONE]" then return nil end
     local ok, event = pcall(json.decode, data)
-    if not ok then return nil end
+    if not ok then
+        runtime_log("stream", "invalid_json event=" .. compact(raw_event))
+        return nil
+    end
     if event.usage then
         return {type = "usage", usage = event.usage}
     end
     if not event.choices or not event.choices[1] then return nil end
-    local delta = event.choices[1].delta
+    local finish_reason = event.choices[1].finish_reason
+    local delta = event.choices[1].delta or {}
+    if finish_reason then
+        runtime_log("stream", "finish_reason=" .. tostring(finish_reason))
+    end
     if delta.reasoning_content and delta.reasoning_content ~= "" then
         return {type = "reasoning", content = delta.reasoning_content}
     end
     if delta.reasoning and delta.reasoning ~= "" then
         return {type = "reasoning", content = delta.reasoning}
     end
-    if delta.content then
-        return {type = "text", content = delta.content}
-    end
     if delta.tool_calls then
         return {type = "tool_calls", tool_calls = delta.tool_calls}
+    end
+    if delta.content and delta.content ~= "" then
+        return {type = "text", content = delta.content}
     end
     return nil
 end
@@ -197,9 +225,16 @@ M.stream = function(provider_name, on_result, initial_prompt_tokens)
     local prov = M.providers[provider_name]
     local on_chunk = prov.on_chunk or M.default_on_chunk
     local prompt_estimate = initial_prompt_tokens or 0
+    local event_count = 0
+    local raw_bytes = 0
+    local text_chunks = 0
+    local reasoning_chunks = 0
+    local tool_delta_chunks = 0
+    local usage_chunks = 0
 
     local function process_chunk(chunk)
         if chunk.type == "reasoning" then
+            reasoning_chunks = reasoning_chunks + 1
             accumulated_reasoning = accumulated_reasoning .. chunk.content
             if prov.context_limit and prov.context_limit > 0 then
                 local completion_estimate =
@@ -217,6 +252,7 @@ M.stream = function(provider_name, on_result, initial_prompt_tokens)
                 agent.set_thinking(true)
             end
         elseif chunk.type == "text" and chunk.content then
+            text_chunks = text_chunks + 1
             if reasoning_active then
                 reasoning_active = false
                 agent.set_thinking(false)
@@ -235,6 +271,7 @@ M.stream = function(provider_name, on_result, initial_prompt_tokens)
             end
             on_result({type = "text", content = chunk.content}, false)
         elseif chunk.type == "tool_calls" then
+            tool_delta_chunks = tool_delta_chunks + 1
             for _, tc in ipairs(chunk.tool_calls) do
                 local idx = tc.index or 0
                 if not tool_calls_accum[idx] then
@@ -249,8 +286,16 @@ M.stream = function(provider_name, on_result, initial_prompt_tokens)
                         tool_calls_accum[idx].arguments = tool_calls_accum[idx].arguments .. tc["function"].arguments
                     end
                 end
+                runtime_log("stream", string.format(
+                    "tool_delta index=%d id=%s name=%s args_bytes=%d",
+                    idx,
+                    compact(tool_calls_accum[idx].id, 64),
+                    compact(tool_calls_accum[idx].name, 80),
+                    #tool_calls_accum[idx].arguments
+                ))
             end
         elseif chunk.type == "usage" and chunk.usage then
+            usage_chunks = usage_chunks + 1
             agent.set_usage(
                 chunk.usage.prompt_tokens or 0,
                 chunk.usage.completion_tokens or 0,
@@ -285,8 +330,38 @@ M.stream = function(provider_name, on_result, initial_prompt_tokens)
                 if tc.id ~= "" and tc.name ~= "" and tc.arguments ~= "" then
                     tc.name = tc.name:match("^%s*(.-)%s*$")
                     table.insert(final_calls, tc)
+                    runtime_log("stream", string.format(
+                        "tool_final id=%s name=%s args=%s",
+                        compact(tc.id, 80),
+                        compact(tc.name, 80),
+                        compact(tc.arguments, 260)
+                    ))
+                else
+                    runtime_log("stream", string.format(
+                        "tool_incomplete id=%s name=%s args_bytes=%d",
+                        compact(tc.id, 80),
+                        compact(tc.name, 80),
+                        #(tc.arguments or "")
+                    ))
                 end
             end
+
+            if tool_delta_chunks > 0 and #final_calls == 0 then
+                runtime_log("stream", "tool_deltas_without_final_calls")
+            end
+
+            runtime_log("stream", string.format(
+                "done events=%d raw_bytes=%d text_chunks=%d reasoning_chunks=%d tool_delta_chunks=%d usage_chunks=%d text_bytes=%d reasoning_bytes=%d final_tool_calls=%d",
+                event_count,
+                raw_bytes,
+                text_chunks,
+                reasoning_chunks,
+                tool_delta_chunks,
+                usage_chunks,
+                #accumulated_text,
+                #accumulated_reasoning,
+                #final_calls
+            ))
 
             on_result({
                 text = accumulated_text,
@@ -295,12 +370,21 @@ M.stream = function(provider_name, on_result, initial_prompt_tokens)
             return
         end
 
+        raw_bytes = raw_bytes + #(raw or "")
+        if raw_logging_enabled() then
+            runtime_log("raw_sse", compact(raw, 1200))
+        end
+
         buf = buf .. raw
         while true do
             local sep = buf:find("\n\n", 1, true)
             if not sep then break end
             local event = buf:sub(1, sep - 1)
             buf = buf:sub(sep + 2)
+            event_count = event_count + 1
+            if raw_logging_enabled() then
+                runtime_log("sse_event", compact(event, 1200))
+            end
             local chunk = on_chunk(event)
             if chunk then process_chunk(chunk) end
         end
@@ -323,6 +407,17 @@ local function collect_tools()
         end
     end
     return tools
+end
+
+local function tool_names(tools)
+    local names = {}
+    for _, tool in ipairs(tools or {}) do
+        if tool["function"] and tool["function"].name then
+            table.insert(names, tool["function"].name)
+        end
+    end
+    table.sort(names)
+    return table.concat(names, ",")
 end
 
 local function call_plugin_tool(tool_name, args)
@@ -349,7 +444,12 @@ local function call_plugin_tool(tool_name, args)
     return "Unknown tool: " .. tool_name
 end
 
+local function tool_call_target(tool_name, args)
+    return args.command or args.path or args.url or args.uri or tool_name
+end
+
 local function process_tool_calls(current_msgs, combined_tools, tool_calls, assistant_text, continue_fn)
+    runtime_log("tools", string.format("received %d tool call(s)", #tool_calls))
     local openai_tool_calls = {}
     for _, tc in ipairs(tool_calls) do
         table.insert(openai_tool_calls, {
@@ -370,31 +470,36 @@ local function process_tool_calls(current_msgs, combined_tools, tool_calls, assi
         local ok = pcall(json.decode, tc.arguments)
         if ok then args = json.decode(tc.arguments) end
 
-        local target = args.command or args.path or tc.name
+        local target = tool_call_target(tc.name, args)
+        runtime_log("tool", string.format("call name=%s target=%s args=%s", tc.name, target, tc.arguments or ""))
         local perm = permit.check(tc.name, target)
+        runtime_log("permit", string.format("tool=%s target=%s decision=%s", tc.name, target, perm))
 
-        agent.append(string.format("\n[tool %s: %s] ", tc.name, target), "agent")
+        agent.append(string.format("\n⚙ %s: %s ", tc.name, target), "agent")
 
         local result_content
         if perm == "deny" then
             result_content = "Permission denied for " .. tc.name .. " " .. target
-            agent.append("— denied", "agent")
+            agent.append("— denied\n\n", "agent")
         elseif perm == "ask" then
             local decision = permit.prompt(tc.name, target)
+            runtime_log("permit", string.format("tool=%s target=%s prompt=%s", tc.name, target, decision))
             if decision == "deny" then
                 result_content = "User denied " .. tc.name .. " " .. target
-                agent.append("— denied by user", "agent")
+                agent.append("— denied by user\n\n", "agent")
             else
                 if decision == "always" then
                     permit.grant(tc.name, target, true)
                     permit.save()
                 end
                 result_content = call_plugin_tool(tc.name, args)
-                agent.append("— done", "agent")
+                runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tc.name, target, #(result_content or "")))
+                agent.append("— done\n\n", "agent")
             end
         else
             result_content = call_plugin_tool(tc.name, args)
-            agent.append("— done", "agent")
+            runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tc.name, target, #(result_content or "")))
+            agent.append("— done\n\n", "agent")
         end
 
         if result_content then
@@ -406,12 +511,14 @@ local function process_tool_calls(current_msgs, combined_tools, tool_calls, assi
         end
     end
 
+    runtime_log("tools", "continuing with tool results")
     continue_fn(current_msgs, combined_tools)
 end
 
 _G.on_messages = function(messages)
     local active = M.providers[M.provider]
     if not active then
+        runtime_log("provider", "unknown provider: " .. tostring(M.provider))
         popup.error("Provider", "Unknown provider: " .. M.provider)
         return
     end
@@ -428,6 +535,19 @@ _G.on_messages = function(messages)
     end
 
     local combined_tools = collect_tools()
+    runtime_log("agent", string.format("request provider=%s model=%s messages=%d tools=%d",
+        M.provider,
+        active.model or "",
+        #msgs,
+        #combined_tools
+    ))
+    runtime_log("agent", "tools=" .. tool_names(combined_tools))
+    if #msgs > 0 then
+        runtime_log("agent", string.format("last_message role=%s content=%s",
+            tostring(msgs[#msgs].role),
+            compact(msgs[#msgs].content, 300)
+        ))
+    end
 
     local function continue(current_msgs, tools)
         local function on_result(result, is_done)
@@ -440,6 +560,8 @@ _G.on_messages = function(messages)
 
             if result.tool_calls and #result.tool_calls > 0 then
                 process_tool_calls(current_msgs, tools, result.tool_calls, result.text, continue)
+            else
+                runtime_log("agent", "stream done without tool calls text=" .. compact(result.text, 500))
             end
         end
 
@@ -455,10 +577,16 @@ _G.on_messages = function(messages)
             model = active.model,
             messages = current_msgs,
             tools = #tools > 0 and tools or nil,
+            tool_choice = #tools > 0 and "auto" or nil,
             stream = true,
             stream_options = {include_usage = true}
         })
 
+        runtime_log("api", string.format("post_stream endpoint=%s messages=%d tools=%d",
+            active.endpoint or "",
+            #current_msgs,
+            #tools
+        ))
         http.post_stream(active.endpoint, body, {
             ["Content-Type"] = "application/json",
             ["Authorization"] = "Bearer " .. active.api_key

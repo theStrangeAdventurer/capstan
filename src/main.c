@@ -26,7 +26,8 @@ static int run_embedded_self_test(void) {
   load_embedded_plugins();
 
   const char *expected[] = {"/file",  "/write",  "/hi",    "/ip",
-                            "/post",  "/shell",  "/stream", "/fetch"};
+                            "/post",  "/shell",  "/stream", "/fetch",
+                            "/logs"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);

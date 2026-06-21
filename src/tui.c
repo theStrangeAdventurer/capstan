@@ -75,6 +75,17 @@ static int count_message_lines(const char *text, int width) {
   return lines;
 }
 
+static int line_contains(const char *start, const char *end, const char *needle) {
+  size_t needle_len = strlen(needle);
+  if (needle_len == 0)
+    return 1;
+  for (const char *p = start; p + needle_len <= end; p++) {
+    if (strncmp(p, needle, needle_len) == 0)
+      return 1;
+  }
+  return 0;
+}
+
 static int spinner_tick = 0;
 static int prev_loading = 0;
 
@@ -242,9 +253,27 @@ void render_all(void) {
       }
 
       if (global_line >= top_line && win_row < msg_h) {
+        int is_tool_status = !is_user && strncmp(p, "⚙", strlen("⚙")) == 0;
+        int tool_pair = 0;
+        if (is_tool_status) {
+          if (line_contains(p, line_end, "done"))
+            tool_pair = 2;
+          else if (line_contains(p, line_end, "denied"))
+            tool_pair = 6;
+          wattron(msg_win, A_ITALIC);
+          if (tool_pair)
+            wattron(msg_win, COLOR_PAIR(tool_pair));
+        }
+
         if (is_user)
           mvwhline(msg_win, win_row, 0, ' ', inner_w);
         mvwaddnstr(msg_win, win_row, MSG_PAD_H, p, line_end - p);
+
+        if (is_tool_status) {
+          if (tool_pair)
+            wattroff(msg_win, COLOR_PAIR(tool_pair));
+          wattroff(msg_win, A_ITALIC);
+        }
 
         if (visual_is_active() && global_line >= sel_sl &&
             global_line <= sel_el) {

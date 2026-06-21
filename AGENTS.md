@@ -259,6 +259,7 @@ Feature specs:
 - [Editor command](specs/editor-command.md)
 - [Popups](specs/popups.md)
 - [Fetch plugin](specs/fetch-plugin.md)
+- [Runtime logs](specs/runtime-logs.md)
 
 ## Conventions
 

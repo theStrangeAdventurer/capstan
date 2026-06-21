@@ -341,15 +341,18 @@ int http_poll(lua_State *L) {
     lua_pushboolean(L, 1);
 
     int nargs = 2;
+    int has_error = 0;
     if (curl_rc != CURLE_OK) {
       nargs = 3;
+      has_error = 1;
       lua_pushfstring(L, "Connection error: %s", curl_easy_strerror(curl_rc));
     } else if (http_status > 0 && (http_status < 200 || http_status >= 300)) {
       nargs = 3;
+      has_error = 1;
       lua_pushfstring(L, "HTTP %d", (int)http_status);
     }
 
-    if (err_body) {
+    if (has_error && err_body) {
       nargs = 4;
       lua_pushstring(L, err_body);
     }

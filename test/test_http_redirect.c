@@ -11,6 +11,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+static int stream_done_calls;
+static int stream_last_argc;
+static int stream_last_is_done;
+static int stream_last_has_err;
+static int stream_last_has_body;
+static int stream_seen_data;
+
 void render_all(void) {}
 
 int napms(int ms) {
@@ -117,6 +124,74 @@ static pid_t start_redirect_server(int *port_out) {
   return pid;
 }
 
+static pid_t start_stream_server(int *port_out) {
+  int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_fd < 0)
+    return -1;
+
+  int yes = 1;
+  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  addr.sin_port = htons(0);
+  if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+    close(server_fd);
+    return -1;
+  }
+  if (listen(server_fd, 1) != 0) {
+    close(server_fd);
+    return -1;
+  }
+
+  socklen_t addr_len = sizeof(addr);
+  if (getsockname(server_fd, (struct sockaddr *)&addr, &addr_len) != 0) {
+    close(server_fd);
+    return -1;
+  }
+  *port_out = ntohs(addr.sin_port);
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(server_fd);
+    return -1;
+  }
+  if (pid == 0) {
+    int client = accept_one(server_fd);
+    if (client >= 0) {
+      read_request(client);
+      write_all(client,
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/event-stream\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "data: hello\n\n");
+      close(client);
+    }
+    close(server_fd);
+    _exit(0);
+  }
+
+  close(server_fd);
+  return pid;
+}
+
+static int stream_capture_callback(lua_State *L) {
+  int argc = lua_gettop(L);
+  if (argc >= 1 && lua_isstring(L, 1))
+    stream_seen_data = 1;
+  if (argc >= 2 && lua_toboolean(L, 2)) {
+    stream_done_calls++;
+    stream_last_argc = argc;
+    stream_last_is_done = 1;
+    stream_last_has_err = argc >= 3 && !lua_isnil(L, 3);
+    stream_last_has_body = argc >= 4 && !lua_isnil(L, 4);
+  }
+  return 0;
+}
+
 static MunitResult test_http_get_follows_redirect(const MunitParameter params[],
                                                   void *data) {
   (void)params;
@@ -155,8 +230,68 @@ static MunitResult test_http_get_follows_redirect(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_post_stream_success_done_has_no_error_body(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  int port = 0;
+  pid_t server_pid = start_stream_server(&port);
+  if (server_pid < 0)
+    return MUNIT_SKIP;
+
+  stream_done_calls = 0;
+  stream_last_argc = 0;
+  stream_last_is_done = 0;
+  stream_last_has_err = 0;
+  stream_last_has_body = 0;
+  stream_seen_data = 0;
+
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  http_init(L);
+
+  char url[256];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/stream", port);
+
+  lua_getglobal(L, "http");
+  lua_getfield(L, -1, "post_stream");
+  lua_pushstring(L, url);
+  lua_pushstring(L, "{}");
+  lua_newtable(L);
+  lua_pushcfunction(L, stream_capture_callback);
+  int rc = lua_pcall(L, 4, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 2);
+
+  for (int i = 0; i < 100 && stream_done_calls == 0; i++) {
+    http_poll(L);
+    usleep(10000);
+  }
+
+  munit_assert_int(stream_seen_data, ==, 1);
+  munit_assert_int(stream_done_calls, ==, 1);
+  munit_assert_int(stream_last_is_done, ==, 1);
+  munit_assert_int(stream_last_argc, ==, 2);
+  munit_assert_int(stream_last_has_err, ==, 0);
+  munit_assert_int(stream_last_has_body, ==, 0);
+
+  http_cleanup();
+  lua_close(L);
+
+  int status = 0;
+  waitpid(server_pid, &status, 0);
+  munit_assert_true(WIFEXITED(status));
+  munit_assert_int(WEXITSTATUS(status), ==, 0);
+
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/get_follows_redirect", test_http_get_follows_redirect, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/post_stream_success_done_has_no_error_body",
+     test_post_stream_success_done_has_no_error_body, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

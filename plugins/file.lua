@@ -41,11 +41,35 @@ function plugin.handler(ctx)
 		return "Usage: /file <filename...>"
 	end
 
+	local function resolve_filename(filename)
+		local file, err = io.open(filename, "r")
+		if file then
+			return filename, file, nil
+		end
+
+		if filename:match("/?README$") then
+			local candidates = {
+				filename .. ".md",
+				filename .. ".txt",
+				filename .. ".markdown",
+				filename:match("^(.*)/README$") and filename:gsub("README$", "readme.md") or "readme.md",
+			}
+			for _, candidate in ipairs(candidates) do
+				file = io.open(candidate, "r")
+				if file then
+					return candidate, file, nil
+				end
+			end
+		end
+
+		return filename, nil, err
+	end
+
 	local ui_parts = {}
 	local llm_parts = {}
 
 	for _i, filename in ipairs(filenames) do
-		local file, err = io.open(filename, "r")
+		local resolved_filename, file, err = resolve_filename(filename)
 		if not file then
 			local ls = io.popen('ls -1p "' .. filename .. '" 2>/dev/null')
 			if ls then
@@ -65,10 +89,10 @@ function plugin.handler(ctx)
 		else
 			local content = file:read("*a")
 			file:close()
-			table.insert(ui_parts, "📄 " .. filename)
+			table.insert(ui_parts, "📄 " .. resolved_filename)
 			table.insert(llm_parts, string.format(
 				"📄 %s\n─────────────\n%s\n─────────────",
-				filename, content
+				resolved_filename, content
 			))
 		end
 	end
