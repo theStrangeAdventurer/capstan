@@ -43,6 +43,18 @@ local function normalize_url(url)
 	return url
 end
 
+local DEFAULT_USER_AGENT = "Capstan/1.0 (+https://github.com/theStrangeAdventurer/tui-agent)"
+
+local function fetch_headers()
+	local user_agent = os.getenv("CAPSTAN_PLUGIN_FETCH_UA")
+	if not user_agent or user_agent == "" then
+		user_agent = DEFAULT_USER_AGENT
+	end
+	return {
+		["User-Agent"] = user_agent
+	}
+end
+
 function plugin.handler(ctx)
 	local input_url = get_url(ctx)
 	if not input_url or input_url == "" then
@@ -54,7 +66,7 @@ function plugin.handler(ctx)
 		return ctx:replace("Usage: /fetch <http-or-https-url>")
 	end
 
-	local status, body = http.get(url)
+	local status, body = http.get(url, fetch_headers())
 	body = body or ""
 
 	local llm_value = string.format("URL: %s\nStatus: %d\n\n%s", url, status, body)

@@ -45,6 +45,27 @@ static void call_handler(lua_State *L, const char *path, const char *content) {
   munit_assert_int(rc, ==, LUA_OK);
 }
 
+static void call_handler_tool(lua_State *L, const char *path, const char *content) {
+  lua_getfield(L, -1, "handler");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_setfield(L, -2, "args");
+
+  lua_newtable(L);
+  lua_pushstring(L, path);
+  lua_setfield(L, -2, "path");
+  lua_pushstring(L, content);
+  lua_setfield(L, -2, "content");
+  lua_setfield(L, -2, "tool_args");
+
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
 static void set_capstan_workdir(lua_State *L, const char *path) {
   lua_newtable(L);
   lua_pushstring(L, path);
@@ -159,11 +180,139 @@ static MunitResult test_relative_path_prefers_capstan_workdir(
   return MUNIT_OK;
 }
 
+static MunitResult test_creates_parent_directories(const MunitParameter params[],
+                                                  void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "file-write-nested");
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_write_plugin(L);
+  call_handler(L, "nested/deep/file.txt", "nested body");
+
+  char expected[4096];
+  snprintf(expected, sizeof(expected), "%s/nested/deep/file.txt", workdir);
+
+  const char *ui = lua_tostring(L, -2);
+  munit_assert_not_null(ui);
+  munit_assert_true(strstr(ui, "Created ") != NULL);
+  munit_assert_true(strstr(ui, expected) != NULL);
+
+  FILE *f = fopen(expected, "r");
+  munit_assert_not_null(f);
+  char buf[64];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+  munit_assert_string_equal(buf, "nested body");
+
+  lua_close(L);
+  unlink(expected);
+  char nested_deep[4096];
+  char nested[4096];
+  snprintf(nested_deep, sizeof(nested_deep), "%s/nested/deep", workdir);
+  snprintf(nested, sizeof(nested), "%s/nested", workdir);
+  rmdir(nested_deep);
+  rmdir(nested);
+  rmdir(workdir);
+
+  return MUNIT_OK;
+}
+
+static MunitResult test_preserves_existing_utf8_bom(const MunitParameter params[],
+                                                    void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "file-write-bom");
+
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/existing.txt", workdir);
+  FILE *seed = fopen(path, "wb");
+  munit_assert_not_null(seed);
+  const unsigned char bom[] = {0xef, 0xbb, 0xbf};
+  munit_assert_size(fwrite(bom, 1, sizeof(bom), seed), ==, sizeof(bom));
+  munit_assert_size(fwrite("old", 1, 3, seed), ==, 3);
+  fclose(seed);
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_write_plugin(L);
+  call_handler(L, "existing.txt", "new");
+
+  FILE *f = fopen(path, "rb");
+  munit_assert_not_null(f);
+  unsigned char buf[16];
+  size_t n = fread(buf, 1, sizeof(buf), f);
+  fclose(f);
+  munit_assert_size(n, ==, 6);
+  munit_assert_uchar(buf[0], ==, 0xef);
+  munit_assert_uchar(buf[1], ==, 0xbb);
+  munit_assert_uchar(buf[2], ==, 0xbf);
+  munit_assert_memory_equal(3, buf + 3, "new");
+
+  const char *ui = lua_tostring(L, -2);
+  munit_assert_not_null(ui);
+  munit_assert_true(strstr(ui, "Wrote ") != NULL);
+  munit_assert_true(strstr(ui, "UTF-8 BOM") != NULL);
+
+  lua_close(L);
+  unlink(path);
+  rmdir(workdir);
+
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_args_preserve_multiline_content(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "file-write-tool");
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_write_plugin(L);
+  call_handler_tool(L, "tool.txt", "one two\nthree");
+
+  char expected[4096];
+  snprintf(expected, sizeof(expected), "%s/tool.txt", workdir);
+  FILE *f = fopen(expected, "r");
+  munit_assert_not_null(f);
+  char buf[64];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+  munit_assert_string_equal(buf, "one two\nthree");
+
+  const char *ui = lua_tostring(L, -2);
+  munit_assert_not_null(ui);
+  munit_assert_true(strstr(ui, "13 bytes, 2 lines") != NULL);
+
+  lua_close(L);
+  unlink(expected);
+  rmdir(workdir);
+
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/relative_path_uses_launch_pwd", test_relative_path_uses_launch_pwd, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/relative_path_prefers_capstan_workdir",
      test_relative_path_prefers_capstan_workdir, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/creates_parent_directories", test_creates_parent_directories, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/preserves_existing_utf8_bom", test_preserves_existing_utf8_bom, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_args_preserve_multiline_content",
+     test_tool_args_preserve_multiline_content, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

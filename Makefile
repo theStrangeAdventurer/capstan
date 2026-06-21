@@ -15,7 +15,8 @@ LDFLAGS = $(LUA_DIR)/src/liblua.a $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DI
 TEST_CFLAGS = -Iinclude -I$(MUNIT_DIR) -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
 TEST_SRCS = src/input.c src/linemap.c src/mode.c src/permit_prompt.c src/popup_logic.c src/scroll.c src/usage.c src/utils.c src/visual.c test/test_main.c test/test_input.c test/test_linemap.c test/test_mode.c test/test_permit_prompt.c test/test_popup.c test/test_scroll.c test/test_usage.c test/test_utils.c test/test_visual.c vendor/munit/munit.c
 
-EMBEDDED_ASSETS = ai/providers.lua ai/system_prompt.txt vendor/rxi/json.lua $(wildcard plugins/*.lua)
+CORE_PLUGIN_ASSETS = plugins/file.lua plugins/file_write.lua plugins/shell.lua plugins/fetch.lua plugins/logs.lua
+EMBEDDED_ASSETS = ai/providers.lua ai/system_prompt.txt vendor/rxi/json.lua $(CORE_PLUGIN_ASSETS)
 EMBEDDED_SRCS = build/embedded_assets.c
 SRCS = $(wildcard src/*.c) $(EMBEDDED_SRCS)
 

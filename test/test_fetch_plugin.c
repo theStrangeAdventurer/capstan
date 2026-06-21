@@ -6,17 +6,39 @@
 
 static int mock_status = 200;
 static const char *mock_body = "ok";
+static const char *mock_fetch_ua = NULL;
 static char last_url[512];
+static char last_user_agent[512];
 static int http_get_calls = 0;
 
 static int l_mock_http_get(lua_State *L) {
   const char *url = luaL_checkstring(L, 1);
   strncpy(last_url, url, sizeof(last_url) - 1);
   last_url[sizeof(last_url) - 1] = '\0';
+  last_user_agent[0] = '\0';
+  if (lua_istable(L, 2)) {
+    lua_getfield(L, 2, "User-Agent");
+    if (lua_isstring(L, -1)) {
+      const char *user_agent = lua_tostring(L, -1);
+      strncpy(last_user_agent, user_agent, sizeof(last_user_agent) - 1);
+      last_user_agent[sizeof(last_user_agent) - 1] = '\0';
+    }
+    lua_pop(L, 1);
+  }
   http_get_calls++;
   lua_pushinteger(L, mock_status);
   lua_pushstring(L, mock_body);
   return 2;
+}
+
+static int l_mock_getenv(lua_State *L) {
+  const char *name = luaL_checkstring(L, 1);
+  if (strcmp(name, "CAPSTAN_PLUGIN_FETCH_UA") == 0 && mock_fetch_ua) {
+    lua_pushstring(L, mock_fetch_ua);
+    return 1;
+  }
+  lua_pushnil(L);
+  return 1;
 }
 
 static int l_ctx_replace(lua_State *L) {
@@ -36,13 +58,20 @@ static lua_State *new_state(void) {
   lua_setfield(L, -2, "get");
   lua_setglobal(L, "http");
 
+  lua_getglobal(L, "os");
+  lua_pushcfunction(L, l_mock_getenv);
+  lua_setfield(L, -2, "getenv");
+  lua_pop(L, 1);
+
   return L;
 }
 
 static void reset_mock(void) {
   mock_status = 200;
   mock_body = "ok";
+  mock_fetch_ua = NULL;
   last_url[0] = '\0';
+  last_user_agent[0] = '\0';
   http_get_calls = 0;
 }
 
@@ -159,6 +188,9 @@ static MunitResult test_fetch_success(const MunitParameter params[], void *data)
   call_handler(L, "https://example.com/data", NULL);
 
   munit_assert_string_equal(last_url, "https://example.com/data");
+  munit_assert_string_equal(
+      last_user_agent,
+      "Capstan/1.0 (+https://github.com/theStrangeAdventurer/tui-agent)");
   munit_assert_string_equal(lua_tostring(L, -2),
                             "Fetched https://example.com/data (HTTP 200, 5 bytes)");
   const char *llm = lua_tostring(L, -1);
@@ -166,6 +198,23 @@ static MunitResult test_fetch_success(const MunitParameter params[], void *data)
   munit_assert_true(strstr(llm, "URL: https://example.com/data") != NULL);
   munit_assert_true(strstr(llm, "Status: 200") != NULL);
   munit_assert_true(strstr(llm, "hello") != NULL);
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_fetch_user_agent_env_override(const MunitParameter params[],
+                                                      void *data) {
+  (void)params;
+  (void)data;
+  reset_mock();
+  mock_fetch_ua = "CustomFetcher/7.2";
+  lua_State *L = new_state();
+  load_fetch_plugin(L);
+
+  call_handler(L, "https://example.com/data", NULL);
+
+  munit_assert_string_equal(last_user_agent, "CustomFetcher/7.2");
 
   lua_close(L);
   return MUNIT_OK;
@@ -224,6 +273,8 @@ static MunitTest tests[] = {
     {"/rejects_non_http_url", test_rejects_non_http_url, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/success", test_fetch_success, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/user_agent_env_override", test_fetch_user_agent_env_override, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/adds_https_when_scheme_missing", test_adds_https_when_scheme_missing, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_args_http_error", test_tool_args_and_http_error, NULL, NULL,
