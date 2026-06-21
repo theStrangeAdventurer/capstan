@@ -66,13 +66,18 @@ static MunitResult test_loads_skill_md_and_resource_manifest(
   snprintf(file_skill, sizeof(file_skill), "%s/debug.md", skills_dir);
   write_file(file_skill, "Debug instructions");
 
-  char *prompt = skills_build_prompt(skills_dir, NULL);
+  char *prompt = skills_build_prompt(skills_dir, NULL, NULL);
   munit_assert_not_null(prompt);
   munit_assert_true(strstr(prompt, "## Skill: code-review") != NULL);
   munit_assert_true(strstr(prompt, "Name: review-helper") != NULL);
   munit_assert_true(strstr(prompt, "Description: Use for focused code review.") !=
                     NULL);
   munit_assert_true(strstr(prompt, "SKILL.md") != NULL);
+  munit_assert_true(strstr(prompt, "Mandatory skill use rule") != NULL);
+  munit_assert_true(strstr(prompt, "must read that skill's `Skill file` path "
+                                  "completely") != NULL);
+  munit_assert_true(strstr(prompt, "Do not apply a skill from this index alone") !=
+                    NULL);
   munit_assert_true(strstr(prompt, "Review instructions") == NULL);
   munit_assert_true(strstr(prompt, "Resources:") == NULL);
   munit_assert_true(strstr(prompt, "- references/checklist.md") == NULL);
@@ -81,7 +86,7 @@ static MunitResult test_loads_skill_md_and_resource_manifest(
   munit_assert_true(strstr(prompt, "Debug instructions") == NULL);
   free(prompt);
 
-  char *summary = skills_build_summary(skills_dir, NULL);
+  char *summary = skills_build_summary(skills_dir, NULL, NULL);
   munit_assert_not_null(summary);
   munit_assert_true(strstr(summary, "Loaded skills: 1") != NULL);
   munit_assert_true(strstr(summary, "- code-review [project]") != NULL);
@@ -141,7 +146,7 @@ static MunitResult test_project_skill_overrides_user_skill(
   write_file(project_skill,
              "---\nname: project-test\ndescription: project copy\n---\nbody");
 
-  char *prompt = skills_build_prompt(project_dir, user_dir);
+  char *prompt = skills_build_prompt(project_dir, user_dir, NULL);
   munit_assert_not_null(prompt);
   munit_assert_true(strstr(prompt, "Name: project-test") != NULL);
   munit_assert_true(strstr(prompt, "project copy") != NULL);
@@ -160,12 +165,84 @@ static MunitResult test_project_skill_overrides_user_skill(
   return MUNIT_OK;
 }
 
+static MunitResult test_common_skill_loaded_and_overridden(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char root[256];
+  snprintf(root, sizeof(root), "/tmp/capstan-skills-common-%ld",
+           (long)getpid());
+  rmdir(root);
+  make_dir(root);
+
+  char common_dir[256];
+  char user_dir[256];
+  char project_dir[256];
+  snprintf(common_dir, sizeof(common_dir), "%s/common", root);
+  snprintf(user_dir, sizeof(user_dir), "%s/user", root);
+  snprintf(project_dir, sizeof(project_dir), "%s/project", root);
+  make_dir(common_dir);
+  make_dir(user_dir);
+  make_dir(project_dir);
+
+  char common_shared_dir[256];
+  char user_shared_dir[256];
+  char common_only_dir[256];
+  snprintf(common_shared_dir, sizeof(common_shared_dir), "%s/shared",
+           common_dir);
+  snprintf(user_shared_dir, sizeof(user_shared_dir), "%s/shared", user_dir);
+  snprintf(common_only_dir, sizeof(common_only_dir), "%s/common-only",
+           common_dir);
+  make_dir(common_shared_dir);
+  make_dir(user_shared_dir);
+  make_dir(common_only_dir);
+
+  char common_shared_skill[256];
+  char user_shared_skill[256];
+  char common_only_skill[256];
+  snprintf(common_shared_skill, sizeof(common_shared_skill), "%s/SKILL.md",
+           common_shared_dir);
+  snprintf(user_shared_skill, sizeof(user_shared_skill), "%s/SKILL.md",
+           user_shared_dir);
+  snprintf(common_only_skill, sizeof(common_only_skill), "%s/SKILL.md",
+           common_only_dir);
+  write_file(common_shared_skill,
+             "---\nname: common-shared\ndescription: common copy\n---\nbody");
+  write_file(user_shared_skill,
+             "---\nname: user-shared\ndescription: user copy\n---\nbody");
+  write_file(common_only_skill,
+             "---\nname: common-only\ndescription: common only\n---\nbody");
+
+  char *summary = skills_build_summary(project_dir, user_dir, common_dir);
+  munit_assert_not_null(summary);
+  munit_assert_true(strstr(summary, "Loaded skills: 2") != NULL);
+  munit_assert_true(strstr(summary, "- shared [user]") != NULL);
+  munit_assert_true(strstr(summary, "Name: user-shared") != NULL);
+  munit_assert_true(strstr(summary, "common copy") == NULL);
+  munit_assert_true(strstr(summary, "- common-only [common]") != NULL);
+  free(summary);
+
+  unlink(common_shared_skill);
+  unlink(user_shared_skill);
+  unlink(common_only_skill);
+  rmdir(common_shared_dir);
+  rmdir(user_shared_dir);
+  rmdir(common_only_dir);
+  rmdir(common_dir);
+  rmdir(user_dir);
+  rmdir(project_dir);
+  rmdir(root);
+  return MUNIT_OK;
+}
+
 static MunitResult test_empty_when_no_skills(const MunitParameter params[],
                                              void *data) {
   (void)params;
   (void)data;
   char *prompt = skills_build_prompt("/tmp/capstan-missing-project-skills",
-                                     "/tmp/capstan-missing-user-skills");
+                                     "/tmp/capstan-missing-user-skills",
+                                     "/tmp/capstan-missing-common-skills");
   munit_assert_not_null(prompt);
   munit_assert_string_equal(prompt, "");
   free(prompt);
@@ -196,7 +273,7 @@ static MunitResult test_ignores_directory_without_skill_md(
   snprintf(readme, sizeof(readme), "%s/README.md", readme_skill_dir);
   write_file(readme, "README should be ignored");
 
-  char *prompt = skills_build_prompt(skills_dir, NULL);
+  char *prompt = skills_build_prompt(skills_dir, NULL, NULL);
   munit_assert_not_null(prompt);
   munit_assert_string_equal(prompt, "");
   free(prompt);
@@ -215,6 +292,9 @@ static MunitTest tests[] = {
     {"/project_skill_overrides_user_skill",
      test_project_skill_overrides_user_skill, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/common_skill_loaded_and_overridden",
+     test_common_skill_loaded_and_overridden, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/empty_when_no_skills", test_empty_when_no_skills, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/ignores_directory_without_skill_md",
