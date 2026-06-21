@@ -6,9 +6,35 @@ plugin.description = "Read file contents"
 plugin.command = "/file"
 plugin.async = false
 
+local function is_absolute(path)
+	return path:sub(1, 1) == "/"
+end
+
+local function configured_workdir()
+	if _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir:sub(1, 1) == "/" then
+		return _G.capstan.workdir
+	end
+	local env = os.getenv("CAPSTAN_WORKDIR") or os.getenv("CAPSTAN_WORKSPACE")
+	if env and env:sub(1, 1) == "/" then
+		return env
+	end
+	local pwd = os.getenv("PWD")
+	if pwd and pwd:sub(1, 1) == "/" then
+		return pwd
+	end
+	return "."
+end
+
+local function resolve_path(path)
+	if is_absolute(path) then
+		return path
+	end
+	return configured_workdir():gsub("/+$", "") .. "/" .. path
+end
+
 plugin.autocomplete = {
   fetch = function(args)
-    local dir = args[1] or "."
+    local dir = resolve_path(args[1] or ".")
     dir = dir:gsub("/+$", "")
     if dir == "" then dir = "." end
     local items = {}
@@ -42,17 +68,19 @@ function plugin.handler(ctx)
 	end
 
 	local function resolve_filename(filename)
-		local file, err = io.open(filename, "r")
+		local resolved = resolve_path(filename)
+		local file, err = io.open(resolved, "r")
 		if file then
-			return filename, file, nil
+			return resolved, file, nil
 		end
 
 		if filename:match("/?README$") then
+			local readme_base = resolve_path(filename)
 			local candidates = {
-				filename .. ".md",
-				filename .. ".txt",
-				filename .. ".markdown",
-				filename:match("^(.*)/README$") and filename:gsub("README$", "readme.md") or "readme.md",
+				readme_base .. ".md",
+				readme_base .. ".txt",
+				readme_base .. ".markdown",
+				readme_base:match("^(.*)/README$") and readme_base:gsub("README$", "readme.md") or resolve_path("readme.md"),
 			}
 			for _, candidate in ipairs(candidates) do
 				file = io.open(candidate, "r")
@@ -71,20 +99,22 @@ function plugin.handler(ctx)
 	for _i, filename in ipairs(filenames) do
 		local resolved_filename, file, err = resolve_filename(filename)
 		if not file then
-			local ls = io.popen('ls -1p "' .. filename .. '" 2>/dev/null')
+			local resolved = resolve_path(filename)
+			local ls = io.popen('ls -1p "' .. resolved .. '" 2>/dev/null')
 			if ls then
 				local contents = ls:read("*a")
 				ls:close()
 				if contents ~= "" then
-					table.insert(ui_parts, "📁 " .. filename)
-					table.insert(llm_parts, "📁 " .. filename .. "\n" .. contents)
+					table.insert(ui_parts, "📁 " .. resolved)
+					table.insert(llm_parts, "📁 " .. resolved .. "\n" .. contents)
 				else
-					table.insert(ui_parts, "❌ " .. filename .. " (" .. err .. ")")
-					table.insert(llm_parts, "❌ Cannot open " .. filename .. ": " .. err)
+					table.insert(ui_parts, "❌ " .. resolved .. " (" .. err .. ")")
+					table.insert(llm_parts, "❌ Cannot open " .. resolved .. ": " .. err)
 				end
 			else
-				table.insert(ui_parts, "❌ " .. filename .. " (" .. err .. ")")
-				table.insert(llm_parts, "❌ Cannot open " .. filename .. ": " .. err)
+				local resolved = resolve_path(filename)
+				table.insert(ui_parts, "❌ " .. resolved .. " (" .. err .. ")")
+				table.insert(llm_parts, "❌ Cannot open " .. resolved .. ": " .. err)
 			end
 		else
 			local content = file:read("*a")

@@ -57,6 +57,8 @@ static int run_embedded_self_test(void) {
 }
 
 int main(int argc, char *argv[]) {
+  app_workdir_init(argv[0]);
+
   if (argc == 2 && strcmp(argv[1], "--self-test-embedded") == 0) {
     setlocale(LC_ALL, "");
     return run_embedded_self_test();

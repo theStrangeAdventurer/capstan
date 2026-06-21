@@ -2,7 +2,10 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
+#include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static int l_ctx_replace(lua_State *L) {
   const char *ui_val = luaL_checkstring(L, 2);
@@ -22,6 +25,13 @@ static void load_file_plugin(lua_State *L) {
   int rc = luaL_dofile(L, "plugins/file.lua");
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_true(lua_istable(L, -1));
+}
+
+static void set_capstan_workdir(lua_State *L, const char *path) {
+  lua_newtable(L);
+  lua_pushstring(L, path);
+  lua_setfield(L, -2, "workdir");
+  lua_setglobal(L, "capstan");
 }
 
 static void call_handler(lua_State *L, const char *path) {
@@ -60,9 +70,49 @@ static MunitResult test_readme_fallback_reads_readme_md(
   return MUNIT_OK;
 }
 
+static MunitResult test_relative_path_uses_capstan_workdir(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char dir[4096];
+  snprintf(dir, sizeof(dir), "/tmp/capstan-file-read-%ld", (long)getpid());
+  rmdir(dir);
+  munit_assert_int(mkdir(dir, 0700), ==, 0);
+
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/NOTE.md", dir);
+  FILE *f = fopen(path, "w");
+  munit_assert_not_null(f);
+  fputs("workspace note", f);
+  fclose(f);
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, dir);
+  load_file_plugin(L);
+
+  call_handler(L, "NOTE.md");
+
+  const char *ui = lua_tostring(L, -2);
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(ui);
+  munit_assert_not_null(llm);
+  munit_assert_true(strstr(ui, path) != NULL);
+  munit_assert_true(strstr(llm, path) != NULL);
+  munit_assert_true(strstr(llm, "workspace note") != NULL);
+
+  lua_close(L);
+  unlink(path);
+  rmdir(dir);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/readme_fallback_reads_readme_md", test_readme_fallback_reads_readme_md,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/relative_path_uses_capstan_workdir",
+     test_relative_path_uses_capstan_workdir, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite file_plugin_suite = {"/file_plugin", tests, NULL, 1,

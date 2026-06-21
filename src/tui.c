@@ -6,6 +6,7 @@
 #include "input.h"
 #include "linemap.h"
 #include "mode.h"
+#include "permit_prompt.h"
 #include "popup.h"
 #include "scroll.h"
 #include "utils.h"
@@ -563,7 +564,7 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
 
   mvwaddstr(win, 4, 2, "[Y]es   [N]o   [A]lways allow");
 
-  int choice = 0;
+  int choice = PERMIT_CHOICE_YES;
   const char *labels[] = {"Yes", "No", "Always"};
   int positions[] = {2, 13, 24};
 
@@ -581,35 +582,8 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
     doupdate();
 
     int ch = wgetch(win);
-    switch (ch) {
-    case KEY_LEFT:
-      if (choice > 0)
-        choice--;
-      break;
-    case KEY_RIGHT:
-      if (choice < 2)
-        choice++;
-      break;
-    case 'y':
-    case 'Y':
-      choice = 0;
+    if (permit_prompt_handle_key(ch, &choice) == PERMIT_PROMPT_DONE)
       goto done;
-    case 'n':
-    case 'N':
-      choice = 1;
-      goto done;
-    case 'a':
-    case 'A':
-      choice = 2;
-      goto done;
-    case '\t':
-    case '\n':
-    case '\r':
-      goto done;
-    case 27:
-      choice = 1;
-      goto done;
-    }
   }
 
 done:
@@ -617,12 +591,5 @@ done:
   wnoutrefresh(win);
   delwin(win);
 
-  switch (choice) {
-  case 0:
-    return "allow";
-  case 2:
-    return "always";
-  default:
-    return "deny";
-  }
+  return permit_prompt_result(choice);
 }

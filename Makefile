@@ -13,7 +13,7 @@ CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/in
 LDFLAGS = $(LUA_DIR)/src/liblua.a $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DIR)/lib/libtinfow.a -lm  -lcurl
 
 TEST_CFLAGS = -Iinclude -I$(MUNIT_DIR) -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
-TEST_SRCS = src/input.c src/linemap.c src/mode.c src/popup_logic.c src/scroll.c src/usage.c src/utils.c src/visual.c test/test_main.c test/test_input.c test/test_linemap.c test/test_mode.c test/test_popup.c test/test_scroll.c test/test_usage.c test/test_utils.c test/test_visual.c vendor/munit/munit.c
+TEST_SRCS = src/input.c src/linemap.c src/mode.c src/permit_prompt.c src/popup_logic.c src/scroll.c src/usage.c src/utils.c src/visual.c test/test_main.c test/test_input.c test/test_linemap.c test/test_mode.c test/test_permit_prompt.c test/test_popup.c test/test_scroll.c test/test_usage.c test/test_utils.c test/test_visual.c vendor/munit/munit.c
 
 EMBEDDED_ASSETS = ai/providers.lua ai/system_prompt.txt vendor/rxi/json.lua $(wildcard plugins/*.lua)
 EMBEDDED_SRCS = build/embedded_assets.c
@@ -45,7 +45,7 @@ clean:
 	rm -rf build
 
 HTTP_LUA_FLAGS = -Iinclude -I$(LUA_DIR)/src -I$(MUNIT_DIR) -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
-HTTP_LUA_SRCS = src/http.c test/test_http_stack.c test/test_fetch_plugin.c test/test_file_plugin.c test/test_http_redirect.c test/test_logs_plugin.c test/test_provider_tools.c test/test_main_http_stack.c vendor/munit/munit.c
+HTTP_LUA_SRCS = src/http.c test/test_http_stack.c test/test_fetch_plugin.c test/test_file_plugin.c test/test_file_write_plugin.c test/test_http_redirect.c test/test_logs_plugin.c test/test_provider_tools.c test/test_main_http_stack.c vendor/munit/munit.c
 HTTP_LUA_TARGET = build/test_http_stack
 
 test-http-lua: $(HTTP_LUA_TARGET)

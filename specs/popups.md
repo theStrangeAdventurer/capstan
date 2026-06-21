@@ -17,3 +17,8 @@ row is selected as a fallback.
 
 `Enter`, `Tab`, and `l` on an already selected row confirm a popup. `Esc`
 cancels and returns no selected values.
+
+Permit-confirmation popups use the same movement keys for their horizontal
+choice row: `h`/`k` and left/up arrows move backward, while `j`/`l` and
+right/down arrows move forward. `Enter` and `Tab` confirm the highlighted
+choice.

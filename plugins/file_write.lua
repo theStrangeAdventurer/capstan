@@ -20,6 +20,32 @@ plugin.tool = {
 	permission = "file_write"
 }
 
+local function is_absolute(path)
+	return path:sub(1, 1) == "/"
+end
+
+local function configured_workdir()
+	if _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir:sub(1, 1) == "/" then
+		return _G.capstan.workdir
+	end
+	local env = os.getenv("CAPSTAN_WORKDIR") or os.getenv("CAPSTAN_WORKSPACE")
+	if env and env:sub(1, 1) == "/" then
+		return env
+	end
+	local pwd = os.getenv("PWD")
+	if pwd and pwd:sub(1, 1) == "/" then
+		return pwd
+	end
+	return "."
+end
+
+local function resolve_path(path)
+	if is_absolute(path) then
+		return path
+	end
+	return configured_workdir():gsub("/+$", "") .. "/" .. path
+end
+
 function plugin.handler(ctx)
 	local path = ctx.args[1] or (ctx.tool_args and ctx.tool_args.path)
 	local content = ctx.args[2] or (ctx.tool_args and ctx.tool_args.content)
@@ -31,9 +57,10 @@ function plugin.handler(ctx)
 		content = ""
 	end
 
-	local file, err = io.open(path, "w")
+	local resolved_path = resolve_path(path)
+	local file, err = io.open(resolved_path, "w")
 	if not file then
-		return ctx:replace("❌ Cannot write " .. path .. ": " .. err)
+		return ctx:replace("❌ Cannot write " .. resolved_path .. ": " .. err)
 	end
 
 	file:write(content)
@@ -42,7 +69,7 @@ function plugin.handler(ctx)
 	local lines = 0
 	for _ in content:gmatch("\n") do lines = lines + 1 end
 
-	return ctx:replace("📄 Wrote " .. path .. " (" .. #content .. " bytes, " .. (lines + 1) .. " lines)")
+	return ctx:replace("📄 Wrote " .. resolved_path .. " (" .. #content .. " bytes, " .. (lines + 1) .. " lines)")
 end
 
 return plugin

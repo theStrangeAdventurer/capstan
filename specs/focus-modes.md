@@ -23,8 +23,9 @@ Shift+Tab switches between them. The status bar always shows the current mode.
 
 In input mode, `Tab` opens command and autocomplete popups when the current
 input starts with a command. When a popup is active, popup key handling takes
-precedence over focus mode switching. In selection and permit-confirmation
-popups, `Tab` confirms the current choice, matching `Enter`.
+precedence over focus mode switching. In selection and
+[permit-confirmation](permissions.md) popups, `Tab` confirms the current choice,
+matching `Enter`.
 
 **FOCUS_INPUT:**
 

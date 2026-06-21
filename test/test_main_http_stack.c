@@ -3,6 +3,7 @@
 extern MunitSuite http_stack_suite;
 extern MunitSuite fetch_plugin_suite;
 extern MunitSuite file_plugin_suite;
+extern MunitSuite file_write_plugin_suite;
 extern MunitSuite http_redirect_suite;
 extern MunitSuite logs_plugin_suite;
 extern MunitSuite provider_tools_suite;
@@ -12,6 +13,7 @@ int main(int argc, char *argv[]) {
     http_stack_suite,
     fetch_plugin_suite,
     file_plugin_suite,
+    file_write_plugin_suite,
     http_redirect_suite,
     logs_plugin_suite,
     provider_tools_suite,

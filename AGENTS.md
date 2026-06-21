@@ -259,7 +259,10 @@ Feature specs:
 - [Editor command](specs/editor-command.md)
 - [Popups](specs/popups.md)
 - [Fetch plugin](specs/fetch-plugin.md)
+- [File write plugin](specs/file-write-plugin.md)
+- [Permissions](specs/permissions.md)
 - [Runtime logs](specs/runtime-logs.md)
+- [Workspace directory](specs/workspace-directory.md)
 
 ## Conventions
 

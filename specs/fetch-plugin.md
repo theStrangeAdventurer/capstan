@@ -33,8 +33,8 @@ The plugin exposes an agent tool named `fetch`:
 ```
 
 The tool uses the same validation and response formatting as the slash command.
-Its permission name is `fetch`, so agent-initiated fetches go through the normal
-permission prompt path unless the user has granted a matching rule.
+Agent-initiated fetches go through the normal [permission](permissions.md)
+prompt path unless the user has granted a matching rule.
 
 ## Architecture
 

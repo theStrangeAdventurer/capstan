@@ -31,7 +31,7 @@ If `n` is omitted, it shows the last 80 lines. The maximum is 500 lines.
 - Assistant text when the stream completes without tool calls
 - Tool calls received from the model
 - Tool call name, target, and raw JSON arguments
-- Permission checks and prompt decisions
+- [Permission](permissions.md) checks and prompt decisions
 - Tool completion and result size
 - Continuation after tool results
 

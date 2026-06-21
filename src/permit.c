@@ -48,7 +48,8 @@ PermState permit_check(const char *tool, const char *target) {
 
   if (strcmp(tool, "file_read") == 0) {
     char cwd[PERMIT_MAX_TARGET];
-    if (!getcwd(cwd, sizeof(cwd)))
+    int cwd_n = snprintf(cwd, sizeof(cwd), "%s", app_workdir());
+    if (cwd_n < 0 || (size_t)cwd_n >= sizeof(cwd))
       return PERM_ASK;
     char full[PERMIT_MAX_TARGET * 2];
     if (target[0] == '/')
@@ -321,6 +322,7 @@ static int l_tools_shell(lua_State *L) {
     close(err_pipe[0]);
     close(err_pipe[1]);
 
+    chdir(app_workdir());
     alarm(timeout);
     execl("/bin/sh", "sh", "-c", command, (char *)NULL);
     _exit(127);

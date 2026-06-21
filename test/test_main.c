@@ -3,6 +3,7 @@
 extern MunitSuite input_suite;
 extern MunitSuite linemap_suite;
 extern MunitSuite mode_suite;
+extern MunitSuite permit_prompt_suite;
 extern MunitSuite popup_suite;
 extern MunitSuite scroll_suite;
 extern MunitSuite usage_suite;
@@ -14,6 +15,7 @@ int main(int argc, char *argv[]) {
     input_suite,
     linemap_suite,
     mode_suite,
+    permit_prompt_suite,
     popup_suite,
     scroll_suite,
     usage_suite,

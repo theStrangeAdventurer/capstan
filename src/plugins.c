@@ -135,6 +135,19 @@ static int l_popup_error(lua_State *l) {
   return 0;
 }
 
+static void register_capstan_runtime(void) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+
+  lua_pushstring(L, app_workdir());
+  lua_setfield(L, -2, "workdir");
+
+  lua_setglobal(L, "capstan");
+}
+
 void plugins_init(void) {
   L = luaL_newstate();
   luaL_openlibs(L);
@@ -161,6 +174,7 @@ void plugins_init(void) {
   agent_init(L);
   permit_init(L);
   tools_init(L);
+  register_capstan_runtime();
   log_init(L);
 
   lua_newtable(L);
