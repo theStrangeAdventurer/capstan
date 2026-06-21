@@ -6,6 +6,7 @@ directories at startup.
 ## Behavior
 
 - Project skills are read from `.agents/skills/` under the active workspace.
+- Shared home skills are read from `~/.agents/skills/`.
 - User skills are read from `~/.config/capstan/skills/`.
 - A skill must be a directory containing `SKILL.md`, such as
   `skills/code-review/SKILL.md`.
@@ -18,11 +19,17 @@ directories at startup.
   to the system prompt, along with the `SKILL.md` path and source.
 - The `SKILL.md` body is not added to the system prompt. The agent must read the
   file path when the FrontMatter indicates the skill is relevant.
+- The system prompt states this as a mandatory rule: if the user names a skill
+  or the task matches a skill description, the agent must read the listed
+  `Skill file` completely before applying the skill. The metadata index alone is
+  not enough to use a skill.
 - Files below the skill directory, such as `references/*.md` and `scripts/*`,
   are not listed in the system prompt. They are shown by `/skills` for
   diagnostics and should be read only when `SKILL.md` asks for them.
-- If project and user directories define the same skill name, the project skill
-  overrides the user skill.
+- If multiple directories define the same skill name, later sources override
+  earlier sources. Priority from highest to lowest is project `.agents/skills/`,
+  Capstan user `~/.config/capstan/skills/`, then shared home
+  `~/.agents/skills/`.
 - The lightweight skill index is appended to the Lua `system_prompt` global, so
   every provider can discover available skills without loading their full text.
 - `/skills` shows the loaded skill list, including each skill source,
@@ -50,6 +57,6 @@ that value.
 ## Test Notes
 
 `make test` covers FrontMatter-only prompt rendering, ignored fallback formats,
-recursive resource manifests for `/skills`, empty directories, and
-project-over-user override behavior.
+recursive resource manifests for `/skills`, empty directories, shared home
+skill loading, and override behavior.
 `make test-http-lua` covers the `/skills` Lua command.

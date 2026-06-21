@@ -420,9 +420,12 @@ static int append_text(char **buf, size_t *len, size_t *capacity,
 }
 
 char *skills_build_prompt(const char *project_skills_dir,
-                          const char *user_skills_dir) {
+                          const char *user_skills_dir,
+                          const char *common_skills_dir) {
   SkillList list = {0};
 
+  if (common_skills_dir)
+    scan_skill_dir(&list, common_skills_dir, "common");
   if (user_skills_dir)
     scan_skill_dir(&list, user_skills_dir, "user");
   if (project_skills_dir)
@@ -441,10 +444,13 @@ char *skills_build_prompt(const char *project_skills_dir,
   if (!append_text(&buf, &len, &capacity,
                    "\n\n# Skills\n"
                    "The following skill index was loaded from "
-                   "`skills/name/SKILL.md` under `.agents/skills/` and "
-                   "`~/.config/capstan/skills/`. Only FrontMatter metadata is "
-                   "included here. When a skill is relevant, read its SKILL.md "
-                   "path before applying it.\n")) {
+                   "`skills/name/SKILL.md` under project `.agents/skills/`, "
+                   "`~/.agents/skills/`, and `~/.config/capstan/skills/`. Only "
+                   "FrontMatter metadata is included here.\n"
+                   "Mandatory skill use rule: if the user names a skill, or if "
+                   "the task matches a skill description, you must read that "
+                   "skill's `Skill file` path completely before using the "
+                   "skill. Do not apply a skill from this index alone.\n")) {
     skill_list_free(&list);
     return my_strdup("");
   }
@@ -476,9 +482,12 @@ fail:
 }
 
 char *skills_build_summary(const char *project_skills_dir,
-                           const char *user_skills_dir) {
+                           const char *user_skills_dir,
+                           const char *common_skills_dir) {
   SkillList list = {0};
 
+  if (common_skills_dir)
+    scan_skill_dir(&list, common_skills_dir, "common");
   if (user_skills_dir)
     scan_skill_dir(&list, user_skills_dir, "user");
   if (project_skills_dir)

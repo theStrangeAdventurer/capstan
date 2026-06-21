@@ -123,6 +123,7 @@ static void load_system_prompt(void) {
 
   char project_skills[512];
   char user_skills[512];
+  char common_skills[512];
   int n = snprintf(project_skills, sizeof(project_skills), "%s/.agents/skills",
                    app_workdir());
   const char *project_skills_dir =
@@ -131,9 +132,20 @@ static void load_system_prompt(void) {
       app_config_path(user_skills, sizeof(user_skills), "skills") == 0
           ? user_skills
           : NULL;
-  char *skills_prompt = skills_build_prompt(project_skills_dir, user_skills_dir);
+  const char *home = getenv("HOME");
+  const char *common_skills_dir = NULL;
+  if (home) {
+    int common_n = snprintf(common_skills, sizeof(common_skills),
+                            "%s/.agents/skills", home);
+    if (common_n > 0 && (size_t)common_n < sizeof(common_skills))
+      common_skills_dir = common_skills;
+  }
+  char *skills_prompt =
+      skills_build_prompt(project_skills_dir, user_skills_dir,
+                          common_skills_dir);
   char *skills_summary =
-      skills_build_summary(project_skills_dir, user_skills_dir);
+      skills_build_summary(project_skills_dir, user_skills_dir,
+                           common_skills_dir);
 
   char agents_path[512];
   char *agents_content = NULL;
