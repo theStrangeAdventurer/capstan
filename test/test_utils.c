@@ -27,10 +27,10 @@ static MunitResult test_replace_with_found(const MunitParameter params[], void *
   (void)params;
   (void)data;
   char buf[64];
-  strcpy(buf, "/hi Fox v2");
-  int r = replace_with(buf, sizeof(buf), "/hi", "/hello");
+  strcpy(buf, "/file README.md");
+  int r = replace_with(buf, sizeof(buf), "/file", "/read");
   munit_assert_int(r, ==, 1);
-  munit_assert_string_equal(buf, "/hello Fox v2");
+  munit_assert_string_equal(buf, "/read README.md");
   return MUNIT_OK;
 }
 

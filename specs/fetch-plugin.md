@@ -13,6 +13,10 @@ conversation context.
   `Fetched <url> (HTTP <status>, <bytes> bytes)`.
 - Non-2xx responses display `Fetch failed: <url> (HTTP <status>)`.
 - HTTP redirects are followed by the shared HTTP layer, up to 10 redirects.
+- Requests send a `User-Agent` header:
+  `Capstan/1.0 (+https://github.com/theStrangeAdventurer/tui-agent)`.
+- Set `CAPSTAN_PLUGIN_FETCH_UA` to a non-empty value to override the default
+  fetch `User-Agent`.
 - The LLM-facing result includes the URL, HTTP status, and response body.
 
 ## Agent Tool
@@ -57,6 +61,7 @@ access. The tests mock `http.get` and cover:
 - missing URL validation
 - non-HTTP(S) URL rejection
 - successful slash-command fetch formatting
+- default and environment-overridden `User-Agent` handling
 - agent tool argument handling and non-2xx formatting
 
 `make test-build` verifies `/fetch` is embedded into the standalone binary.

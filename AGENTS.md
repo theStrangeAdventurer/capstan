@@ -130,14 +130,14 @@ All SSE parsing is in Lua (`ai/providers.lua`). C only passes raw bytes. Provide
 | Field | Type | Description |
 |-------|------|-------------|
 | `ctx.input` | string | Full original user input (unchanged) |
-| `ctx.command` | string | Matched command, e.g. `"/ip"` |
+| `ctx.command` | string | Matched command, e.g. `"/file"` |
 | `ctx.args` | table | Array of space-split arguments after the command |
 | `ctx:replace(ui_val, llm_val?)` | function | Returns `(ui_val, llm_val)` — wraps the two return values for clarity. If `llm_val` is omitted, it defaults to `ui_val`. |
 
 **Command parsing rules:**
 - Commands must be the **first non-whitespace token** in the input.
 - Everything after the command token is split by spaces into `ctx.args` (1-indexed Lua array).
-- Example: `  /hi Fox v2` → `ctx.command = "/hi"`, `ctx.args = {"Fox", "v2"}`.
+- Example: `  /file README.md` → `ctx.command = "/file"`, `ctx.args = {"README.md"}`.
 - If input has no leading `/` at the start, it is treated as plain text (no plugin invoked).
 
 **Blocking HTTP in plugins:**

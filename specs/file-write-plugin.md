@@ -11,8 +11,12 @@ arguments.
 - Absolute paths are used as provided.
 - Relative paths are resolved against the configured
   [workspace directory](workspace-directory.md).
+- Missing parent directories are created before writing.
+- Existing UTF-8 BOMs are preserved when overwriting files. If new content
+  already includes a UTF-8 BOM, it is written once.
 - Successful writes report the resolved path, byte count, and line count.
-- Failed writes report the resolved path and the underlying `io.open` error.
+- Failed writes report the resolved path and the underlying directory or file
+  write error.
 
 ## Rationale
 
@@ -28,4 +32,6 @@ the resolved path makes the destination auditable.
 
 `make test-http-lua` covers the Lua plugin. The file write tests verify both
 the `PWD` fallback and the higher-priority `capstan.workdir` path when `PWD`
-points at a different temporary directory.
+points at a different temporary directory. They also cover parent directory
+creation, UTF-8 BOM preservation, and structured tool content that contains
+spaces or newlines.

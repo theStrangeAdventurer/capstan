@@ -11,7 +11,8 @@ vendored Lua modules, and plugins without also copying `ai/`, `vendor/`, or
   file exists, otherwise from the embedded `ai/providers.lua` asset.
 - `system_prompt` is a Lua global loaded from `~/.config/capstan/system_prompt.txt`
   when present, otherwise from the embedded `ai/system_prompt.txt` asset.
-- Built-in plugins from `plugins/*.lua` are loaded from embedded assets first.
+- Core built-in plugins listed in `CORE_PLUGIN_ASSETS` in the Makefile are
+  loaded from embedded assets first.
 - User plugins from `~/.config/capstan/plugins/*.lua` are loaded after embedded
   plugins. If a user plugin returns the same `plugin.id` as a built-in plugin,
   it replaces the built-in plugin.
@@ -29,8 +30,8 @@ chunk names in Lua errors. File-based config overrides still use `luaL_dofile`.
 ## Constraints
 
 - Asset files are text files and are embedded as escaped C string literals.
-- Adding a new built-in plugin requires adding a new `plugins/*.lua` file and
-  rebuilding the binary.
+- Adding a new built-in plugin requires adding its Lua file to
+  `CORE_PLUGIN_ASSETS` and rebuilding the binary.
 - User plugin override identity is `plugin.id`, not filename.
 
 ## Test Notes
