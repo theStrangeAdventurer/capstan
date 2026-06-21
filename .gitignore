@@ -32,3 +32,4 @@ vendor/lua-5.5.0/src/liblua.a
 
 # Stale tooling
 compile_commands.json
+.cache
