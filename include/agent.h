@@ -31,6 +31,7 @@ void agent_emit(lua_State *L);
 const char *agent_provider_name(void);
 const char *agent_provider_model(void);
 UsageStats agent_usage(void);
+void agent_reset_usage(void);
 
 void agent_set_thinking(int active);
 int  agent_is_thinking(void);

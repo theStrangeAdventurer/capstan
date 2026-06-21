@@ -1,6 +1,7 @@
 #include "dispatch.h"
 #include "agent.h"
 #include "editor.h"
+#include "http.h"
 #include "input.h"
 #include "plugins.h"
 #include "popup.h"
@@ -12,26 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-int has_command(const char *input, char *command, size_t *cmd_end) {
-  const char *start = input;
-  while (*start == ' ')
-    start++;
-  if (*start != '/')
-    return 0;
-
-  const char *end = start;
-  while (*end && *end != ' ' && *end != '\0')
-    end++;
-
-  size_t len = end - start;
-  if (len >= MAX_COMMAND_LEN)
-    len = MAX_COMMAND_LEN - 1;
-  strncpy(command, start, len);
-  command[len] = '\0';
-  *cmd_end = end - input;
-  return 1;
-}
 
 static void flush_pending_and_send(const char *ui_text, const char *raw_text) {
   if (g_pending.size > 0) {
@@ -94,6 +75,16 @@ static int try_command_with_plugin(const char *input, size_t cmd_end) {
     return 2;
   }
 
+  if (strcmp(command, "/new") == 0) {
+    http_cancel_streams(L);
+    agent_set_thinking(0);
+    agent_reset_usage();
+    clear_messages();
+    pending_clear();
+    scroll_reset();
+    return 1;
+  }
+
   Plugin *p = plugin_registry_find(command);
   if (p) {
     if (plugin_has_autocomplete(p)) {
@@ -124,12 +115,14 @@ static int try_command_with_plugin(const char *input, size_t cmd_end) {
 
   if (strcmp(command, "/") == 0) {
     int pc = plugin_registry_count();
-    int builtins = 1;
+    int builtins = 2;
     int count = pc + builtins;
     if (count > 0) {
       PopupItem *items = malloc(count * sizeof(PopupItem));
       items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
       items[0].value = my_strdup("/editor");
+      items[1].text = my_strdup("/new  Clear messages and token usage");
+      items[1].value = my_strdup("/new");
       for (int i = 0; i < pc; i++) {
         Plugin *pp = plugin_registry_at(i);
         char buf[256];
@@ -164,7 +157,7 @@ int dispatch_tab(void) {
 
   if (strcmp(command, "/") == 0) {
     int pc = plugin_registry_count();
-    int builtins = 1;
+    int builtins = 2;
     int count = pc + builtins;
     if (count <= 0)
       return 0;
@@ -172,6 +165,8 @@ int dispatch_tab(void) {
     PopupItem *items = malloc(count * sizeof(PopupItem));
     items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
     items[0].value = my_strdup("/editor");
+    items[1].text = my_strdup("/new  Clear messages and token usage");
+    items[1].value = my_strdup("/new");
     for (int i = 0; i < pc; i++) {
       Plugin *pp = plugin_registry_at(i);
       char buf[256];

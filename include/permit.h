@@ -2,13 +2,11 @@
 #define PERMIT_H
 
 #include <lua.h>
+#include "permit_logic.h"
 
-#define PERMIT_MAX_TARGET 4096
 #define PERMIT_DEFAULT_SHELL_TIMEOUT 60
 #define PERMIT_MAX_STDOUT (1024 * 1024)
 #define PERMIT_MAX_STDERR (256 * 1024)
-
-typedef enum { PERM_ASK, PERM_ALLOW, PERM_DENY } PermState;
 
 typedef struct {
   char *tool;

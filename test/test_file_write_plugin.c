@@ -66,6 +66,50 @@ static void call_handler_tool(lua_State *L, const char *path, const char *conten
   munit_assert_int(rc, ==, LUA_OK);
 }
 
+static void call_handler_tool_mode(lua_State *L, const char *path,
+                                   const char *content, const char *mode) {
+  lua_getfield(L, -1, "handler");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_setfield(L, -2, "args");
+
+  lua_newtable(L);
+  lua_pushstring(L, path);
+  lua_setfield(L, -2, "path");
+  lua_pushstring(L, content);
+  lua_setfield(L, -2, "content");
+  lua_pushstring(L, mode);
+  lua_setfield(L, -2, "mode");
+  lua_setfield(L, -2, "tool_args");
+
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void call_handler_append(lua_State *L, const char *path,
+                                const char *content) {
+  lua_getfield(L, -1, "handler");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "--append");
+  lua_rawseti(L, -2, 1);
+  lua_pushstring(L, path);
+  lua_rawseti(L, -2, 2);
+  lua_pushstring(L, content);
+  lua_rawseti(L, -2, 3);
+  lua_setfield(L, -2, "args");
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
 static void set_capstan_workdir(lua_State *L, const char *path) {
   lua_newtable(L);
   lua_pushstring(L, path);
@@ -301,6 +345,97 @@ static MunitResult test_tool_args_preserve_multiline_content(
   return MUNIT_OK;
 }
 
+static MunitResult test_append_mode_preserves_existing_content(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "file-write-append");
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_write_plugin(L);
+  call_handler(L, "notes.txt", "one\n");
+  lua_pop(L, 2);
+  call_handler_append(L, "notes.txt", "two\n");
+
+  char expected[4096];
+  snprintf(expected, sizeof(expected), "%s/notes.txt", workdir);
+  FILE *f = fopen(expected, "r");
+  munit_assert_not_null(f);
+  char buf[64];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+  munit_assert_string_equal(buf, "one\ntwo\n");
+
+  const char *ui = lua_tostring(L, -2);
+  munit_assert_not_null(ui);
+  munit_assert_true(strstr(ui, "Appended to ") != NULL);
+
+  lua_close(L);
+  unlink(expected);
+  rmdir(workdir);
+
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_args_append_mode_preserves_existing_content(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "file-write-tool-append");
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_write_plugin(L);
+  call_handler_tool(L, "tool-append.txt", "alpha");
+  lua_pop(L, 2);
+  call_handler_tool_mode(L, "tool-append.txt", "\nbeta", "append");
+
+  char expected[4096];
+  snprintf(expected, sizeof(expected), "%s/tool-append.txt", workdir);
+  FILE *f = fopen(expected, "r");
+  munit_assert_not_null(f);
+  char buf[64];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+  munit_assert_string_equal(buf, "alpha\nbeta");
+
+  lua_close(L);
+  unlink(expected);
+  rmdir(workdir);
+
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_metadata_exposes_append_mode(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_state();
+  load_file_write_plugin(L);
+
+  lua_getfield(L, -1, "tool");
+  munit_assert_true(lua_istable(L, -1));
+  lua_getfield(L, -1, "parameters");
+  lua_getfield(L, -1, "properties");
+  lua_getfield(L, -1, "mode");
+  munit_assert_true(lua_istable(L, -1));
+  lua_getfield(L, -1, "enum");
+  munit_assert_true(lua_istable(L, -1));
+  lua_rawgeti(L, -1, 2);
+  munit_assert_string_equal(lua_tostring(L, -1), "append");
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/relative_path_uses_launch_pwd", test_relative_path_uses_launch_pwd, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -313,6 +448,15 @@ static MunitTest tests[] = {
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_args_preserve_multiline_content",
      test_tool_args_preserve_multiline_content, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/append_mode_preserves_existing_content",
+     test_append_mode_preserves_existing_content, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_args_append_mode_preserves_existing_content",
+     test_tool_args_append_mode_preserves_existing_content, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_metadata_exposes_append_mode",
+     test_tool_metadata_exposes_append_mode, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

@@ -387,6 +387,29 @@ int http_poll(lua_State *L) {
   return had_events;
 }
 
+int http_cancel_streams(lua_State *L) {
+  if (!multi_handle || stream_count == 0)
+    return 0;
+
+  int canceled = 0;
+  for (int i = 0; i < stream_count; i++) {
+    StreamCtx *ctx = streams[i];
+    if (!ctx)
+      continue;
+
+    curl_multi_remove_handle(multi_handle, ctx->easy);
+    luaL_unref(L, LUA_REGISTRYINDEX, ctx->callback_ref);
+    curl_slist_free_all(ctx->headers);
+    curl_easy_cleanup(ctx->easy);
+    free(ctx);
+    streams[i] = NULL;
+    canceled++;
+  }
+
+  stream_count = 0;
+  return canceled;
+}
+
 void http_init(lua_State *L) {
   curl_global_init(CURL_GLOBAL_DEFAULT);
   multi_handle = curl_multi_init();

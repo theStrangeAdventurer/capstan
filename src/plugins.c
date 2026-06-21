@@ -6,6 +6,7 @@
 #include "log.h"
 #include "permit.h"
 #include "popup.h"
+#include "skills.h"
 #include "utils.h"
 #include <dirent.h>
 #include <lauxlib.h>
@@ -120,8 +121,84 @@ static void load_system_prompt(void) {
       data = override;
   }
 
-  lua_pushlstring(L, data, size);
+  char project_skills[512];
+  char user_skills[512];
+  int n = snprintf(project_skills, sizeof(project_skills), "%s/.agents/skills",
+                   app_workdir());
+  const char *project_skills_dir =
+      n > 0 && (size_t)n < sizeof(project_skills) ? project_skills : NULL;
+  const char *user_skills_dir =
+      app_config_path(user_skills, sizeof(user_skills), "skills") == 0
+          ? user_skills
+          : NULL;
+  char *skills_prompt = skills_build_prompt(project_skills_dir, user_skills_dir);
+  char *skills_summary =
+      skills_build_summary(project_skills_dir, user_skills_dir);
+
+  char agents_path[512];
+  char *agents_content = NULL;
+  size_t agents_content_size = 0;
+  int agents_n =
+      snprintf(agents_path, sizeof(agents_path), "%s/AGENTS.md", app_workdir());
+  if (agents_n > 0 && (size_t)agents_n < sizeof(agents_path))
+    agents_content = read_file(agents_path, &agents_content_size);
+
+  char *agents_prompt = NULL;
+  size_t agents_prompt_size = 0;
+  if (agents_content) {
+    const char *prefix = "\n\n# Project Instructions\nPath: ";
+    const char *middle = "\n\n";
+    agents_prompt_size = strlen(prefix) + strlen(agents_path) +
+                         strlen(middle) + agents_content_size;
+    agents_prompt = malloc(agents_prompt_size + 1);
+    if (agents_prompt) {
+      size_t pos = 0;
+      memcpy(agents_prompt + pos, prefix, strlen(prefix));
+      pos += strlen(prefix);
+      memcpy(agents_prompt + pos, agents_path, strlen(agents_path));
+      pos += strlen(agents_path);
+      memcpy(agents_prompt + pos, middle, strlen(middle));
+      pos += strlen(middle);
+      memcpy(agents_prompt + pos, agents_content, agents_content_size);
+      pos += agents_content_size;
+      agents_prompt[pos] = '\0';
+    } else {
+      agents_prompt_size = 0;
+    }
+  }
+
+  size_t skills_size = skills_prompt ? strlen(skills_prompt) : 0;
+  char *combined = malloc(size + agents_prompt_size + skills_size + 1);
+  if (combined) {
+    size_t pos = 0;
+    memcpy(combined + pos, data, size);
+    pos += size;
+    if (agents_prompt_size) {
+      memcpy(combined + pos, agents_prompt, agents_prompt_size);
+      pos += agents_prompt_size;
+    }
+    if (skills_size)
+      memcpy(combined + pos, skills_prompt, skills_size);
+    pos += skills_size;
+    combined[pos] = '\0';
+    lua_pushlstring(L, combined, pos);
+  } else {
+    lua_pushlstring(L, data, size);
+  }
   lua_setglobal(L, "system_prompt");
+
+  lua_getglobal(L, "capstan");
+  if (lua_istable(L, -1)) {
+    lua_pushstring(L, skills_summary ? skills_summary : "No skills loaded.");
+    lua_setfield(L, -2, "skills_summary");
+  }
+  lua_pop(L, 1);
+
+  free(combined);
+  free(agents_prompt);
+  free(agents_content);
+  free(skills_summary);
+  free(skills_prompt);
   free(override);
 }
 
