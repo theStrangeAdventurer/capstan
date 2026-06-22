@@ -21,6 +21,8 @@ Workspace selection happens at startup:
 - `file_write` resolves relative output paths against `capstan.workdir`.
 - `shell` child processes `chdir(capstan.workdir)` before executing
   `/bin/sh -c <command>`.
+- `shell` permission checks use `capstan.workdir` as the target, so allowing
+  shell in one workspace covers different command strings in that workspace.
 - `file_read` permission checks treat `capstan.workdir` as the allowed local
   workspace root.
 

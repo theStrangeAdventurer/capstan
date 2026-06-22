@@ -13,6 +13,11 @@ static char captured_permit_tool[128];
 static char captured_permit_target[512];
 static char captured_logs[8192];
 static const char *permit_decision = "deny";
+static char granted_tool[128];
+static char granted_pattern[512];
+static int grant_allow;
+static int permit_prompt_calls;
+static int permit_check_calls;
 
 static int l_http_get(lua_State *L) {
   (void)L;
@@ -43,12 +48,35 @@ static int l_http_post_stream(lua_State *L) {
 static int l_permit_check(lua_State *L) {
   const char *tool = luaL_checkstring(L, 1);
   const char *target = luaL_checkstring(L, 2);
+  permit_check_calls++;
   strncpy(captured_permit_tool, tool, sizeof(captured_permit_tool) - 1);
   captured_permit_tool[sizeof(captured_permit_tool) - 1] = '\0';
   strncpy(captured_permit_target, target, sizeof(captured_permit_target) - 1);
   captured_permit_target[sizeof(captured_permit_target) - 1] = '\0';
+  if (grant_allow && strcmp(tool, granted_tool) == 0 &&
+      strcmp(target, granted_pattern) == 0) {
+    lua_pushstring(L, "allow");
+    return 1;
+  }
   lua_pushstring(L, permit_decision);
   return 1;
+}
+
+static int l_permit_prompt(lua_State *L) {
+  permit_prompt_calls++;
+  lua_pushstring(L, "always");
+  return 1;
+}
+
+static int l_permit_grant(lua_State *L) {
+  const char *tool = luaL_checkstring(L, 1);
+  const char *pattern = luaL_checkstring(L, 2);
+  strncpy(granted_tool, tool, sizeof(granted_tool) - 1);
+  granted_tool[sizeof(granted_tool) - 1] = '\0';
+  strncpy(granted_pattern, pattern, sizeof(granted_pattern) - 1);
+  granted_pattern[sizeof(granted_pattern) - 1] = '\0';
+  grant_allow = lua_toboolean(L, 3);
+  return 0;
 }
 
 static int l_noop(lua_State *L) {
@@ -96,6 +124,12 @@ static lua_State *new_provider_state(void) {
   lua_newtable(L);
   lua_pushcfunction(L, l_permit_check);
   lua_setfield(L, -2, "check");
+  lua_pushcfunction(L, l_permit_prompt);
+  lua_setfield(L, -2, "prompt");
+  lua_pushcfunction(L, l_permit_grant);
+  lua_setfield(L, -2, "grant");
+  lua_pushcfunction(L, l_noop);
+  lua_setfield(L, -2, "save");
   lua_setglobal(L, "permit");
 
   lua_newtable(L);
@@ -133,6 +167,19 @@ static lua_State *new_provider_state(void) {
                 "}"
                 "},"
                 "handler = function(ctx) return ctx:replace('file ui', 'file llm') end"
+                "},"
+                "shell = {"
+                "tool = {"
+                "name = 'shell',"
+                "permission = 'shell',"
+                "description = 'Execute a shell command',"
+                "parameters = {"
+                "type = 'object',"
+                "properties = {command = {type = 'string'}},"
+                "required = {'command'}"
+                "}"
+                "},"
+                "handler = function(ctx) return ctx:replace('shell ui', 'shell llm: ' .. ctx.tool_args.command) end"
                 "}"
                 "}");
 
@@ -149,6 +196,11 @@ static void reset_captures(lua_State *L) {
   captured_permit_target[0] = '\0';
   captured_logs[0] = '\0';
   permit_decision = "deny";
+  granted_tool[0] = '\0';
+  granted_pattern[0] = '\0';
+  grant_allow = 0;
+  permit_prompt_calls = 0;
+  permit_check_calls = 0;
 }
 
 static void set_permit_decision(const char *decision) {
@@ -229,9 +281,10 @@ static MunitResult test_request_enables_auto_tool_choice(
   munit_assert_true(strstr(captured_body, "\"tools\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"name\":\"fetch\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"name\":\"file_read\"") != NULL);
+  munit_assert_true(strstr(captured_body, "\"name\":\"shell\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"tool_choice\":\"auto\"") != NULL);
   munit_assert_true(strstr(captured_logs, "[agent] request") != NULL);
-  munit_assert_true(strstr(captured_logs, "[agent] tools=fetch,file_read") != NULL);
+  munit_assert_true(strstr(captured_logs, "[agent] tools=fetch,file_read,shell") != NULL);
   munit_assert_true(strstr(captured_logs, "[agent] last_message role=user") != NULL);
   munit_assert_true(strstr(captured_logs, "[api] post_stream") != NULL);
 
@@ -539,6 +592,70 @@ static MunitResult test_invalid_tool_arguments_skip_permission(
   return MUNIT_OK;
 }
 
+static void send_tool_call(lua_State *L, const char *call_id,
+                           const char *name, const char *arguments) {
+  char event[2048];
+  snprintf(event, sizeof(event),
+           "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
+           "\"id\":\"%s\",\"function\":{\"name\":\"%s\","
+           "\"arguments\":\"%s\"}}]}}]}\n\n",
+           call_id, name, arguments);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L, event);
+  lua_pushboolean(L, 0);
+  int rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static MunitResult test_shell_always_allow_uses_workspace_target(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("ask");
+  set_capstan_workdir(L, "/repo/project");
+
+  int rc = luaL_dofile(L, "ai/providers.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_on_messages(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_shell_1", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+
+  munit_assert_string_equal(captured_permit_tool, "shell");
+  munit_assert_string_equal(captured_permit_target, "/repo/project");
+  munit_assert_string_equal(granted_tool, "shell");
+  munit_assert_string_equal(granted_pattern, "/repo/project");
+  munit_assert_int(grant_allow, ==, 1);
+  munit_assert_int(permit_prompt_calls, ==, 1);
+
+  call_on_messages(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_shell_2", "shell",
+                 "{\\\"command\\\":\\\"ls src\\\"}");
+
+  munit_assert_string_equal(captured_permit_tool, "shell");
+  munit_assert_string_equal(captured_permit_target, "/repo/project");
+  munit_assert_int(permit_check_calls, ==, 2);
+  munit_assert_int(permit_prompt_calls, ==, 1);
+  munit_assert_true(strstr(captured_body, "shell llm: ls src") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/request_enables_auto_tool_choice", test_request_enables_auto_tool_choice,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -558,6 +675,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/invalid_tool_arguments_skip_permission",
      test_invalid_tool_arguments_skip_permission, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/shell_always_allow_uses_workspace_target",
+     test_shell_always_allow_uses_workspace_target, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

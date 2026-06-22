@@ -474,6 +474,9 @@ local function decode_tool_arguments(raw)
 end
 
 local function tool_call_target(tool_name, args)
+    if tool_name == "shell" and _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir ~= "" then
+        return _G.capstan.workdir
+    end
     return args.command or args.path or args.url or args.uri or tool_name
 end
 
