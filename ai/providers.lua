@@ -420,28 +420,57 @@ local function tool_names(tools)
     return table.concat(names, ",")
 end
 
-local function call_plugin_tool(tool_name, args)
-    if not _G.plugins then return "No plugins loaded" end
+local function find_plugin_tool(tool_name)
+    if not _G.plugins then return nil end
     for _, p in pairs(_G.plugins) do
         if p.tool and p.tool.name == tool_name then
-            local ctx_args = {}
-            for _, v in pairs(args) do
-                table.insert(ctx_args, tostring(v))
-            end
-            local ctx = {
-                input = "/" .. tool_name,
-                command = p.command,
-                args = ctx_args,
-                tool_args = args,
-            }
-            function ctx:replace(ui_val, llm_val)
-                return ui_val, llm_val or ui_val
-            end
-            local ui_result, llm_result = p.handler(ctx)
-            return llm_result or ui_result
+            return p
         end
     end
-    return "Unknown tool: " .. tool_name
+    return nil
+end
+
+local function call_plugin_tool(tool_name, args)
+    local p = find_plugin_tool(tool_name)
+    if not p then
+        if not _G.plugins then return "No plugins loaded" end
+        return "Unknown tool: " .. tool_name
+    end
+
+    local ctx_args = {}
+    for _, v in pairs(args) do
+        table.insert(ctx_args, tostring(v))
+    end
+    local ctx = {
+        input = "/" .. tool_name,
+        command = p.command,
+        args = ctx_args,
+        tool_args = args,
+    }
+    function ctx:replace(ui_val, llm_val)
+        return ui_val, llm_val or ui_val
+    end
+    local ui_result, llm_result = p.handler(ctx)
+    return llm_result or ui_result
+end
+
+local function tool_permission_name(tool_name)
+    local p = find_plugin_tool(tool_name)
+    if p and p.tool and p.tool.permission and p.tool.permission ~= "" then
+        return p.tool.permission
+    end
+    return tool_name
+end
+
+local function decode_tool_arguments(raw)
+    local ok, decoded = pcall(json.decode, raw or "{}")
+    if not ok then
+        return nil, "Invalid JSON arguments: " .. tostring(decoded)
+    end
+    if type(decoded) ~= "table" then
+        return nil, "Invalid tool arguments: expected object"
+    end
+    return decoded, nil
 end
 
 local function tool_call_target(tool_name, args)
@@ -466,40 +495,45 @@ local function process_tool_calls(current_msgs, combined_tools, tool_calls, assi
     })
 
     for _, tc in ipairs(tool_calls) do
-        local args = {}
-        local ok = pcall(json.decode, tc.arguments)
-        if ok then args = json.decode(tc.arguments) end
-
-        local target = tool_call_target(tc.name, args)
-        runtime_log("tool", string.format("call name=%s target=%s args=%s", tc.name, target, tc.arguments or ""))
-        local perm = permit.check(tc.name, target)
-        runtime_log("permit", string.format("tool=%s target=%s decision=%s", tc.name, target, perm))
-
-        agent.append(string.format("\n⚙ %s: %s ", tc.name, target), "agent")
-
         local result_content
-        if perm == "deny" then
-            result_content = "Permission denied for " .. tc.name .. " " .. target
-            agent.append("— denied\n\n", "agent")
-        elseif perm == "ask" then
-            local decision = permit.prompt(tc.name, target)
-            runtime_log("permit", string.format("tool=%s target=%s prompt=%s", tc.name, target, decision))
-            if decision == "deny" then
-                result_content = "User denied " .. tc.name .. " " .. target
-                agent.append("— denied by user\n\n", "agent")
-            else
-                if decision == "always" then
-                    permit.grant(tc.name, target, true)
-                    permit.save()
+        local args, decode_err = decode_tool_arguments(tc.arguments)
+
+        if decode_err then
+            result_content = decode_err
+            runtime_log("tool", string.format("invalid_args name=%s error=%s", tc.name, compact(decode_err, 240)))
+            agent.append(string.format("\n⚙ %s: invalid arguments — error\n\n", tc.name), "agent")
+        else
+            local target = tool_call_target(tc.name, args)
+            runtime_log("tool", string.format("call name=%s target=%s args=%s", tc.name, target, tc.arguments or ""))
+            local permission_tool = tool_permission_name(tc.name)
+            local perm = permit.check(permission_tool, target)
+            runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tc.name, target, perm))
+
+            agent.append(string.format("\n⚙ %s: %s ", tc.name, target), "agent")
+
+            if perm == "deny" then
+                result_content = "Permission denied for " .. tc.name .. " " .. target
+                agent.append("— denied\n\n", "agent")
+            elseif perm == "ask" then
+                local decision = permit.prompt(permission_tool, target)
+                runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tc.name, target, decision))
+                if decision == "deny" then
+                    result_content = "User denied " .. tc.name .. " " .. target
+                    agent.append("— denied by user\n\n", "agent")
+                else
+                    if decision == "always" then
+                        permit.grant(permission_tool, target, true)
+                        permit.save()
+                    end
+                    result_content = call_plugin_tool(tc.name, args)
+                    runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tc.name, target, #(result_content or "")))
+                    agent.append("— done\n\n", "agent")
                 end
+            else
                 result_content = call_plugin_tool(tc.name, args)
                 runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tc.name, target, #(result_content or "")))
                 agent.append("— done\n\n", "agent")
             end
-        else
-            result_content = call_plugin_tool(tc.name, args)
-            runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tc.name, target, #(result_content or "")))
-            agent.append("— done\n\n", "agent")
         end
 
         if result_content then
