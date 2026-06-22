@@ -10,7 +10,9 @@ or `/fetch`, are treated as direct user intent and do not go through the
 permission prompt. The user already chose to run that command.
 
 Agent-initiated tool calls go through `permit.check(tool, target)` before the
-plugin handler runs. The decision is one of:
+plugin handler runs. If plugin metadata declares `tool.permission`, that value
+is used as the permission tool name; otherwise the model-facing tool name is
+used. The decision is one of:
 
 - `allow`: run the tool immediately.
 - `deny`: skip the tool and return a denial result.
@@ -61,13 +63,15 @@ or falls back to the tool name.
 `src/permit.c` owns rule loading, saving, matching, and the Lua-facing
 `permit` table. `src/tui.c` renders the blocking permit confirmation popup.
 
-Plugin metadata may declare a `permission` field, but model tool-call
-permission checks currently use the tool call name.
+Plugin metadata may declare a `permission` field to share permission policy
+between related tools. For example, `file_edit` uses `file_write` permission
+rules while still executing the `file_edit` handler.
 
 ## Tests
 
 Provider-level tests cover permission target selection for `fetch` and
-`file_read`, and runtime log tests cover permission check/prompt logging.
+`file_read`, streamed execution for `file_edit`, permission aliases, malformed
+tool arguments, and runtime log tests cover permission check/prompt logging.
 
 Pure permission matching can be tested through `permit_pattern_match` without
 linking ncurses, Lua, or curl.

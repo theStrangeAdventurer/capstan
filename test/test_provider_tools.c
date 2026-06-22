@@ -2,13 +2,17 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
+#include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static int stream_callback_ref = LUA_NOREF;
 static char captured_body[8192];
 static char captured_permit_tool[128];
 static char captured_permit_target[512];
 static char captured_logs[8192];
+static const char *permit_decision = "deny";
 
 static int l_http_get(lua_State *L) {
   (void)L;
@@ -43,7 +47,7 @@ static int l_permit_check(lua_State *L) {
   captured_permit_tool[sizeof(captured_permit_tool) - 1] = '\0';
   strncpy(captured_permit_target, target, sizeof(captured_permit_target) - 1);
   captured_permit_target[sizeof(captured_permit_target) - 1] = '\0';
-  lua_pushstring(L, "deny");
+  lua_pushstring(L, permit_decision);
   return 1;
 }
 
@@ -144,6 +148,56 @@ static void reset_captures(lua_State *L) {
   captured_permit_tool[0] = '\0';
   captured_permit_target[0] = '\0';
   captured_logs[0] = '\0';
+  permit_decision = "deny";
+}
+
+static void set_permit_decision(const char *decision) {
+  permit_decision = decision;
+}
+
+static void set_capstan_workdir(lua_State *L, const char *path) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_pushstring(L, path);
+  lua_setfield(L, -2, "workdir");
+  lua_setglobal(L, "capstan");
+}
+
+static void load_real_file_edit_plugin(lua_State *L) {
+  int rc = luaL_dofile(L, "plugins/file_edit.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_true(lua_istable(L, -1));
+
+  lua_getglobal(L, "plugins");
+  munit_assert_true(lua_istable(L, -1));
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "file_edit");
+  lua_pop(L, 2);
+}
+
+static void make_tmp_dir(char *buf, size_t buf_size, const char *name) {
+  snprintf(buf, buf_size, "/tmp/capstan-%s-%ld", name, (long)getpid());
+  rmdir(buf);
+  munit_assert_int(mkdir(buf, 0700), ==, 0);
+}
+
+static void write_file(const char *path, const char *content) {
+  FILE *f = fopen(path, "wb");
+  munit_assert_not_null(f);
+  munit_assert_size(fwrite(content, 1, strlen(content), f), ==,
+                    strlen(content));
+  fclose(f);
+}
+
+static void read_file(const char *path, char *buf, size_t buf_size) {
+  FILE *f = fopen(path, "rb");
+  munit_assert_not_null(f);
+  size_t n = fread(buf, 1, buf_size - 1, f);
+  fclose(f);
+  buf[n] = '\0';
 }
 
 static void call_on_messages(lua_State *L) {
@@ -368,6 +422,123 @@ static MunitResult test_chunked_tool_call_arguments_continue_with_tool_result(
   return MUNIT_OK;
 }
 
+static MunitResult test_streamed_file_edit_tool_edits_file(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "provider-file-edit");
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/file.txt", workdir);
+  write_file(path, "alpha\nbeta\ngamma\n");
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, workdir);
+
+  int rc = luaL_dofile(L, "ai/providers.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  load_real_file_edit_plugin(L);
+
+  call_on_messages(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L,
+                 "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
+                 "\"id\":\"call_edit\",\"function\":{\"name\":\"file_edit\"}}]}}]}\n\n");
+  lua_pushboolean(L, 0);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L,
+                 "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
+                 "\"function\":{\"arguments\":\"{\\\"path\\\":\\\"file.txt\\\",\\\"old_text\\\":\\\"beta\\\"\"}}]}}]}\n\n");
+  lua_pushboolean(L, 0);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L,
+                 "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
+                 "\"function\":{\"arguments\":\",\\\"new_text\\\":\\\"BETA\\\"}\"}}]}}]}\n\n");
+  lua_pushboolean(L, 0);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L,
+                 "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n");
+  lua_pushboolean(L, 0);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  char buf[128];
+  read_file(path, buf, sizeof(buf));
+  munit_assert_string_equal(buf, "alpha\nBETA\ngamma\n");
+  munit_assert_string_equal(captured_permit_tool, "file_write");
+  munit_assert_string_equal(captured_permit_target, "file.txt");
+  munit_assert_true(strstr(captured_logs, "[tool] call name=file_edit") != NULL);
+  munit_assert_true(strstr(captured_logs, "[permit] tool=file_write call=file_edit") != NULL);
+  munit_assert_true(strstr(captured_body, "\"role\":\"tool\"") != NULL);
+  munit_assert_true(strstr(captured_body, "Edited ") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  unlink(path);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
+static MunitResult test_invalid_tool_arguments_skip_permission(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "ai/providers.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_on_messages(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L,
+                 "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
+                 "\"id\":\"call_bad\",\"function\":{\"name\":\"fetch\","
+                 "\"arguments\":\"{bad json\"}}]}}]}\n\n");
+  lua_pushboolean(L, 0);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_string_equal(captured_permit_tool, "");
+  munit_assert_true(strstr(captured_logs, "[tool] invalid_args name=fetch") != NULL);
+  munit_assert_true(strstr(captured_body, "\"role\":\"tool\"") != NULL);
+  munit_assert_true(strstr(captured_body, "Invalid JSON arguments") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/request_enables_auto_tool_choice", test_request_enables_auto_tool_choice,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -381,6 +552,12 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/chunked_tool_call_arguments_continue_with_tool_result",
      test_chunked_tool_call_arguments_continue_with_tool_result, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/streamed_file_edit_tool_edits_file",
+     test_streamed_file_edit_tool_edits_file, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/invalid_tool_arguments_skip_permission",
+     test_invalid_tool_arguments_skip_permission, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
