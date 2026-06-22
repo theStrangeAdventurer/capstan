@@ -8,12 +8,13 @@ plugin.async = false
 
 plugin.tool = {
 	name = "file_write",
-	description = "Write content to a file. Relative paths resolve inside the active workspace. Parent directories are created when needed.",
+	description = "Write content to a file. Relative paths resolve inside the active workspace. Parent directories are created when needed. By default this overwrites the file; pass mode=\"append\" to add content to the end.",
 	parameters = {
 		type = "object",
 		properties = {
 			path = { type = "string", description = "Path to the file to write. Relative paths resolve inside the active workspace." },
-			content = { type = "string", description = "Content to write to the file" }
+			content = { type = "string", description = "Content to write to the file" },
+			mode = { type = "string", enum = { "write", "append" }, description = "write overwrites the file; append adds content to the end." }
 		},
 		required = { "path", "content" }
 	},
@@ -102,8 +103,14 @@ local function line_count(content)
 end
 
 function plugin.handler(ctx)
-	local path = ctx.args[1] or (ctx.tool_args and ctx.tool_args.path)
-	local content = ctx.args[2] or (ctx.tool_args and ctx.tool_args.content)
+	local mode = (ctx.tool_args and ctx.tool_args.mode) or "write"
+	local arg_offset = 0
+	if ctx.args[1] == "--append" then
+		mode = "append"
+		arg_offset = 1
+	end
+	local path = ctx.args[1 + arg_offset] or (ctx.tool_args and ctx.tool_args.path)
+	local content = ctx.args[2 + arg_offset] or (ctx.tool_args and ctx.tool_args.content)
 
 	if not path or tostring(path) == "" then
 		return ctx:replace("Usage: /write <path> <content>")
@@ -113,6 +120,9 @@ function plugin.handler(ctx)
 		content = ""
 	end
 	content = tostring(content)
+	if mode ~= "write" and mode ~= "append" then
+		return ctx:replace("Usage: /write [--append] <path> <content>")
+	end
 
 	local resolved_path = resolve_path(path)
 	local old_content = read_all(resolved_path)
@@ -129,13 +139,16 @@ function plugin.handler(ctx)
 		return ctx:replace("Cannot write " .. resolved_path .. ": " .. mkdir_err)
 	end
 
-	local file, err = io.open(resolved_path, "wb")
+	local file_mode = mode == "append" and "ab" or "wb"
+	local file, err = io.open(resolved_path, file_mode)
 	if not file then
 		return ctx:replace("Cannot write " .. resolved_path .. ": " .. err)
 	end
 
 	local bytes, write_err
-	if write_bom then
+	if mode == "append" then
+		bytes, write_err = file:write(new_text)
+	elseif write_bom then
 		bytes, write_err = file:write(UTF8_BOM, new_text)
 	else
 		bytes, write_err = file:write(new_text)
@@ -149,10 +162,15 @@ function plugin.handler(ctx)
 		return ctx:replace("Cannot write " .. resolved_path .. ": " .. tostring(close_err))
 	end
 
-	local action = existed and "Wrote" or "Created"
-	local size = #new_text + (write_bom and #UTF8_BOM or 0)
+	local action
+	if mode == "append" then
+		action = existed and "Appended to" or "Created"
+	else
+		action = existed and "Wrote" or "Created"
+	end
+	local size = #new_text + (mode ~= "append" and write_bom and #UTF8_BOM or 0)
 	local lines = line_count(new_text)
-	local bom_note = write_bom and ", UTF-8 BOM" or ""
+	local bom_note = mode ~= "append" and write_bom and ", UTF-8 BOM" or ""
 
 	return ctx:replace(string.format("%s %s (%d bytes, %d lines%s)", action, resolved_path, size, lines, bom_note))
 end

@@ -42,6 +42,7 @@ static int l_agent_set_info(lua_State *L) {
 const char *agent_provider_name(void) { return g_provider_name; }
 const char *agent_provider_model(void) { return g_provider_model; }
 UsageStats agent_usage(void) { return g_usage; }
+void agent_reset_usage(void) { g_usage = (UsageStats){0, 0, 0, 0}; }
 
 static int l_agent_set_usage(lua_State *L) {
   g_usage.prompt_tokens = (int)luaL_optinteger(L, 1, 0);

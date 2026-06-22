@@ -25,7 +25,8 @@ static int run_embedded_self_test(void) {
   plugins_init();
   load_embedded_plugins();
 
-  const char *expected[] = {"/file", "/write", "/shell", "/fetch", "/logs"};
+  const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
+                            "/logs", "/skills"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);
@@ -136,6 +137,15 @@ int main(int argc, char *argv[]) {
     if (ch == '\t') {
       if (mode_get() == FOCUS_INPUT)
         dispatch_tab();
+      render_all();
+      continue;
+    }
+
+    if (ch == ' ' && http_is_loading()) {
+      if (http_cancel_streams(L) > 0) {
+        agent_set_thinking(0);
+        append_to_last_message("\n[stopped]\n", MSG_AGENT);
+      }
       render_all();
       continue;
     }

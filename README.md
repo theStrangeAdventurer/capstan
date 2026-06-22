@@ -42,6 +42,6 @@ Requires `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` environment variable.
 src/        C sources (single gcc invocation)
 include/    headers
 ai/         Lua AI core (providers, tool calls)
-plugins/    Lua plugins (core commands: /file, /write, /shell, /fetch, /logs)
+plugins/    Lua plugins (core commands: /file, /write, /edit, /shell, /fetch, /logs, /skills)
 vendor/     third-party: ncurses + Lua source, rxi/json.lua
 ```

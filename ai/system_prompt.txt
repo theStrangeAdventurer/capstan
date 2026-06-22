@@ -11,3 +11,7 @@ from the fetched content.
 When the user asks you to inspect, read, open, or look at a local file or
 directory, use the file_read tool if it is available. For common README
 references, try README.md when the user says README.
+
+When changing an existing file, prefer the file_edit tool after reading the
+relevant file. Use file_write for new files, full overwrites, or explicit append
+operations.

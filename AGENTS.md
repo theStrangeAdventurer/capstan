@@ -141,7 +141,7 @@ All SSE parsing is in Lua (`ai/providers.lua`). C only passes raw bytes. Provide
 - If input has no leading `/` at the start, it is treated as plain text (no plugin invoked).
 
 **Blocking HTTP in plugins:**
-- `http.get()` / `http.post()` use `curl_multi` internally and call `render_all()` in a spin loop — UI shows a braille spinner `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` during the request.
+- `http.get()` / `http.post()` use `curl_multi` internally and call `render_all()` in a spin loop — UI shows a pulsing dot loader (`·` → `•` → `●`, 8 frames) at `(rows-1, MARGIN+1)`, with an italic label `"Thinking"` (red) or `"Answering"` (dim) next to it, while the request is active.
 - `http.post_stream()` is fully async, data arrives via callbacks, no spinner needed.
 
 ### Apperance
@@ -226,11 +226,13 @@ those libraries. The current split:
 
 | Testable (no deps) | Untestable (needs ncurses/Lua/curl) |
 |---------------------|--------------------------------------|
-| `input.c` | `tui.c` (ncurses) |
-| `scroll.c` | `agent.c` (Lua) |
+| `dispatch_logic.c` | `tui.c` (ncurses) |
+| `input.c` | `agent.c` (Lua) |
+| `permit_logic.c` | `dispatch.c` (Lua/TUI/plugins) |
+| `scroll.c` | `permit.c` (Lua/TUI/shell) |
 | `utils.c` | `plugins.c` (Lua) |
-| `dispatch.c` (logic only) | `http.c` (curl) |
-| `permit.c` (`permit_pattern_match`) | `popup.c` (ncurses) |
+|  | `http.c` (curl) |
+|  | `popup.c` (ncurses) |
 
 To make more modules testable, extract pure-logic functions that don't call
 ncurses/Lua/curl APIs, and put them in separate source files.
@@ -254,14 +256,18 @@ ncurses/Lua/curl APIs, and put them in separate source files.
 
 Feature specs:
 
+- [Agent control](specs/agent-control.md)
 - [Embedded runtime assets](specs/embedded-runtime-assets.md)
 - [Focus modes](specs/focus-modes.md)
 - [Editor command](specs/editor-command.md)
 - [Popups](specs/popups.md)
+- [Project instructions](specs/project-instructions.md)
 - [Fetch plugin](specs/fetch-plugin.md)
+- [File edit plugin](specs/file-edit-plugin.md)
 - [File write plugin](specs/file-write-plugin.md)
 - [Permissions](specs/permissions.md)
 - [Runtime logs](specs/runtime-logs.md)
+- [Skills](specs/skills.md)
 - [Workspace directory](specs/workspace-directory.md)
 
 ## Conventions
