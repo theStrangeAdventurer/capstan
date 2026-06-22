@@ -23,6 +23,9 @@ The permit popup offers:
 - `Yes`: allow this one tool call.
 - `No`: deny this one tool call.
 - `Always allow`: allow this call and persist an exact rule for future calls.
+  For `shell`, the persisted target is the active workspace directory, so later
+  shell commands in that workspace do not prompt again just because the command
+  text changed.
 
 The selected choice can be changed with `h`/`k`, left/up arrows,
 `j`/`l`, or right/down arrows. `Enter` and `Tab` confirm the current choice.
@@ -56,9 +59,10 @@ Pattern matching supports exact target matches and a narrow wildcard form:
 
 ## Architecture
 
-`ai/providers.lua` applies permissions while processing model tool calls. It
-derives the target from common tool arguments (`command`, `path`, `url`, `uri`)
-or falls back to the tool name.
+`ai/providers.lua` applies permissions while processing model tool calls.
+For `shell`, it uses `capstan.workdir` as the target. Other tools derive the
+target from common tool arguments (`command`, `path`, `url`, `uri`) or fall back
+to the tool name.
 
 `src/permit.c` owns rule loading, saving, matching, and the Lua-facing
 `permit` table. `src/tui.c` renders the blocking permit confirmation popup.
@@ -69,9 +73,9 @@ rules while still executing the `file_edit` handler.
 
 ## Tests
 
-Provider-level tests cover permission target selection for `fetch` and
-`file_read`, streamed execution for `file_edit`, permission aliases, malformed
-tool arguments, and runtime log tests cover permission check/prompt logging.
+Provider-level tests cover permission target selection for `fetch`, `file_read`,
+and `shell`; streamed execution for `file_edit`; permission aliases; malformed
+tool arguments; and runtime log tests cover permission check/prompt logging.
 
 Pure permission matching can be tested through `permit_pattern_match` without
 linking ncurses, Lua, or curl.
