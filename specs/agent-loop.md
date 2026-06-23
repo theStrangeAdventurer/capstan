@@ -147,6 +147,10 @@ the model calls a tool, Lua decodes JSON arguments, derives a permission target,
 checks `permit`, calls the matching plugin handler with `ctx.tool_args`, and
 adds a tool result message back into the recursive conversation.
 
+Tool handler errors are contained inside the Lua runtime. A failing handler must
+produce a `{role="tool"}` error result, log the failure, and mark the visible
+tool row as an error instead of throwing through the stream callback.
+
 Permission policy is shared: Lua chooses the tool name and target for the check;
 C owns rule storage, matching, saving, and the prompt UI.
 

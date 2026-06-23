@@ -9,6 +9,8 @@ and optional `mode` arguments.
 
 - Missing path returns `Usage: /write <path> <content>`.
 - Missing content writes an empty file.
+- Structured tool calls read `path`, `content`, and `mode` from `ctx.tool_args`;
+  positional slash-command arguments are used only for manual `/write` calls.
 - Absolute paths are used as provided.
 - Relative paths are resolved against the configured
   [workspace directory](workspace-directory.md).

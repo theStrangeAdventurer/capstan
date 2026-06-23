@@ -90,6 +90,33 @@ static void call_handler_tool_mode(lua_State *L, const char *path,
   munit_assert_int(rc, ==, LUA_OK);
 }
 
+static void call_handler_tool_with_positional_noise(lua_State *L,
+                                                    const char *path,
+                                                    const char *content) {
+  lua_getfield(L, -1, "handler");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "wrong/path.txt");
+  lua_rawseti(L, -2, 1);
+  lua_pushstring(L, "wrong content");
+  lua_rawseti(L, -2, 2);
+  lua_setfield(L, -2, "args");
+
+  lua_newtable(L);
+  lua_pushstring(L, path);
+  lua_setfield(L, -2, "path");
+  lua_pushstring(L, content);
+  lua_setfield(L, -2, "content");
+  lua_setfield(L, -2, "tool_args");
+
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
 static void call_handler_append(lua_State *L, const char *path,
                                 const char *content) {
   lua_getfield(L, -1, "handler");
@@ -345,6 +372,39 @@ static MunitResult test_tool_args_preserve_multiline_content(
   return MUNIT_OK;
 }
 
+static MunitResult test_tool_args_take_precedence_over_positional_args(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "file-write-tool-precedence");
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_write_plugin(L);
+  call_handler_tool_with_positional_noise(L, "tool-real.txt", "real content");
+
+  char expected[4096];
+  char wrong[4096];
+  snprintf(expected, sizeof(expected), "%s/tool-real.txt", workdir);
+  snprintf(wrong, sizeof(wrong), "%s/wrong/path.txt", workdir);
+  FILE *f = fopen(expected, "r");
+  munit_assert_not_null(f);
+  char buf[64];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+  munit_assert_string_equal(buf, "real content");
+  munit_assert_null(fopen(wrong, "r"));
+
+  lua_close(L);
+  unlink(expected);
+  rmdir(workdir);
+
+  return MUNIT_OK;
+}
+
 static MunitResult test_append_mode_preserves_existing_content(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -448,6 +508,9 @@ static MunitTest tests[] = {
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_args_preserve_multiline_content",
      test_tool_args_preserve_multiline_content, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_args_take_precedence_over_positional_args",
+     test_tool_args_take_precedence_over_positional_args, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/append_mode_preserves_existing_content",
      test_append_mode_preserves_existing_content, NULL, NULL,

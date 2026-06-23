@@ -46,25 +46,27 @@ end
 local function call_plugin_tool(tool_name, args)
     local p = find_plugin_tool(tool_name)
     if not p then
-        if not _G.plugins then return "No plugins loaded" end
-        return "Unknown tool: " .. tool_name
+        if not _G.plugins then return "No plugins loaded", false end
+        return "Unknown tool: " .. tool_name, false
+    end
+    if type(p.handler) ~= "function" then
+        return "Tool " .. tool_name .. " failed: plugin has no handler", false
     end
 
-    local ctx_args = {}
-    for _, v in pairs(args) do
-        table.insert(ctx_args, tostring(v))
-    end
     local ctx = {
         input = "/" .. tool_name,
         command = p.command,
-        args = ctx_args,
+        args = {},
         tool_args = args,
     }
     function ctx:replace(ui_val, llm_val)
         return ui_val, llm_val or ui_val
     end
-    local ui_result, llm_result = p.handler(ctx)
-    return llm_result or ui_result
+    local ok, ui_result, llm_result = pcall(p.handler, ctx)
+    if not ok then
+        return "Tool " .. tool_name .. " failed: " .. tostring(ui_result), false
+    end
+    return llm_result or ui_result, true
 end
 
 local function tool_permission_name(tool_name)
@@ -86,11 +88,66 @@ local function decode_tool_arguments(raw)
     return decoded, nil
 end
 
+local function is_absolute_path(path)
+    return type(path) == "string" and path:sub(1, 1) == "/"
+end
+
+local function configured_workdir()
+    if _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir ~= "" then
+        return _G.capstan.workdir
+    end
+    return nil
+end
+
+local function expand_home_path(path)
+    if type(path) ~= "string" then return path end
+    if path ~= "~" and path:sub(1, 2) ~= "~/" then return path end
+    local home = os.getenv("HOME")
+    if not home or home == "" then return path end
+    return home .. path:sub(2)
+end
+
+local function normalize_path(path)
+    if type(path) ~= "string" or path == "" then
+        return path
+    end
+
+    path = expand_home_path(path)
+    if not is_absolute_path(path) then
+        local workdir = configured_workdir()
+        if not workdir or workdir == "" then
+            return path
+        end
+        path = workdir:gsub("/+$", "") .. "/" .. path
+    end
+
+    local parts = {}
+    for part in path:gmatch("[^/]+") do
+        if part == "." then
+        elseif part == ".." then
+            if #parts > 0 then
+                table.remove(parts)
+            end
+        else
+            table.insert(parts, part)
+        end
+    end
+
+    return "/" .. table.concat(parts, "/")
+end
+
 local function tool_call_target(tool_name, args)
     if tool_name == "shell" and _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir ~= "" then
         return _G.capstan.workdir
     end
     return args.command or args.path or args.url or args.uri or tool_name
+end
+
+local function normalize_permission_target(permission_tool, target)
+    if permission_tool == "file_read" or permission_tool == "file_write" then
+        return normalize_path(target)
+    end
+    return target
 end
 
 function M.process(current_msgs, combined_tools, tool_calls, assistant_text, continue_fn)
@@ -133,6 +190,7 @@ function M.process(current_msgs, combined_tools, tool_calls, assistant_text, con
             args = call_ctx.args or args
             target = call_ctx.target or target
             permission_tool = call_ctx.permission_tool or permission_tool
+            target = normalize_permission_target(permission_tool, target)
             logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, tc.arguments or ""))
             local perm = permit.check(permission_tool, target)
             logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
@@ -153,14 +211,26 @@ function M.process(current_msgs, combined_tools, tool_calls, assistant_text, con
                         permit.grant(permission_tool, target, true)
                         permit.save()
                     end
-                    result_content = call_plugin_tool(tool_name, args)
-                    logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
-                    agent.append("— done\n\n", "agent")
+                    local tool_ok
+                    result_content, tool_ok = call_plugin_tool(tool_name, args)
+                    if tool_ok then
+                        logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
+                        agent.append("— done\n\n", "agent")
+                    else
+                        logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
+                        agent.append("— error\n\n", "agent")
+                    end
                 end
             else
-                result_content = call_plugin_tool(tool_name, args)
-                logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
-                agent.append("— done\n\n", "agent")
+                local tool_ok
+                result_content, tool_ok = call_plugin_tool(tool_name, args)
+                if tool_ok then
+                    logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
+                    agent.append("— done\n\n", "agent")
+                else
+                    logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
+                    agent.append("— error\n\n", "agent")
+                end
             end
             local result_ctx = hooks.run("after_tool_call", {
                 name = tool_name,
