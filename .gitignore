@@ -29,6 +29,11 @@ vendor/lua-5.5.0/src/liblua.a
 
 # macOS resource forks
 ._*
+.DS_Store
+
+# Local notes/editor state
+.obsidian/
+specs/.obsidian/
 
 # Stale tooling
 compile_commands.json

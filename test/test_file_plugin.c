@@ -34,6 +34,11 @@ static void set_capstan_workdir(lua_State *L, const char *path) {
   lua_setglobal(L, "capstan");
 }
 
+static int path_exists(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0;
+}
+
 static void call_handler(lua_State *L, const char *path) {
   lua_getfield(L, -1, "handler");
 
@@ -107,11 +112,45 @@ static MunitResult test_relative_path_uses_capstan_workdir(
   return MUNIT_OK;
 }
 
+static MunitResult test_directory_listing_shell_quotes_path(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char dir[4096];
+  snprintf(dir, sizeof(dir), "/tmp/capstan-file-injection-%ld",
+           (long)getpid());
+  rmdir(dir);
+  munit_assert_int(mkdir(dir, 0700), ==, 0);
+
+  char marker[4096];
+  snprintf(marker, sizeof(marker), "%s/marker", dir);
+  unlink(marker);
+
+  char malicious[8192];
+  snprintf(malicious, sizeof(malicious), "%s\"; touch %s; echo \"", dir,
+           marker);
+
+  lua_State *L = new_state();
+  load_file_plugin(L);
+  call_handler(L, malicious);
+
+  munit_assert_false(path_exists(marker));
+
+  lua_close(L);
+  unlink(marker);
+  rmdir(dir);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/readme_fallback_reads_readme_md", test_readme_fallback_reads_readme_md,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/relative_path_uses_capstan_workdir",
      test_relative_path_uses_capstan_workdir, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/directory_listing_shell_quotes_path",
+     test_directory_listing_shell_quotes_path, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

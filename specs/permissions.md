@@ -32,19 +32,50 @@ The selected choice can be changed with `h`/`k`, left/up arrows,
 `y`, `n`, and `a` are shortcuts for `Yes`, `No`, and `Always allow`. `Esc`
 denies the call.
 
-Persisted rules are stored in:
+Declarative permission rules are configured in:
 
 ```text
-~/.config/capstan/permissions.lua
+~/.config/capstan/config.lua
 ```
 
-Rules are Lua table entries with `tool`, `pattern`, and `allow` fields. Newer
-matching rules take precedence because permission checks scan from the end of
-the in-memory list.
+under the `permissions` key:
+
+```lua
+return {
+  capabilities = {
+    self_improvement = true,
+  },
+  permissions = {
+    { tool = "file_read", pattern = "/repo *", allow = true },
+  },
+}
+```
+
+Permission rules are Lua table entries with `tool`, `pattern`, and `allow`
+fields. Newer matching rules take precedence because permission checks scan from
+the end of the in-memory list.
+
+Runtime choices from `Always allow` are not editable config. They are persisted
+as application state in:
+
+```text
+$XDG_STATE_HOME/capstan/permissions.lua
+```
+
+When `XDG_STATE_HOME` is unset, the fallback is:
+
+```text
+~/.local/state/capstan/permissions.lua
+```
+
+Config rules load before runtime-state rules, so choices saved by the runtime
+prompt still take precedence. Saved `tool` and `pattern` values are escaped as
+Lua string contents so quotes, backslashes, control characters, and newlines
+cannot corrupt the state file.
 
 ## Default Policy
 
-If no persisted rule matches:
+If no configured or persisted rule matches:
 
 - `shell` returns `ask`.
 - `file_read` returns `allow` when the normalized target stays inside the
@@ -59,13 +90,14 @@ Pattern matching supports exact target matches and a narrow wildcard form:
 
 ## Architecture
 
-`ai/providers.lua` applies permissions while processing model tool calls.
+`agent/tools.lua` applies permissions while processing model tool calls.
 For `shell`, it uses `capstan.workdir` as the target. Other tools derive the
 target from common tool arguments (`command`, `path`, `url`, `uri`) or fall back
 to the tool name.
 
-`src/permit.c` owns rule loading, saving, matching, and the Lua-facing
-`permit` table. `src/tui.c` renders the blocking permit confirmation popup.
+`src/permit.c` owns rule loading, saving, matching, config-rule import, and the
+Lua-facing `permit` table. `src/tui.c` renders the blocking permit confirmation
+popup.
 
 Plugin metadata may declare a `permission` field to share permission policy
 between related tools. For example, `file_edit` uses `file_write` permission
@@ -77,5 +109,5 @@ Provider-level tests cover permission target selection for `fetch`, `file_read`,
 and `shell`; streamed execution for `file_edit`; permission aliases; malformed
 tool arguments; and runtime log tests cover permission check/prompt logging.
 
-Pure permission matching can be tested through `permit_pattern_match` without
-linking ncurses, Lua, or curl.
+Pure permission matching and saved-rule string escaping can be tested through
+`permit_logic.c` without linking ncurses, Lua, or curl.

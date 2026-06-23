@@ -5,8 +5,11 @@
 Capstan writes runtime events to:
 
 ```text
-~/.config/capstan/events.log
+$XDG_STATE_HOME/capstan/events.log
 ```
+
+When `XDG_STATE_HOME` is not set, the fallback is
+`~/.local/state/capstan/events.log`.
 
 Each line includes a local timestamp, category, and compact message:
 
@@ -34,6 +37,7 @@ If `n` is omitted, it shows the last 80 lines. The maximum is 500 lines.
 - [Permission](permissions.md) checks and prompt decisions
 - Tool completion and result size
 - Continuation after tool results
+- [Hook](hooks.md) errors with stage and source
 
 Set `CAPSTAN_LOG_RAW=1` to include raw SSE chunks and parsed SSE event payloads
 in the log. This is intentionally opt-in because raw stream logs can become
@@ -43,9 +47,10 @@ large and may include full model output.
 
 `src/log.c` exposes `capstan.log(category, message)` and
 `capstan.log_path()` to Lua. The logger appends to `events.log` and creates the
-Capstan config directory if needed.
+Capstan state directory if needed.
 
-`ai/providers.lua` writes agent/tool/API lifecycle events through that Lua API.
+The `agent/` Lua runtime writes agent/tool/API lifecycle events through that Lua
+API.
 `plugins/logs.lua` reads the log file and returns a tail view.
 
 ## Tests

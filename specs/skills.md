@@ -8,6 +8,8 @@ directories at startup.
 - Project skills are read from `.agents/skills/` under the active workspace.
 - Shared home skills are read from `~/.agents/skills/`.
 - User skills are read from `~/.config/capstan/skills/`.
+- Gated built-in skills may be materialized under the Capstan state directory
+  and loaded as source `builtin`.
 - A skill must be a directory containing `SKILL.md`, such as
   `skills/code-review/SKILL.md`.
 - Direct markdown files like `skills/debug.md` are ignored.
@@ -29,7 +31,14 @@ directories at startup.
 - If multiple directories define the same skill name, later sources override
   earlier sources. Priority from highest to lowest is project `.agents/skills/`,
   Capstan user `~/.config/capstan/skills/`, then shared home
-  `~/.agents/skills/`.
+  `~/.agents/skills/`, then built-in gated skills.
+- The `self-improvement` built-in skill is disabled unless
+  `capabilities.self_improvement = true` is present in
+  `~/.config/capstan/config.lua`.
+  When enabled, Capstan writes its embedded `SKILL.md` to
+  `$XDG_STATE_HOME/capstan/builtin-skills/self-improvement/SKILL.md`, or
+  `~/.local/state/capstan/builtin-skills/self-improvement/SKILL.md` when
+  `XDG_STATE_HOME` is unset, then includes that directory in the skill scan.
 - The lightweight skill index is appended to the Lua `system_prompt` global, so
   every provider can discover available skills without loading their full text.
 - `/skills` shows the loaded skill list, including each skill source,
@@ -51,12 +60,15 @@ that value.
 
 - Skills are loaded once at process startup. Editing a skill requires restarting
   Capstan before the updated instructions are sent to the model.
+- Built-in gated skill files are regenerated at startup from embedded assets.
+  User or project skills can still override them by defining the same skill
+  directory name.
 - Full `SKILL.md` contents and resource files are not included until the agent
   reads them explicitly.
 
 ## Test Notes
 
 `make test` covers FrontMatter-only prompt rendering, ignored fallback formats,
-recursive resource manifests for `/skills`, empty directories, shared home
-skill loading, and override behavior.
+recursive resource manifests for `/skills`, empty directories, shared home and
+built-in skill loading, and override behavior.
 `make test-http-lua` covers the `/skills` Lua command.

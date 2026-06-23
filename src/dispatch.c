@@ -1,6 +1,8 @@
 #include "dispatch.h"
 #include "agent.h"
+#include "app_config.h"
 #include "editor.h"
+#include "finder.h"
 #include "http.h"
 #include "input.h"
 #include "plugins.h"
@@ -13,6 +15,73 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static void popup_items_free(PopupItem *items, int count) {
+  for (int i = 0; i < count; i++) {
+    free(items[i].text);
+    free(items[i].value);
+  }
+  free(items);
+}
+
+static void finder_add_lua_string_array(FinderIgnoreList *ignore,
+                                        const char *field, int load_files) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return;
+  }
+  lua_getfield(L, -1, "config");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 2);
+    return;
+  }
+  lua_getfield(L, -1, "finder");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 3);
+    return;
+  }
+  lua_getfield(L, -1, field);
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 4);
+    return;
+  }
+
+  int len = (int)lua_rawlen(L, -1);
+  for (int i = 1; i <= len; i++) {
+    lua_rawgeti(L, -1, i);
+    const char *value = lua_tostring(L, -1);
+    if (value) {
+      if (load_files)
+        finder_ignore_load_file(ignore, app_workdir(), value);
+      else
+        finder_ignore_add(ignore, value);
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 4);
+}
+
+static int open_file_finder(Plugin *plugin, size_t cmd_end) {
+  FinderIgnoreList ignore;
+  finder_ignore_init(&ignore);
+  finder_ignore_load_file(&ignore, app_workdir(), ".gitignore");
+  finder_add_lua_string_array(&ignore, "ignore_files", 1);
+  finder_add_lua_string_array(&ignore, "ignore_patterns", 0);
+
+  PopupItem *items = NULL;
+  int count = 0;
+  int ok = finder_collect_files(app_workdir(), &ignore, &items, &count);
+  finder_ignore_free(&ignore);
+  if (!ok)
+    return 0;
+
+  if (count > 0)
+    popup_open_filterable_with_plugin(items, count, "Files", 10, 0, plugin,
+                                      cmd_end);
+  popup_items_free(items, count);
+  return count > 0;
+}
 
 static void flush_pending_and_send(const char *ui_text, const char *raw_text) {
   if (g_pending.size > 0) {
@@ -58,6 +127,14 @@ static void add_plugin_result(Plugin *p, PluginResult *r) {
   char label[64];
   snprintf(label, sizeof(label), "ctx:%s", cmd);
   pending_add(label, r->ui_result, r->raw_result);
+  free(r);
+}
+
+static void show_plugin_result(Plugin *p, PluginResult *r) {
+  popup_show_message(p->name ? p->name : "Command",
+                     r->ui_result ? r->ui_result : "", 0);
+  free(r->ui_result);
+  free(r->raw_result);
   free(r);
 }
 
@@ -108,28 +185,42 @@ static int try_command_with_plugin(const char *input, size_t cmd_end) {
       return 1;
     }
     PluginResult *r = plugin_execute(p, input, cmd_end, NULL, 0);
-    if (r)
-      add_plugin_result(p, r);
+    if (r) {
+      if (p->include_in_history)
+        add_plugin_result(p, r);
+      else
+        show_plugin_result(p, r);
+    }
     return 1;
   }
 
   if (strcmp(command, "/") == 0) {
     int pc = plugin_registry_count();
     int builtins = 2;
-    int count = pc + builtins;
+    int command_plugins = 0;
+    for (int i = 0; i < pc; i++) {
+      Plugin *pp = plugin_registry_at(i);
+      if (pp && pp->command)
+        command_plugins++;
+    }
+    int count = command_plugins + builtins;
     if (count > 0) {
       PopupItem *items = malloc(count * sizeof(PopupItem));
       items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
       items[0].value = my_strdup("/editor");
       items[1].text = my_strdup("/new  Clear messages and token usage");
       items[1].value = my_strdup("/new");
+      int out = builtins;
       for (int i = 0; i < pc; i++) {
         Plugin *pp = plugin_registry_at(i);
+        if (!pp || !pp->command)
+          continue;
         char buf[256];
         snprintf(buf, sizeof(buf), "%s  %s", pp->command,
                  pp->description ? pp->description : "");
-        items[i + builtins].text = my_strdup(buf);
-        items[i + builtins].value = my_strdup(pp->command);
+        items[out].text = my_strdup(buf);
+        items[out].value = my_strdup(pp->command);
+        out++;
       }
       popup_open_with_plugin(items, count, "Commands", 10, 0, NULL, 0);
       for (int i = 0; i < count; i++) {
@@ -158,7 +249,13 @@ int dispatch_tab(void) {
   if (strcmp(command, "/") == 0) {
     int pc = plugin_registry_count();
     int builtins = 2;
-    int count = pc + builtins;
+    int command_plugins = 0;
+    for (int i = 0; i < pc; i++) {
+      Plugin *pp = plugin_registry_at(i);
+      if (pp && pp->command)
+        command_plugins++;
+    }
+    int count = command_plugins + builtins;
     if (count <= 0)
       return 0;
 
@@ -167,13 +264,17 @@ int dispatch_tab(void) {
     items[0].value = my_strdup("/editor");
     items[1].text = my_strdup("/new  Clear messages and token usage");
     items[1].value = my_strdup("/new");
+    int out = builtins;
     for (int i = 0; i < pc; i++) {
       Plugin *pp = plugin_registry_at(i);
+      if (!pp || !pp->command)
+        continue;
       char buf[256];
       snprintf(buf, sizeof(buf), "%s  %s", pp->command,
                pp->description ? pp->description : "");
-      items[i + builtins].text = my_strdup(buf);
-      items[i + builtins].value = my_strdup(pp->command);
+      items[out].text = my_strdup(buf);
+      items[out].value = my_strdup(pp->command);
+      out++;
     }
     popup_open_with_plugin(items, count, "Commands", 10, 0, NULL, 0);
     for (int i = 0; i < count; i++) {
@@ -187,6 +288,9 @@ int dispatch_tab(void) {
   Plugin *p = plugin_registry_find(command);
   if (!p || !plugin_has_autocomplete(p))
     return 0;
+
+  if (strcmp(command, "/file") == 0)
+    return open_file_finder(p, cmd_end);
 
   PopupItem *items;
   int count;
@@ -275,7 +379,10 @@ void dispatch_popup_result(void) {
       PluginResult *r =
           plugin_execute(p, input_get_text(), cmd_end, selected, sel_count);
       if (r) {
-        add_plugin_result(p, r);
+        if (p->include_in_history)
+          add_plugin_result(p, r);
+        else
+          show_plugin_result(p, r);
       }
       input_clear();
       popup_free_selected(selected, sel_count);
@@ -283,7 +390,10 @@ void dispatch_popup_result(void) {
       PluginResult *r =
           plugin_execute(p, input_get_text(), cmd_end, selected, sel_count);
       if (r) {
-        add_plugin_result(p, r);
+        if (p->include_in_history)
+          add_plugin_result(p, r);
+        else
+          show_plugin_result(p, r);
       }
       input_clear();
       popup_free_selected(selected, sel_count);

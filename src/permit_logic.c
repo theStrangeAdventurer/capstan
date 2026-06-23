@@ -73,3 +73,54 @@ PermState permit_file_read_check(const char *workdir, const char *target) {
 
   return PERM_ASK;
 }
+
+int permit_lua_escape_string(const char *input, char *out, size_t out_size) {
+  if (!input || !out || out_size == 0)
+    return 0;
+
+  size_t pos = 0;
+  for (const char *p = input; *p; p++) {
+    const char *replacement = NULL;
+    char escaped_byte[5];
+
+    switch (*p) {
+    case '\\':
+      replacement = "\\\\";
+      break;
+    case '"':
+      replacement = "\\\"";
+      break;
+    case '\n':
+      replacement = "\\n";
+      break;
+    case '\r':
+      replacement = "\\r";
+      break;
+    case '\t':
+      replacement = "\\t";
+      break;
+    default:
+      if ((unsigned char)*p < 0x20) {
+        snprintf(escaped_byte, sizeof(escaped_byte), "\\%03u",
+                 (unsigned char)*p);
+        replacement = escaped_byte;
+      }
+      break;
+    }
+
+    if (replacement) {
+      size_t len = strlen(replacement);
+      if (pos + len >= out_size)
+        return 0;
+      memcpy(out + pos, replacement, len);
+      pos += len;
+    } else {
+      if (pos + 1 >= out_size)
+        return 0;
+      out[pos++] = *p;
+    }
+  }
+
+  out[pos] = '\0';
+  return 1;
+}

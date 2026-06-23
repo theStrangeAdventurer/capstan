@@ -14,7 +14,12 @@ struct Plugin {
   char *name;
   char *description;
   char *command;
+  char *source_path;
   int is_async;
+  int include_in_history;
+  int is_user_plugin;
+  long source_mtime;
+  long source_size;
 
   lua_State *L;
   int handler_ref;
@@ -72,5 +77,7 @@ void plugins_cleanup();
 char *get_plugins_info();
 void load_embedded_plugins(void);
 void load_plugins_from(const char *dir_path);
+void plugins_watch_start(const char *dir_path);
+void plugins_watch_poll(void);
 void plugin_registry_remove_by_id(const char *id);
 #endif

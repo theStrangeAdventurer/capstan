@@ -18,6 +18,10 @@ void popup_open(PopupItem *items, int count, const char *title,
 void popup_init(void);
 void popup_open_with_plugin(PopupItem *items, int count, const char *title,
                             int max_visible, int multi, struct Plugin *plugin, size_t cmd_end);
+void popup_open_filterable_with_plugin(PopupItem *items, int count,
+                                       const char *title, int max_visible,
+                                       int multi, struct Plugin *plugin,
+                                       size_t cmd_end);
 void popup_drill_down(PopupItem *items, int count, const char *title);
 int popup_is_active(void);
 int popup_handle_key(int ch);

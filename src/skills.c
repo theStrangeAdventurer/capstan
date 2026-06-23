@@ -419,11 +419,14 @@ static int append_text(char **buf, size_t *len, size_t *capacity,
   return 1;
 }
 
-char *skills_build_prompt(const char *project_skills_dir,
+char *skills_build_prompt(const char *builtin_skills_dir,
+                          const char *project_skills_dir,
                           const char *user_skills_dir,
                           const char *common_skills_dir) {
   SkillList list = {0};
 
+  if (builtin_skills_dir)
+    scan_skill_dir(&list, builtin_skills_dir, "builtin");
   if (common_skills_dir)
     scan_skill_dir(&list, common_skills_dir, "common");
   if (user_skills_dir)
@@ -444,8 +447,9 @@ char *skills_build_prompt(const char *project_skills_dir,
   if (!append_text(&buf, &len, &capacity,
                    "\n\n# Skills\n"
                    "The following skill index was loaded from "
-                   "`skills/name/SKILL.md` under project `.agents/skills/`, "
-                   "`~/.agents/skills/`, and `~/.config/capstan/skills/`. Only "
+                   "`skills/name/SKILL.md` under built-in gated skills, "
+                   "project `.agents/skills/`, `~/.agents/skills/`, and "
+                   "`~/.config/capstan/skills/`. Only "
                    "FrontMatter metadata is included here.\n"
                    "Mandatory skill use rule: if the user names a skill, or if "
                    "the task matches a skill description, you must read that "
@@ -481,11 +485,14 @@ fail:
   return my_strdup("");
 }
 
-char *skills_build_summary(const char *project_skills_dir,
+char *skills_build_summary(const char *builtin_skills_dir,
+                           const char *project_skills_dir,
                            const char *user_skills_dir,
                            const char *common_skills_dir) {
   SkillList list = {0};
 
+  if (builtin_skills_dir)
+    scan_skill_dir(&list, builtin_skills_dir, "builtin");
   if (common_skills_dir)
     scan_skill_dir(&list, common_skills_dir, "common");
   if (user_skills_dir)

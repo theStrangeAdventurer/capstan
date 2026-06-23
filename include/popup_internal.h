@@ -16,12 +16,17 @@ typedef struct {
   PopupItem *items;
   int item_count;
   int *selected;
+  PopupItem *all_items;
+  int all_item_count;
 
   int cursor;
   int scroll;
   int max_visible;
   char *title;
   int multi;
+  int filterable;
+  char query[256];
+  int query_len;
 
   struct Plugin *plugin;
   size_t cmd_end;
@@ -45,7 +50,15 @@ typedef struct {
 
 extern MsgPopup g_msgpopup;
 
+typedef struct {
+  int visible;
+  int top;
+  int height;
+} PopupScrollbar;
+
 void popup_set_win_cleanup(void (*fn)(void *));
 void popup_close_data(void);
+int popup_row_prefix_width(int multi);
+PopupScrollbar popup_scrollbar_calc(int item_count, int visible, int scroll);
 
 #endif

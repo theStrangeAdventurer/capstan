@@ -116,11 +116,60 @@ void permit_save(const char *path) {
   fprintf(f, "return {\n");
   for (size_t i = 0; i < g_entries.size; i++) {
     PermEntry *e = g_entries.items[i];
+    char tool[PERMIT_MAX_TARGET * 2];
+    char pattern[PERMIT_MAX_TARGET * 2];
+    if (!permit_lua_escape_string(e->tool, tool, sizeof(tool)) ||
+        !permit_lua_escape_string(e->pattern, pattern, sizeof(pattern)))
+      continue;
     fprintf(f, "  {tool = \"%s\", pattern = \"%s\", allow = %s},\n",
-            e->tool, e->pattern, e->allow ? "true" : "false");
+            tool, pattern, e->allow ? "true" : "false");
   }
   fprintf(f, "}\n");
   fclose(f);
+}
+
+static void permit_load_config_permissions(lua_State *L) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return;
+  }
+
+  lua_getfield(L, -1, "config");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 2);
+    return;
+  }
+
+  lua_getfield(L, -1, "permissions");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 3);
+    return;
+  }
+
+  int len = (int)lua_rawlen(L, -1);
+  for (int i = 1; i <= len; i++) {
+    lua_rawgeti(L, -1, i);
+    if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      continue;
+    }
+
+    lua_getfield(L, -1, "tool");
+    const char *tool = lua_tostring(L, -1);
+    lua_getfield(L, -2, "pattern");
+    const char *pattern = lua_tostring(L, -1);
+    lua_getfield(L, -3, "allow");
+    int has_allow = !lua_isnil(L, -1);
+    int allow = lua_toboolean(L, -1);
+
+    if (tool && pattern && has_allow)
+      permit_grant(tool, pattern, allow);
+
+    lua_pop(L, 4);
+  }
+
+  lua_pop(L, 3);
 }
 
 static int l_permit_check(lua_State *L) {
@@ -151,8 +200,8 @@ static int l_permit_grant(lua_State *L) {
 
 static int l_permit_save(lua_State *L) {
   char path[512];
-  if (app_config_ensure_dir() != 0 ||
-      app_config_path(path, sizeof(path), "permissions.lua") != 0) {
+  if (app_state_ensure_dir() != 0 ||
+      app_state_path(path, sizeof(path), "permissions.lua") != 0) {
     lua_pushboolean(L, 0);
     return 1;
   }
@@ -163,7 +212,7 @@ static int l_permit_save(lua_State *L) {
 
 static int l_permit_load(lua_State *L) {
   char path[512];
-  if (app_config_path(path, sizeof(path), "permissions.lua") != 0) {
+  if (app_state_path(path, sizeof(path), "permissions.lua") != 0) {
     lua_pushboolean(L, 0);
     return 1;
   }
@@ -182,7 +231,8 @@ static int l_permit_prompt(lua_State *L) {
 
 void permit_init(lua_State *L) {
   char path[512];
-  if (app_config_path(path, sizeof(path), "permissions.lua") == 0)
+  permit_load_config_permissions(L);
+  if (app_state_path(path, sizeof(path), "permissions.lua") == 0)
     permit_load(path);
 
   lua_newtable(L);
