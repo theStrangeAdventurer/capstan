@@ -103,14 +103,15 @@ local function line_count(content)
 end
 
 function plugin.handler(ctx)
-	local mode = (ctx.tool_args and ctx.tool_args.mode) or "write"
 	local arg_offset = 0
-	if ctx.args[1] == "--append" then
+	local tool_args = type(ctx.tool_args) == "table" and ctx.tool_args or nil
+	local mode = tool_args and tool_args.mode or "write"
+	if not tool_args and ctx.args[1] == "--append" then
 		mode = "append"
 		arg_offset = 1
 	end
-	local path = ctx.args[1 + arg_offset] or (ctx.tool_args and ctx.tool_args.path)
-	local content = ctx.args[2 + arg_offset] or (ctx.tool_args and ctx.tool_args.content)
+	local path = tool_args and tool_args.path or ctx.args[1 + arg_offset]
+	local content = tool_args and tool_args.content or ctx.args[2 + arg_offset]
 
 	if not path or tostring(path) == "" then
 		return ctx:replace("Usage: /write <path> <content>")

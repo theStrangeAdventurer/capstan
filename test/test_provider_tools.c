@@ -353,6 +353,33 @@ static void load_real_file_edit_plugin(lua_State *L) {
   lua_pop(L, 2);
 }
 
+static void load_real_file_write_plugin(lua_State *L) {
+  int rc = luaL_dofile(L, "plugins/file_write.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_true(lua_istable(L, -1));
+
+  lua_getglobal(L, "plugins");
+  munit_assert_true(lua_istable(L, -1));
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "file_write");
+  lua_pop(L, 2);
+}
+
+static void install_broken_tool_plugin(lua_State *L) {
+  int rc = luaL_dostring(
+      L,
+      "plugins.broken = {"
+      "tool = {"
+      "name = 'broken_tool',"
+      "permission = 'broken_tool',"
+      "description = 'Broken test tool',"
+      "parameters = {type = 'object', properties = {path = {type = 'string'}}, required = {'path'}}"
+      "},"
+      "handler = function(ctx) error('boom for ' .. tostring(ctx.tool_args.path)) end"
+      "}");
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
 static void make_tmp_dir(char *buf, size_t buf_size, const char *name) {
   snprintf(buf, buf_size, "/tmp/capstan-%s-%ld", name, (long)getpid());
   rmdir(buf);
@@ -387,6 +414,9 @@ static void call_on_messages(lua_State *L) {
   int rc = lua_pcall(L, 1, 0, 0);
   munit_assert_int(rc, ==, LUA_OK);
 }
+
+static void send_tool_call(lua_State *L, const char *call_id,
+                           const char *name, const char *arguments);
 
 static MunitResult test_request_enables_auto_tool_choice(
     const MunitParameter params[], void *data) {
@@ -821,7 +851,7 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
   read_file(path, buf, sizeof(buf));
   munit_assert_string_equal(buf, "alpha\nBETA\ngamma\n");
   munit_assert_string_equal(captured_permit_tool, "file_write");
-  munit_assert_string_equal(captured_permit_target, "file.txt");
+  munit_assert_string_equal(captured_permit_target, path);
   munit_assert_true(strstr(captured_logs, "[tool] call name=file_edit") != NULL);
   munit_assert_true(strstr(captured_logs, "[permit] tool=file_write call=file_edit") != NULL);
   munit_assert_true(strstr(captured_body, "\"role\":\"tool\"") != NULL);
@@ -830,6 +860,54 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
   reset_captures(L);
   lua_close(L);
   unlink(path);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
+static MunitResult test_file_write_permission_target_uses_absolute_workspace_path(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "provider-file-write-target");
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, workdir);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  load_real_file_write_plugin(L);
+
+  call_on_messages(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_write_target", "file_write",
+                 "{\\\"path\\\":\\\"src/../src-plugins/out.txt\\\","
+                 "\\\"content\\\":\\\"ok\\\"}");
+
+  char expected_target[4096];
+  snprintf(expected_target, sizeof(expected_target), "%s/src-plugins/out.txt",
+           workdir);
+  munit_assert_string_equal(captured_permit_tool, "file_write");
+  munit_assert_string_equal(captured_permit_target, expected_target);
+  munit_assert_true(strstr(captured_logs, "[permit] tool=file_write call=file_write") != NULL);
+
+  char expected_file[4096];
+  snprintf(expected_file, sizeof(expected_file), "%s/src-plugins/out.txt",
+           workdir);
+  char buf[32];
+  read_file(expected_file, buf, sizeof(buf));
+  munit_assert_string_equal(buf, "ok");
+
+  reset_captures(L);
+  lua_close(L);
+  unlink(expected_file);
+  char dir[4096];
+  snprintf(dir, sizeof(dir), "%s/src-plugins", workdir);
+  rmdir(dir);
   rmdir(workdir);
   return MUNIT_OK;
 }
@@ -867,6 +945,51 @@ static MunitResult test_invalid_tool_arguments_skip_permission(
   munit_assert_true(strstr(captured_logs, "[tool] invalid_args name=fetch") != NULL);
   munit_assert_true(strstr(captured_body, "\"role\":\"tool\"") != NULL);
   munit_assert_true(strstr(captured_body, "Invalid JSON arguments") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_handler_error_returns_tool_result(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  install_broken_tool_plugin(L);
+
+  call_on_messages(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L,
+                 "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
+                 "\"id\":\"call_broken\",\"function\":{\"name\":\"broken_tool\","
+                 "\"arguments\":\"{\\\"path\\\":\\\"bad.txt\\\"}\"}}]}}]}\n\n");
+  lua_pushboolean(L, 0);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_string_equal(captured_permit_tool, "broken_tool");
+  munit_assert_string_equal(captured_permit_target, "bad.txt");
+  munit_assert_true(strstr(captured_agent_appends, "error") != NULL);
+  munit_assert_true(strstr(captured_logs, "[tool] error name=broken_tool") != NULL);
+  munit_assert_true(strstr(captured_body, "\"role\":\"tool\"") != NULL);
+  munit_assert_true(strstr(captured_body, "Tool broken_tool failed") != NULL);
+  munit_assert_true(strstr(captured_body, "boom for bad.txt") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -1217,8 +1340,14 @@ static MunitTest tests[] = {
     {"/streamed_file_edit_tool_edits_file",
      test_streamed_file_edit_tool_edits_file, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/file_write_permission_target_uses_absolute_workspace_path",
+     test_file_write_permission_target_uses_absolute_workspace_path, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/invalid_tool_arguments_skip_permission",
      test_invalid_tool_arguments_skip_permission, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_handler_error_returns_tool_result",
+     test_tool_handler_error_returns_tool_result, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_always_allow_uses_workspace_target",
      test_shell_always_allow_uses_workspace_target, NULL, NULL,

@@ -46,14 +46,16 @@ return {
     self_improvement = true,
   },
   permissions = {
-    { tool = "file_read", pattern = "/repo *", allow = true },
+    { tool = "file_read", pattern = "~/narnia/tui-agent/*", allow = true },
+    { tool = "fetch", pattern = "https://api.openai.com/*", allow = true },
   },
 }
 ```
 
 Permission rules are Lua table entries with `tool`, `pattern`, and `allow`
 fields. Newer matching rules take precedence because permission checks scan from
-the end of the in-memory list.
+the end of the in-memory list. A leading `~` or `~/` in `pattern` expands to the
+current `HOME` directory.
 
 Runtime choices from `Always allow` are not editable config. They are persisted
 as application state in:
@@ -84,16 +86,32 @@ If no configured or persisted rule matches:
   workspace directory.
 - All other tools return `ask`.
 
-Pattern matching supports exact target matches and a narrow wildcard form:
-`"prefix *"` matches targets that start with `prefix`. The current
-`Always allow` UI saves the exact target, not a wildcard.
+Pattern matching supports exact target matches and glob-style `*` anywhere in
+the pattern:
+
+```lua
+{ tool = "fetch", pattern = "*", allow = true }
+{ tool = "fetch", pattern = "https://api.openai.com/*", allow = true }
+{ tool = "fetch", pattern = "https://*.example.com/*", allow = true }
+{ tool = "fetch", pattern = "*://api.example.com/*", allow = true }
+```
+
+A pattern ending in `/*` also matches the directory or URL root before the slash,
+so `"~/narnia/tui-agent/*"` matches both the workspace directory itself and
+paths inside it. This keeps one rule useful for `shell` workspace targets and
+file paths. Newer rules take precedence, so place specific denies after broader
+allows when both could match. The older `"prefix *"` wildcard form is still
+accepted because it is now just normal `*` matching. The current `Always allow`
+UI saves the exact target, not a wildcard.
 
 ## Architecture
 
 `agent/tools.lua` applies permissions while processing model tool calls.
 For `shell`, it uses `capstan.workdir` as the target. Other tools derive the
 target from common tool arguments (`command`, `path`, `url`, `uri`) or fall back
-to the tool name.
+to the tool name. Local file permission targets (`file_read` and `file_write`)
+are normalized before matching: relative paths resolve against `capstan.workdir`,
+`~/` expands through `HOME`, and `.`/`..` segments are collapsed.
 
 `src/permit.c` owns rule loading, saving, matching, config-rule import, and the
 Lua-facing `permit` table. `src/tui.c` renders the blocking permit confirmation

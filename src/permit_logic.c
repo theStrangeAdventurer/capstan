@@ -1,13 +1,65 @@
 #include "permit_logic.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-int permit_pattern_match(const char *pattern, const char *target) {
-  size_t plen = strlen(pattern);
-  if (plen >= 2 && pattern[plen - 2] == ' ' && pattern[plen - 1] == '*') {
-    size_t prefix_len = plen - 2;
-    return strncmp(target, pattern, prefix_len) == 0;
+static const char *expand_home_pattern(const char *pattern, char *buf,
+                                       size_t buf_size) {
+  if (!pattern)
+    return "";
+
+  if (pattern[0] != '~' || (pattern[1] != '/' && pattern[1] != '\0'))
+    return pattern;
+
+  const char *home = getenv("HOME");
+  if (!home || !home[0])
+    return pattern;
+
+  int n = snprintf(buf, buf_size, "%s%s", home, pattern + 1);
+  if (n < 0 || (size_t)n >= buf_size)
+    return pattern;
+  return buf;
+}
+
+static int glob_match(const char *pattern, const char *target) {
+  const char *star = NULL;
+  const char *retry = NULL;
+
+  while (*target) {
+    if (*pattern == '*') {
+      star = pattern++;
+      retry = target;
+    } else if (*pattern == *target) {
+      pattern++;
+      target++;
+    } else if (star) {
+      pattern = star + 1;
+      target = ++retry;
+    } else {
+      return 0;
+    }
   }
+
+  while (*pattern == '*')
+    pattern++;
+  return *pattern == '\0';
+}
+
+int permit_pattern_match(const char *pattern, const char *target) {
+  if (!target)
+    return 0;
+
+  char expanded[PERMIT_MAX_TARGET];
+  pattern = expand_home_pattern(pattern, expanded, sizeof(expanded));
+
+  size_t plen = strlen(pattern);
+  if (plen >= 2 && pattern[plen - 2] == '/' && pattern[plen - 1] == '*') {
+    size_t dir_len = plen - 2;
+    if (strlen(target) == dir_len && strncmp(target, pattern, dir_len) == 0)
+      return 1;
+  }
+  if (strchr(pattern, '*'))
+    return glob_match(pattern, target);
   return strcmp(pattern, target) == 0;
 }
 

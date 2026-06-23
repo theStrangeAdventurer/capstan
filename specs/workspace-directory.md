@@ -23,6 +23,8 @@ Workspace selection happens at startup:
   `/bin/sh -c <command>`.
 - `shell` permission checks use `capstan.workdir` as the target, so allowing
   shell in one workspace covers different command strings in that workspace.
+- `file_write` and `file_edit` permission checks normalize relative target paths
+  against `capstan.workdir` before matching permission rules.
 - `file_read` permission checks treat `capstan.workdir` as the allowed local
   workspace root.
 
