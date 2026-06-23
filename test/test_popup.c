@@ -393,6 +393,119 @@ static MunitResult test_ctrl_d_scroll(const MunitParameter p[], void *d) {
   return MUNIT_OK;
 }
 
+static MunitResult test_filterable_typing_filters_items(const MunitParameter p[],
+                                                        void *d) {
+  (void)p; (void)d;
+  PopupItem items[3] = {
+    {my_strdup("src/main.c"), my_strdup("/repo/src/main.c")},
+    {my_strdup("README.md"), my_strdup("/repo/README.md")},
+    {my_strdup("test/test_main.c"), my_strdup("/repo/test/test_main.c")},
+  };
+  popup_open_filterable_with_plugin(items, 3, "Files", 5, 0, NULL, 0);
+  for (int i = 0; i < 3; i++) { free(items[i].text); free(items[i].value); }
+
+  popup_handle_key('r');
+  popup_handle_key('e');
+  munit_assert_string_equal(g_popup.query, "re");
+  munit_assert_int(g_popup.item_count, ==, 1);
+  munit_assert_string_equal(g_popup.items[0].text, "README.md");
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_filterable_backspace_refilters(const MunitParameter p[],
+                                                       void *d) {
+  (void)p; (void)d;
+  PopupItem items[2] = {
+    {my_strdup("alpha.c"), my_strdup("/repo/alpha.c")},
+    {my_strdup("beta.c"), my_strdup("/repo/beta.c")},
+  };
+  popup_open_filterable_with_plugin(items, 2, "Files", 5, 0, NULL, 0);
+  for (int i = 0; i < 2; i++) { free(items[i].text); free(items[i].value); }
+
+  popup_handle_key('z');
+  munit_assert_int(g_popup.item_count, ==, 0);
+  popup_handle_key(127);
+  munit_assert_string_equal(g_popup.query, "");
+  munit_assert_int(g_popup.item_count, ==, 2);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_filterable_enter_selects_current(
+    const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  PopupItem items[2] = {
+    {my_strdup("alpha.c"), my_strdup("/repo/alpha.c")},
+    {my_strdup("beta.c"), my_strdup("/repo/beta.c")},
+  };
+  popup_open_filterable_with_plugin(items, 2, "Files", 5, 0, NULL, 0);
+  for (int i = 0; i < 2; i++) { free(items[i].text); free(items[i].value); }
+
+  popup_handle_key('b');
+  int ret = popup_handle_key('\n');
+  munit_assert_int(ret, ==, 0);
+  int sel_count;
+  char **sel = popup_get_selected(&sel_count);
+  munit_assert_int(sel_count, ==, 1);
+  munit_assert_string_equal(sel[0], "/repo/beta.c");
+  popup_free_selected(sel, sel_count);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_row_prefix_width(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  munit_assert_int(popup_row_prefix_width(0), ==, 0);
+  munit_assert_int(popup_row_prefix_width(1), ==, 4);
+  return MUNIT_OK;
+}
+
+static MunitResult test_scrollbar_hidden_when_all_items_fit(
+    const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  PopupScrollbar bar = popup_scrollbar_calc(5, 5, 0);
+  munit_assert_int(bar.visible, ==, 0);
+  bar = popup_scrollbar_calc(4, 5, 0);
+  munit_assert_int(bar.visible, ==, 0);
+  return MUNIT_OK;
+}
+
+static MunitResult test_scrollbar_top_middle_bottom(const MunitParameter p[],
+                                                    void *d) {
+  (void)p; (void)d;
+  PopupScrollbar bar = popup_scrollbar_calc(20, 5, 0);
+  munit_assert_int(bar.visible, ==, 1);
+  munit_assert_int(bar.top, ==, 0);
+  munit_assert_int(bar.height, ==, 2);
+
+  bar = popup_scrollbar_calc(20, 5, 8);
+  munit_assert_int(bar.visible, ==, 1);
+  munit_assert_int(bar.top, ==, 2);
+  munit_assert_int(bar.height, ==, 2);
+
+  bar = popup_scrollbar_calc(20, 5, 15);
+  munit_assert_int(bar.visible, ==, 1);
+  munit_assert_int(bar.top, ==, 3);
+  munit_assert_int(bar.height, ==, 2);
+  return MUNIT_OK;
+}
+
+static MunitResult test_scrollbar_clamps_scroll_and_thumb(
+    const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  PopupScrollbar bar = popup_scrollbar_calc(100, 3, 999);
+  munit_assert_int(bar.visible, ==, 1);
+  munit_assert_int(bar.top, ==, 2);
+  munit_assert_int(bar.height, ==, 1);
+
+  bar = popup_scrollbar_calc(100, 3, -10);
+  munit_assert_int(bar.visible, ==, 1);
+  munit_assert_int(bar.top, ==, 0);
+  munit_assert_int(bar.height, ==, 1);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
   {"/open_active", test_open_active, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/close_data_inactive", test_close_data_inactive, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -424,6 +537,13 @@ static MunitTest tests[] = {
   {"/esc_cancels", test_esc_cancels, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/get_selected_values", test_get_selected_values, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/drill_down_replaces", test_drill_down_replaces, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/filterable_typing_filters_items", test_filterable_typing_filters_items, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/filterable_backspace_refilters", test_filterable_backspace_refilters, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/filterable_enter_selects_current", test_filterable_enter_selects_current, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/row_prefix_width", test_row_prefix_width, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/scrollbar_hidden_when_all_items_fit", test_scrollbar_hidden_when_all_items_fit, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/scrollbar_top_middle_bottom", test_scrollbar_top_middle_bottom, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/scrollbar_clamps_scroll_and_thumb", test_scrollbar_clamps_scroll_and_thumb, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}
 };
 

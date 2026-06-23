@@ -10,8 +10,11 @@ local function log_path()
 	if capstan and capstan.log_path then
 		return capstan.log_path()
 	end
+	if capstan and capstan.state_path then
+		return capstan.state_path("events.log")
+	end
 	local home = os.getenv("HOME") or "."
-	return home .. "/.config/capstan/events.log"
+	return home .. "/.local/state/capstan/events.log"
 end
 
 local function read_lines(path)

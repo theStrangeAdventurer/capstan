@@ -47,7 +47,10 @@ void popup_render(void) {
   int visible = g_popup.item_count < g_popup.max_visible
                   ? g_popup.item_count
                   : g_popup.max_visible;
-  int popup_h = visible + 2;
+  PopupScrollbar scrollbar =
+      popup_scrollbar_calc(g_popup.item_count, visible, g_popup.scroll);
+  int query_rows = g_popup.filterable ? 1 : 0;
+  int popup_h = visible + 2 + query_rows;
   int popup_x = MARGIN + (inner_w - popup_w) / 2;
   int popup_y = input_y - popup_h;
   if (popup_y < 0)
@@ -79,6 +82,15 @@ void popup_render(void) {
       mvwprintw(win, 0, 2, " %.*s ", title_len, g_popup.title);
   }
 
+  int item_y_offset = 1;
+  if (g_popup.filterable) {
+    int text_w = popup_w - 10;
+    if (text_w < 1)
+      text_w = 1;
+    mvwprintw(win, 1, 2, "Find: %.*s", text_w, g_popup.query);
+    item_y_offset = 2;
+  }
+
   for (int i = 0; i < visible; i++) {
     int idx = g_popup.scroll + i;
     if (idx >= g_popup.item_count)
@@ -90,16 +102,41 @@ void popup_render(void) {
     if (is_cursor)
       wattron(win, A_REVERSE);
 
-    char check = is_selected ? 'x' : ' ';
-    int text_w = popup_w - 6;
-    mvwprintw(win, i + 1, 1, "[%c] %.*s", check, text_w,
+    int prefix_w = popup_row_prefix_width(g_popup.multi);
+    int text_x = g_popup.multi ? 1 + prefix_w : 2;
+    int text_w = popup_w - text_x - (scrollbar.visible ? 2 : 1);
+    if (text_w < 1)
+      text_w = 1;
+    if (g_popup.multi) {
+      char check = is_selected ? 'x' : ' ';
+      mvwprintw(win, i + item_y_offset, 1, "[%c] ", check);
+    }
+    mvwprintw(win, i + item_y_offset, text_x, "%.*s", text_w,
               g_popup.items[idx].text);
 
     if (is_cursor)
       wattroff(win, A_REVERSE);
   }
 
-  wmove(win, 1 + (g_popup.cursor - g_popup.scroll), 4);
+  if (scrollbar.visible) {
+    int bar_x = popup_w - 2;
+    for (int i = 0; i < visible; i++) {
+      int ch = (i >= scrollbar.top && i < scrollbar.top + scrollbar.height)
+                   ? '#'
+                   : '|';
+      mvwaddch(win, item_y_offset + i, bar_x, ch);
+    }
+  }
+
+  if (g_popup.filterable) {
+    int x = 8 + g_popup.query_len;
+    if (x > popup_w - 2)
+      x = popup_w - 2;
+    wmove(win, 1, x);
+  } else {
+    wmove(win, 1 + (g_popup.cursor - g_popup.scroll),
+          g_popup.multi ? 4 : 2);
+  }
   wnoutrefresh(win);
 }
 

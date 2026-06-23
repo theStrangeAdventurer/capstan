@@ -88,7 +88,7 @@ build/capstan              # final binary (gitignored)
 1. `luaL_newstate` → `luaL_openlibs`
 2. `http_init(L)` — registers global `http = {get, post, post_stream}`
 3. `agent_init(L)` — registers global `agent = {append}`
-4. `luaL_dofile(L, "ai/providers.lua")` — side-effect: sets `_G.on_messages`
+4. `luaL_dofile(L, "agent/runtime.lua")` — side-effect: sets `_G.on_messages`
 
 Plugins are loaded AFTER this — they can use `http` and `agent` globals.
 
@@ -117,7 +117,7 @@ Why this order: `agent_emit` filters empty messages (`text[0] == '\0'`) so the e
 
 ### SSE / providers
 
-All SSE parsing is in Lua (`ai/providers.lua`). C only passes raw bytes. Provider-specific `on_chunk` overrides the OpenAI-compatible `default_on_chunk`.
+All SSE parsing is in Lua (`agent/stream.lua`). C only passes raw bytes. Provider-specific `on_chunk` overrides the OpenAI-compatible `default_on_chunk`.
 
 ### Plugin model
 
@@ -175,7 +175,7 @@ This builds `build/capstan`, copies only that binary into a fresh
 `/tmp/capstan-build-smoke.*` directory, and runs the copied binary with
 `--self-test-embedded` from an isolated working directory. The check verifies
 that the embedded system prompt and built-in plugin commands are available
-without `ai/` or `plugins/` beside the binary.
+without `agent/`, `ai/`, or `plugins/` beside the binary.
 
 The smoke directory is intentionally left on disk. The script prints a command
 like this so you can launch the copied binary manually and verify the interactive
@@ -257,17 +257,25 @@ ncurses/Lua/curl APIs, and put them in separate source files.
 Feature specs:
 
 - [Agent control](specs/agent-control.md)
+- [Agent loop](specs/agent-loop.md)
+- [Config](specs/config.md)
 - [Embedded runtime assets](specs/embedded-runtime-assets.md)
 - [Focus modes](specs/focus-modes.md)
+- [Hooks](specs/hooks.md)
 - [Editor command](specs/editor-command.md)
 - [Popups](specs/popups.md)
+- [Plugins](specs/plugins.md)
 - [Project instructions](specs/project-instructions.md)
 - [Fetch plugin](specs/fetch-plugin.md)
+- [File read plugin](specs/file-read-plugin.md)
 - [File edit plugin](specs/file-edit-plugin.md)
 - [File write plugin](specs/file-write-plugin.md)
+- [Models command](specs/models-command.md)
 - [Permissions](specs/permissions.md)
 - [Runtime logs](specs/runtime-logs.md)
+- [Runtime state](specs/runtime-state.md)
 - [Skills](specs/skills.md)
+- [Self improvement](specs/self-improvement.md)
 - [Workspace directory](specs/workspace-directory.md)
 
 ## Conventions

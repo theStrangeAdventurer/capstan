@@ -7,11 +7,14 @@ Popups support single-select and multi-select modes.
 In single-select mode, focus and selection are the same state. Opening a popup
 selects the first row. Moving the cursor with `j`/`k`, arrow keys, `g`/`G`, or
 page movement clears the old selection and selects the focused row.
+Single-select rows do not render checkbox markers because the focused row is the
+selection.
 
 In multi-select mode, focus and selection are independent. `l` selects the
 focused row, `h` deselects it, and confirmation preserves the selected set. If
 the user confirms a multi-select popup without selecting anything, the focused
-row is selected as a fallback.
+row is selected as a fallback. Multi-select rows render `[ ]` and `[x]`
+markers.
 
 ## Confirmation
 
@@ -22,3 +25,10 @@ Permit-confirmation popups use the same movement keys for their horizontal
 choice row: `h`/`k` and left/up arrows move backward, while `j`/`l` and
 right/down arrows move forward. `Enter` and `Tab` confirm the highlighted
 choice.
+
+## Scrollbar
+
+List popups render a slim scrollbar only when the item count exceeds the visible
+row count. The scrollbar is drawn inside the popup's right edge and does not
+change the popup width. Filterable popups start the scrollbar below the `Find:`
+input row.

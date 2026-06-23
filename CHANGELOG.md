@@ -33,7 +33,7 @@
 ### Plugins system (`src/plugins.c`)
 
 - **`+ agent_init(L)`** — регистрирует `agent` global
-- **`+ luaL_dofile(L, "ai/providers.lua")`** — загружает провайдеры и сеттит `_G.on_messages`
+- **`+ luaL_dofile(L, "agent/runtime.lua")`** — загружает провайдеры и сеттит `_G.on_messages`
 
 ### Headers
 
@@ -44,7 +44,7 @@
 
 | Файл | Что |
 |---|---|
-| `ai/providers.lua` | `M.default_on_chunk` (OpenAI-совместимый SSE-парсинг), `M.stream()` (буферизация `\n\n` + кастомный `on_chunk` на провайдера), `_G.on_messages` (отправка в LLM через `http.post_stream` + `agent.append`) |
+| `agent/runtime.lua` | `M.default_on_chunk` (OpenAI-совместимый SSE-парсинг), `M.stream()` (буферизация `\n\n` + кастомный `on_chunk` на провайдера), `_G.on_messages` (отправка в LLM через `http.post_stream` + `agent.append`) |
 | `plugins/stream_test.lua` | `/stream` — тест `http.post_stream` → `agent.append` на httpbin |
 | `plugins/http_post_example.lua` | `/post` — синхронный `http.post` JSON |
 

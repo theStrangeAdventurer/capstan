@@ -32,6 +32,14 @@ local function resolve_path(path)
 	return configured_workdir():gsub("/+$", "") .. "/" .. path
 end
 
+local function shell_quote(value)
+	return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function list_dir(path)
+	return io.popen("ls -1p -- " .. shell_quote(path) .. " 2>/dev/null")
+end
+
 plugin.autocomplete = {
   fetch = function(args)
     local dir = resolve_path(args[1] or ".")
@@ -44,7 +52,7 @@ plugin.autocomplete = {
       if parent == "" then parent = "/" end
       table.insert(items, {text = "../", value = parent .. "/"})
     end
-    local handle = io.popen('ls -1p "' .. dir .. '" 2>/dev/null')
+    local handle = list_dir(dir)
     if handle then
       for line in handle:lines() do
         if line ~= "" then
@@ -100,7 +108,7 @@ function plugin.handler(ctx)
 		local resolved_filename, file, err = resolve_filename(filename)
 		if not file then
 			local resolved = resolve_path(filename)
-			local ls = io.popen('ls -1p "' .. resolved .. '" 2>/dev/null')
+			local ls = list_dir(resolved)
 			if ls then
 				local contents = ls:read("*a")
 				ls:close()

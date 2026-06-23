@@ -161,3 +161,61 @@ int app_config_ensure_dir(void) {
   mkdir(dir, 0755);
   return 0;
 }
+
+int app_state_dir(char *buf, size_t buf_size) {
+  const char *base = getenv("XDG_STATE_HOME");
+  const char *home = getenv("HOME");
+  if (buf_size == 0)
+    return -1;
+
+  int n;
+  if (base && base[0]) {
+    n = snprintf(buf, buf_size, "%s/%s", base, APP_CONFIG_DIR_NAME);
+  } else {
+    if (!home || !home[0])
+      return -1;
+    n = snprintf(buf, buf_size, "%s/.local/state/%s", home,
+                 APP_CONFIG_DIR_NAME);
+  }
+  if (n < 0 || (size_t)n >= buf_size)
+    return -1;
+  return 0;
+}
+
+int app_state_path(char *buf, size_t buf_size, const char *relative_path) {
+  char dir[512];
+  if (app_state_dir(dir, sizeof(dir)) != 0)
+    return -1;
+
+  int n = snprintf(buf, buf_size, "%s/%s", dir, relative_path);
+  if (n < 0 || (size_t)n >= buf_size)
+    return -1;
+  return 0;
+}
+
+int app_state_ensure_dir(void) {
+  char dir[512];
+  if (app_state_dir(dir, sizeof(dir)) != 0)
+    return -1;
+
+  const char *base = getenv("XDG_STATE_HOME");
+  const char *home = getenv("HOME");
+  if (base && base[0]) {
+    mkdir(base, 0755);
+  } else if (home && home[0]) {
+    char local[512];
+    int n = snprintf(local, sizeof(local), "%s/.local", home);
+    if (n < 0 || (size_t)n >= sizeof(local))
+      return -1;
+    mkdir(local, 0755);
+    n = snprintf(local, sizeof(local), "%s/.local/state", home);
+    if (n < 0 || (size_t)n >= sizeof(local))
+      return -1;
+    mkdir(local, 0755);
+  } else {
+    return -1;
+  }
+
+  mkdir(dir, 0755);
+  return 0;
+}

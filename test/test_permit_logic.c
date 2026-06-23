@@ -57,6 +57,38 @@ static MunitResult test_file_read_asks_for_sibling_prefix(
   return MUNIT_OK;
 }
 
+static MunitResult test_lua_escape_string_plain(const MunitParameter params[],
+                                                void *data) {
+  (void)params;
+  (void)data;
+  char out[64];
+  munit_assert_int(permit_lua_escape_string("file_read", out, sizeof(out)), ==,
+                   1);
+  munit_assert_string_equal(out, "file_read");
+  return MUNIT_OK;
+}
+
+static MunitResult test_lua_escape_string_special_chars(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char out[128];
+  munit_assert_int(
+      permit_lua_escape_string("shell \"x\"\\y\nnext\tcol", out, sizeof(out)),
+      ==, 1);
+  munit_assert_string_equal(out, "shell \\\"x\\\"\\\\y\\nnext\\tcol");
+  return MUNIT_OK;
+}
+
+static MunitResult test_lua_escape_string_reports_truncation(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char out[4];
+  munit_assert_int(permit_lua_escape_string("abcd", out, sizeof(out)), ==, 0);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/pattern_exact_match", test_pattern_exact_match, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -73,6 +105,13 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_read_asks_for_sibling_prefix",
      test_file_read_asks_for_sibling_prefix, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/lua_escape_string_plain", test_lua_escape_string_plain, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/lua_escape_string_special_chars", test_lua_escape_string_special_chars,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/lua_escape_string_reports_truncation",
+     test_lua_escape_string_reports_truncation, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

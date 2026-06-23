@@ -26,7 +26,7 @@ static int run_embedded_self_test(void) {
   load_embedded_plugins();
 
   const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
-                            "/logs", "/skills"};
+                            "/logs", "/skills", "/models"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);
@@ -48,6 +48,15 @@ static int run_embedded_self_test(void) {
     ok = 0;
   } else {
     printf("system_prompt: ok\n");
+  }
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "skills_summary");
+    if (lua_isstring(L, -1))
+      printf("skills_summary:\n%s\n", lua_tostring(L, -1));
+    lua_pop(L, 1);
   }
   lua_pop(L, 1);
 
@@ -78,7 +87,7 @@ int main(int argc, char *argv[]) {
 
   char global_plugins[512];
   if (app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
-    load_plugins_from(global_plugins);
+    plugins_watch_start(global_plugins);
 
   input_init();
   scroll_reset();
@@ -88,6 +97,7 @@ int main(int argc, char *argv[]) {
     int ch = getch();
     if (ch == ERR) {
       http_poll(L);
+      plugins_watch_poll();
       napms(10);
       render_all();
       continue;

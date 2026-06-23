@@ -17,6 +17,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 
 #define PLUGIN_RESPONSE_MAX_SIZE 4096
 #define PLUGIN_CAPACITY_INCREMENT 10
@@ -85,6 +86,30 @@ static int lua_doasset_or_file(lua_State *l, const char *asset_path,
   return lua_dobuffer_named(l, asset_path, asset->data, asset->size);
 }
 
+static int ensure_dir(const char *path) {
+  struct stat st;
+  if (stat(path, &st) == 0)
+    return S_ISDIR(st.st_mode) ? 0 : -1;
+  if (mkdir(path, 0755) != 0)
+    return -1;
+  return 0;
+}
+
+static int write_embedded_asset_file(const char *asset_path,
+                                     const char *target_path) {
+  const EmbeddedAsset *asset = embedded_asset_find(asset_path);
+  if (!asset)
+    return -1;
+
+  FILE *f = fopen(target_path, "wb");
+  if (!f)
+    return -1;
+
+  size_t written = fwrite(asset->data, 1, asset->size, f);
+  int close_ok = fclose(f) == 0;
+  return written == asset->size && close_ok ? 0 : -1;
+}
+
 static int l_require_embedded_json(lua_State *l) {
   const EmbeddedAsset *asset = embedded_asset_find("vendor/rxi/json.lua");
   if (!asset)
@@ -100,12 +125,98 @@ static int l_require_embedded_json(lua_State *l) {
   return lua_gettop(l);
 }
 
+static int l_require_embedded_asset(lua_State *l) {
+  const char *asset_path = (const char *)lua_touserdata(l, lua_upvalueindex(1));
+  const EmbeddedAsset *asset = embedded_asset_find(asset_path);
+  if (!asset)
+    return luaL_error(l, "missing embedded asset: %s", asset_path);
+
+  lua_settop(l, 0);
+  if (lua_dobuffer_named(l, asset_path, asset->data, asset->size) != LUA_OK) {
+    const char *err = lua_tostring(l, -1);
+    return luaL_error(l, "%s", err ? err : "failed to load embedded asset");
+  }
+  return lua_gettop(l);
+}
+
+static void preload_embedded_asset(lua_State *l, const char *module,
+                                   const char *asset_path) {
+  lua_pushlightuserdata(l, (void *)asset_path);
+  lua_pushcclosure(l, l_require_embedded_asset, 1);
+  lua_setfield(l, -2, module);
+}
+
 static void register_embedded_modules(void) {
   lua_getglobal(L, "package");
   lua_getfield(L, -1, "preload");
   lua_pushcfunction(L, l_require_embedded_json);
   lua_setfield(L, -2, "vendor.rxi.json");
+  preload_embedded_asset(L, "agent.runtime", "agent/runtime.lua");
+  preload_embedded_asset(L, "agent.provider_config", "agent/provider_config.lua");
+  preload_embedded_asset(L, "agent.models", "agent/models.lua");
+  preload_embedded_asset(L, "agent.stream", "agent/stream.lua");
+  preload_embedded_asset(L, "agent.tools", "agent/tools.lua");
+  preload_embedded_asset(L, "agent.tokens", "agent/tokens.lua");
+  preload_embedded_asset(L, "agent.logging", "agent/logging.lua");
+  preload_embedded_asset(L, "agent.hooks", "agent/hooks.lua");
+  preload_embedded_asset(L, "agent.state", "agent/state.lua");
   lua_pop(L, 2);
+}
+
+static int capstan_config_bool(const char *section, const char *field) {
+  int result = 0;
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return 0;
+  }
+  lua_getfield(L, -1, "config");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 2);
+    return 0;
+  }
+  lua_getfield(L, -1, section);
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, field);
+    result = lua_isboolean(L, -1) && lua_toboolean(L, -1);
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 3);
+  return result;
+}
+
+static int self_improvement_allowed(void) {
+  return capstan_config_bool("capabilities", "self_improvement");
+}
+
+static const char *materialize_builtin_self_improvement_skill(
+    char *builtin_skills_dir, size_t builtin_skills_dir_size) {
+  if (!self_improvement_allowed())
+    return NULL;
+  if (app_state_ensure_dir() != 0)
+    return NULL;
+  if (app_state_path(builtin_skills_dir, builtin_skills_dir_size,
+                     "builtin-skills") != 0)
+    return NULL;
+  if (ensure_dir(builtin_skills_dir) != 0)
+    return NULL;
+
+  char skill_dir[512];
+  int n = snprintf(skill_dir, sizeof(skill_dir), "%s/self-improvement",
+                   builtin_skills_dir);
+  if (n < 0 || (size_t)n >= sizeof(skill_dir))
+    return NULL;
+  if (ensure_dir(skill_dir) != 0)
+    return NULL;
+
+  char skill_path[512];
+  n = snprintf(skill_path, sizeof(skill_path), "%s/SKILL.md", skill_dir);
+  if (n < 0 || (size_t)n >= sizeof(skill_path))
+    return NULL;
+  if (write_embedded_asset_file("skills/self-improvement/SKILL.md",
+                                skill_path) != 0)
+    return NULL;
+  return builtin_skills_dir;
 }
 
 static void load_system_prompt(void) {
@@ -122,8 +233,11 @@ static void load_system_prompt(void) {
   }
 
   char project_skills[512];
+  char builtin_skills[512];
   char user_skills[512];
   char common_skills[512];
+  const char *builtin_skills_dir = materialize_builtin_self_improvement_skill(
+      builtin_skills, sizeof(builtin_skills));
   int n = snprintf(project_skills, sizeof(project_skills), "%s/.agents/skills",
                    app_workdir());
   const char *project_skills_dir =
@@ -141,10 +255,12 @@ static void load_system_prompt(void) {
       common_skills_dir = common_skills;
   }
   char *skills_prompt =
-      skills_build_prompt(project_skills_dir, user_skills_dir,
+      skills_build_prompt(builtin_skills_dir, project_skills_dir,
+                          user_skills_dir,
                           common_skills_dir);
   char *skills_summary =
-      skills_build_summary(project_skills_dir, user_skills_dir,
+      skills_build_summary(builtin_skills_dir, project_skills_dir,
+                           user_skills_dir,
                            common_skills_dir);
 
   char agents_path[512];
@@ -224,6 +340,22 @@ static int l_popup_error(lua_State *l) {
   return 0;
 }
 
+static int l_capstan_state_path(lua_State *l) {
+  const char *relative = luaL_optstring(l, 1, "state.lua");
+  char path[512];
+  if (app_state_path(path, sizeof(path), relative) != 0) {
+    lua_pushnil(l);
+    return 1;
+  }
+  lua_pushstring(l, path);
+  return 1;
+}
+
+static int l_capstan_state_ensure_dir(lua_State *l) {
+  lua_pushboolean(l, app_state_ensure_dir() == 0);
+  return 1;
+}
+
 static void register_capstan_runtime(void) {
   lua_getglobal(L, "capstan");
   if (!lua_istable(L, -1)) {
@@ -234,7 +366,73 @@ static void register_capstan_runtime(void) {
   lua_pushstring(L, app_workdir());
   lua_setfield(L, -2, "workdir");
 
+  lua_pushcfunction(L, l_capstan_state_path);
+  lua_setfield(L, -2, "state_path");
+
+  lua_pushcfunction(L, l_capstan_state_ensure_dir);
+  lua_setfield(L, -2, "state_ensure_dir");
+
   lua_setglobal(L, "capstan");
+}
+
+static void load_capstan_config(void) {
+  char path[512];
+  if (app_config_path(path, sizeof(path), "config.lua") != 0)
+    return;
+  if (!file_exists(path))
+    return;
+
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+
+  if (luaL_dofile(L, path) != LUA_OK) {
+    fprintf(stderr, "Error loading config.lua: %s\n", lua_tostring(L, -1));
+    lua_pop(L, 1);
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "capstan");
+    lua_pop(L, 1);
+    return;
+  }
+
+  if (lua_istable(L, -1)) {
+    lua_setfield(L, -2, "config");
+  } else {
+    lua_pop(L, 1);
+  }
+  lua_pushvalue(L, -1);
+  lua_setglobal(L, "capstan");
+  lua_pop(L, 1);
+}
+
+static void load_capstan_state(void) {
+  char path[512];
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+
+  if (app_state_path(path, sizeof(path), "state.lua") == 0 &&
+      file_exists(path)) {
+    if (luaL_dofile(L, path) != LUA_OK) {
+      fprintf(stderr, "Error loading state.lua: %s\n", lua_tostring(L, -1));
+      lua_pop(L, 1);
+      lua_newtable(L);
+    } else if (!lua_istable(L, -1)) {
+      lua_pop(L, 1);
+      lua_newtable(L);
+    }
+  } else {
+    lua_newtable(L);
+  }
+
+  lua_setfield(L, -2, "state");
+  lua_pushvalue(L, -1);
+  lua_setglobal(L, "capstan");
+  lua_pop(L, 1);
 }
 
 void plugins_init(void) {
@@ -261,9 +459,11 @@ void plugins_init(void) {
 
   http_init(L);
   agent_init(L);
-  permit_init(L);
   tools_init(L);
   register_capstan_runtime();
+  load_capstan_config();
+  load_capstan_state();
+  permit_init(L);
   log_init(L);
 
   lua_newtable(L);
@@ -275,14 +475,7 @@ void plugins_init(void) {
 
   load_system_prompt();
 
-  char provider_override[512];
-  const char *provider_path = NULL;
-  if (app_config_path(provider_override, sizeof(provider_override),
-                      "providers.lua") == 0) {
-    provider_path = provider_override;
-  }
-
-  if (lua_doasset_or_file(L, "ai/providers.lua", provider_path) != LUA_OK) {
+  if (lua_doasset_or_file(L, "agent/runtime.lua", NULL) != LUA_OK) {
     popup_show_message("Startup Error", lua_tostring(L, -1), 1);
     lua_pop(L, 1);
   }
@@ -290,6 +483,72 @@ void plugins_init(void) {
 
 static PluginRegistry plugins_registry = {
     .plugins = NULL, .count = 0, .capacity = 0};
+
+static char g_watch_dir[512] = "";
+static time_t g_last_plugin_scan = 0;
+
+static void remove_plugin_hooks(const char *id) {
+  if (!id || !L)
+    return;
+  char source[256];
+  snprintf(source, sizeof(source), "plugin:%s", id);
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return;
+  }
+  lua_getfield(L, -1, "hooks");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 2);
+    return;
+  }
+  lua_getfield(L, -1, "remove_source");
+  if (!lua_isfunction(L, -1)) {
+    lua_pop(L, 3);
+    return;
+  }
+  lua_pushstring(L, source);
+  if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+    fprintf(stderr, "Error removing plugin hooks: %s\n", lua_tostring(L, -1));
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 2);
+}
+
+static void plugin_free(Plugin *p) {
+  if (!p)
+    return;
+  remove_plugin_hooks(p->id);
+  free(p->id);
+  free(p->name);
+  free(p->description);
+  free(p->command);
+  free(p->source_path);
+  free(p->user_data);
+  if (p->handler_ref > 0)
+    luaL_unref(p->L, LUA_REGISTRYINDEX, p->handler_ref);
+  free(p->autocomplete_title);
+  if (p->fetch_ref > 0)
+    luaL_unref(p->L, LUA_REGISTRYINDEX, p->fetch_ref);
+  free(p->tool_name);
+  free(p->tool_desc);
+  free(p->tool_params_json);
+  free(p->tool_permission);
+  free(p);
+}
+
+static void remove_lua_plugin_entry(const char *id) {
+  if (!id || !L)
+    return;
+  lua_getglobal(L, "plugins");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return;
+  }
+  lua_pushnil(L);
+  lua_setfield(L, -2, id);
+  lua_pop(L, 1);
+}
 
 char *get_plugins_info() {
   char *result = malloc(100 * plugins_registry.count);
@@ -338,29 +597,7 @@ void plugin_registry_cleanup(void) {
     return;
 
   for (int i = 0; i < plugins_registry.count; i++) {
-    Plugin *p = plugins_registry.plugins[i];
-
-    if (p) {
-      free(p->command);
-      free(p->user_data);
-      free(p->id);
-      free(p->name);
-      free(p->description);
-
-      if (p->handler_ref > 0)
-        luaL_unref(p->L, LUA_REGISTRYINDEX, p->handler_ref);
-
-      free(p->autocomplete_title);
-      if (p->fetch_ref > 0)
-        luaL_unref(p->L, LUA_REGISTRYINDEX, p->fetch_ref);
-
-      free(p->tool_name);
-      free(p->tool_desc);
-      free(p->tool_params_json);
-      free(p->tool_permission);
-
-      free(p);
-    }
+    plugin_free(plugins_registry.plugins[i]);
   }
   free(plugins_registry.plugins);
   plugins_registry.plugins = NULL;
@@ -376,7 +613,8 @@ Plugin *plugin_registry_at(int index) {
   return plugins_registry.plugins[index];
 }
 
-static char *lua_getstr_f_value(lua_State *L, int idx, const char *field) {
+static char *lua_get_optional_string(lua_State *L, int idx, const char *field,
+                                     const char *fallback) {
   // Достаем из таблицы плагина поле id и после этого это
   // поле будет наверху стека (-1) а таблица будет уже (-2)
   // если бы искали поле в таблице с индексом -2 - значение полч потом все равно
@@ -384,10 +622,53 @@ static char *lua_getstr_f_value(lua_State *L, int idx, const char *field) {
   lua_getfield(L, idx, field);
 
   const char *strval = lua_tostring(L, -1); // Теперь берем с вершины стека
-  char *result = malloc(strlen(strval) + 1);
-  strcpy(result, strval);
+  char *result = strval ? my_strdup(strval)
+                        : (fallback ? my_strdup(fallback) : NULL);
   lua_pop(L, 1); // Снимаем  id со стека, теперь снова таблица на -1
   return result;
+}
+
+static char *lua_get_required_string(lua_State *L, int idx, const char *field) {
+  return lua_get_optional_string(L, idx, field, NULL);
+}
+
+static void install_plugin_hooks(lua_State *L, int plugin_idx) {
+  int abs_idx = lua_absindex(L, plugin_idx);
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return;
+  }
+  lua_getfield(L, -1, "hooks");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 2);
+    return;
+  }
+  lua_getfield(L, -1, "install_plugin");
+  if (!lua_isfunction(L, -1)) {
+    lua_pop(L, 3);
+    return;
+  }
+  lua_pushvalue(L, abs_idx);
+  if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+    fprintf(stderr, "Error installing plugin hooks: %s\n", lua_tostring(L, -1));
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 2);
+}
+
+static void install_plugin_hooks_by_id(const char *id) {
+  if (!id)
+    return;
+  lua_getglobal(L, "plugins");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return;
+  }
+  lua_getfield(L, -1, id);
+  if (lua_istable(L, -1))
+    install_plugin_hooks(L, -1);
+  lua_pop(L, 2);
 }
 
 static Plugin *plugin_load_from_chunk(const char *name, const char *data,
@@ -402,7 +683,7 @@ static Plugin *plugin_load_from_chunk(const char *name, const char *data,
     return NULL;
   }
 
-  Plugin *p = malloc(sizeof(Plugin));
+  Plugin *p = calloc(1, sizeof(Plugin));
 
   p->L = L;
 
@@ -410,17 +691,32 @@ static Plugin *plugin_load_from_chunk(const char *name, const char *data,
   p->is_async = lua_toboolean(L, -1);
   lua_pop(L, 1);
 
-  p->id = lua_getstr_f_value(L, -1, "id");
-  p->name = lua_getstr_f_value(L, -1, "name");
-  p->description = lua_getstr_f_value(L, -1, "description");
-  p->command = lua_getstr_f_value(L, -1, "command");
+  lua_getfield(L, -1, "history");
+  p->include_in_history = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : 1;
+  lua_pop(L, 1);
+
+  p->id = lua_get_required_string(L, -1, "id");
+  if (!p->id) {
+    fprintf(stderr, "Plugin must define id\n");
+    free(p);
+    lua_pop(L, 1);
+    return NULL;
+  }
+  p->name = lua_get_optional_string(L, -1, "name", p->id);
+  p->description = lua_get_optional_string(L, -1, "description", "");
+  p->command = lua_get_optional_string(L, -1, "command", NULL);
   lua_getfield(L, -1, "handler");
-  // Автоматически снимает с вершины стека функцию handler и сохраняет ее в
-  // специальном реестре возвращая при этом ссылку (int) на нее
-  // позже мы получим функцию по этой ссылке числу с помощью lua_rawgeti
-  // LUA_REGISTRYINDEX - специальная таблица в которой можно безопасно хранить
-  // данные lua чтобы их не собрал сборщик мусора
-  p->handler_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  if (lua_isfunction(L, -1)) {
+    // Автоматически снимает с вершины стека функцию handler и сохраняет ее в
+    // специальном реестре возвращая при этом ссылку (int) на нее
+    // позже мы получим функцию по этой ссылке числу с помощью lua_rawgeti
+    // LUA_REGISTRYINDEX - специальная таблица в которой можно безопасно хранить
+    // данные lua чтобы их не собрал сборщик мусора
+    p->handler_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  } else {
+    lua_pop(L, 1);
+    p->handler_ref = LUA_NOREF;
+  }
 
   lua_getfield(L, -1, "autocomplete");
   if (lua_istable(L, -1)) {
@@ -526,6 +822,15 @@ Plugin *plugin_load(const char *path) {
     return NULL;
   }
   Plugin *p = plugin_load_from_chunk(path, data, size);
+  if (p) {
+    struct stat st;
+    p->source_path = my_strdup(path);
+    p->is_user_plugin = 1;
+    if (stat(path, &st) == 0) {
+      p->source_mtime = (long)st.st_mtime;
+      p->source_size = (long)st.st_size;
+    }
+  }
   free(data);
   return p;
 }
@@ -540,6 +845,11 @@ static int l_ctx_replace(lua_State *l) {
 
 PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
                              char **pre_args, int pre_arg_count) {
+  if (!plugin || plugin->handler_ref == LUA_NOREF) {
+    popup_show_message("Plugin Error", "Plugin has no handler", 1);
+    return NULL;
+  }
+
   lua_newtable(L); // ctx = {}
 
   lua_pushstring(L, input);
@@ -729,21 +1039,7 @@ void plugin_registry_remove_by_id(const char *id) {
   for (int i = 0; i < plugins_registry.count; i++) {
     Plugin *p = plugins_registry.plugins[i];
     if (p && strcmp(p->id, id) == 0) {
-      free(p->id);
-      free(p->name);
-      free(p->description);
-      free(p->command);
-      free(p->user_data);
-      if (p->handler_ref > 0)
-        luaL_unref(p->L, LUA_REGISTRYINDEX, p->handler_ref);
-      free(p->autocomplete_title);
-      if (p->fetch_ref > 0)
-        luaL_unref(p->L, LUA_REGISTRYINDEX, p->fetch_ref);
-      free(p->tool_name);
-      free(p->tool_desc);
-      free(p->tool_params_json);
-      free(p->tool_permission);
-      free(p);
+      plugin_free(p);
       memmove(&plugins_registry.plugins[i],
               &plugins_registry.plugins[i + 1],
               (plugins_registry.count - i - 1) * sizeof(Plugin *));
@@ -753,20 +1049,134 @@ void plugin_registry_remove_by_id(const char *id) {
   }
 }
 
+static void plugin_registry_remove_by_source_keep_id(const char *source_path,
+                                                     const char *keep_id) {
+  if (!source_path)
+    return;
+  for (int i = 0; i < plugins_registry.count; i++) {
+    Plugin *p = plugins_registry.plugins[i];
+    if (p && p->source_path && strcmp(p->source_path, source_path) == 0) {
+      if (!keep_id || strcmp(p->id, keep_id) != 0)
+        remove_lua_plugin_entry(p->id);
+      plugin_free(p);
+      memmove(&plugins_registry.plugins[i],
+              &plugins_registry.plugins[i + 1],
+              (plugins_registry.count - i - 1) * sizeof(Plugin *));
+      plugins_registry.count--;
+      return;
+    }
+  }
+}
+
+static int is_lua_file(const char *name) {
+  size_t len = name ? strlen(name) : 0;
+  return len > 4 && strcmp(name + len - 4, ".lua") == 0;
+}
+
+static Plugin *plugin_registry_find_by_source(const char *source_path) {
+  if (!source_path)
+    return NULL;
+  for (int i = 0; i < plugins_registry.count; i++) {
+    Plugin *p = plugins_registry.plugins[i];
+    if (p && p->source_path && strcmp(p->source_path, source_path) == 0)
+      return p;
+  }
+  return NULL;
+}
+
+static void plugin_registry_clear_for_reload(void) {
+  for (int i = 0; i < plugins_registry.count; i++)
+    plugin_free(plugins_registry.plugins[i]);
+  plugins_registry.count = 0;
+
+  lua_newtable(L);
+  lua_setglobal(L, "plugins");
+}
+
 void load_plugins_from(const char *dir_path) {
   DIR *dir = opendir(dir_path);
   if (!dir)
     return;
   struct dirent *entry;
   while ((entry = readdir(dir)) != NULL) {
-    if (!strstr(entry->d_name, ".lua"))
+    if (!is_lua_file(entry->d_name))
       continue;
     char path[512];
     snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
     Plugin *p = plugin_load(path);
     if (p) {
+      plugin_registry_remove_by_source_keep_id(path, p->id);
       plugin_registry_remove_by_id(p->id);
+      install_plugin_hooks_by_id(p->id);
       plugin_registry_add(p);
+    }
+  }
+  closedir(dir);
+}
+
+static void reload_plugin_file(const char *path) {
+  Plugin *p = plugin_load(path);
+  if (!p)
+    return;
+  plugin_registry_remove_by_source_keep_id(path, p->id);
+  plugin_registry_remove_by_id(p->id);
+  install_plugin_hooks_by_id(p->id);
+  plugin_registry_add(p);
+  log_event("plugin", "reloaded user plugin");
+}
+
+static void rebuild_plugins_from_sources(void) {
+  plugin_registry_clear_for_reload();
+  load_embedded_plugins();
+  if (g_watch_dir[0])
+    load_plugins_from(g_watch_dir);
+}
+
+void plugins_watch_start(const char *dir_path) {
+  if (!dir_path || !dir_path[0])
+    return;
+  snprintf(g_watch_dir, sizeof(g_watch_dir), "%s", dir_path);
+  load_plugins_from(g_watch_dir);
+  g_last_plugin_scan = time(NULL);
+}
+
+void plugins_watch_poll(void) {
+  if (!g_watch_dir[0])
+    return;
+
+  time_t now = time(NULL);
+  if (now == g_last_plugin_scan)
+    return;
+  g_last_plugin_scan = now;
+
+  for (int i = 0; i < plugins_registry.count; i++) {
+    Plugin *p = plugins_registry.plugins[i];
+    if (p && p->is_user_plugin && p->source_path) {
+      struct stat st;
+      if (stat(p->source_path, &st) != 0) {
+        rebuild_plugins_from_sources();
+        return;
+      }
+    }
+  }
+
+  DIR *dir = opendir(g_watch_dir);
+  if (!dir)
+    return;
+
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (!is_lua_file(entry->d_name))
+      continue;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", g_watch_dir, entry->d_name);
+    struct stat st;
+    if (stat(path, &st) != 0)
+      continue;
+    Plugin *existing = plugin_registry_find_by_source(path);
+    if (!existing || existing->source_mtime != (long)st.st_mtime ||
+        existing->source_size != (long)st.st_size) {
+      reload_plugin_file(path);
     }
   }
   closedir(dir);
@@ -785,7 +1195,10 @@ void load_embedded_plugins(void) {
 
     Plugin *p = plugin_load_from_chunk(path, assets[i].data, assets[i].size);
     if (p) {
+      p->source_path = my_strdup(path);
+      p->is_user_plugin = 0;
       plugin_registry_remove_by_id(p->id);
+      install_plugin_hooks_by_id(p->id);
       plugin_registry_add(p);
     }
   }

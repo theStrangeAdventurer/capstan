@@ -66,7 +66,7 @@ static MunitResult test_loads_skill_md_and_resource_manifest(
   snprintf(file_skill, sizeof(file_skill), "%s/debug.md", skills_dir);
   write_file(file_skill, "Debug instructions");
 
-  char *prompt = skills_build_prompt(skills_dir, NULL, NULL);
+  char *prompt = skills_build_prompt(NULL, skills_dir, NULL, NULL);
   munit_assert_not_null(prompt);
   munit_assert_true(strstr(prompt, "## Skill: code-review") != NULL);
   munit_assert_true(strstr(prompt, "Name: review-helper") != NULL);
@@ -86,7 +86,7 @@ static MunitResult test_loads_skill_md_and_resource_manifest(
   munit_assert_true(strstr(prompt, "Debug instructions") == NULL);
   free(prompt);
 
-  char *summary = skills_build_summary(skills_dir, NULL, NULL);
+  char *summary = skills_build_summary(NULL, skills_dir, NULL, NULL);
   munit_assert_not_null(summary);
   munit_assert_true(strstr(summary, "Loaded skills: 1") != NULL);
   munit_assert_true(strstr(summary, "- code-review [project]") != NULL);
@@ -146,7 +146,7 @@ static MunitResult test_project_skill_overrides_user_skill(
   write_file(project_skill,
              "---\nname: project-test\ndescription: project copy\n---\nbody");
 
-  char *prompt = skills_build_prompt(project_dir, user_dir, NULL);
+  char *prompt = skills_build_prompt(NULL, project_dir, user_dir, NULL);
   munit_assert_not_null(prompt);
   munit_assert_true(strstr(prompt, "Name: project-test") != NULL);
   munit_assert_true(strstr(prompt, "project copy") != NULL);
@@ -214,7 +214,8 @@ static MunitResult test_common_skill_loaded_and_overridden(
   write_file(common_only_skill,
              "---\nname: common-only\ndescription: common only\n---\nbody");
 
-  char *summary = skills_build_summary(project_dir, user_dir, common_dir);
+  char *summary =
+      skills_build_summary(NULL, project_dir, user_dir, common_dir);
   munit_assert_not_null(summary);
   munit_assert_true(strstr(summary, "Loaded skills: 2") != NULL);
   munit_assert_true(strstr(summary, "- shared [user]") != NULL);
@@ -240,7 +241,7 @@ static MunitResult test_empty_when_no_skills(const MunitParameter params[],
                                              void *data) {
   (void)params;
   (void)data;
-  char *prompt = skills_build_prompt("/tmp/capstan-missing-project-skills",
+  char *prompt = skills_build_prompt(NULL, "/tmp/capstan-missing-project-skills",
                                      "/tmp/capstan-missing-user-skills",
                                      "/tmp/capstan-missing-common-skills");
   munit_assert_not_null(prompt);
@@ -273,7 +274,7 @@ static MunitResult test_ignores_directory_without_skill_md(
   snprintf(readme, sizeof(readme), "%s/README.md", readme_skill_dir);
   write_file(readme, "README should be ignored");
 
-  char *prompt = skills_build_prompt(skills_dir, NULL, NULL);
+  char *prompt = skills_build_prompt(NULL, skills_dir, NULL, NULL);
   munit_assert_not_null(prompt);
   munit_assert_string_equal(prompt, "");
   free(prompt);
@@ -281,6 +282,61 @@ static MunitResult test_ignores_directory_without_skill_md(
   unlink(readme);
   rmdir(readme_skill_dir);
   rmdir(skills_dir);
+  rmdir(root);
+  return MUNIT_OK;
+}
+
+static MunitResult test_builtin_skill_loaded_and_overridden(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char root[256];
+  snprintf(root, sizeof(root), "/tmp/capstan-skills-builtin-%ld",
+           (long)getpid());
+  rmdir(root);
+  make_dir(root);
+
+  char builtin_dir[256];
+  char user_dir[256];
+  snprintf(builtin_dir, sizeof(builtin_dir), "%s/builtin", root);
+  snprintf(user_dir, sizeof(user_dir), "%s/user", root);
+  make_dir(builtin_dir);
+  make_dir(user_dir);
+
+  char builtin_skill_dir[256];
+  char user_skill_dir[256];
+  snprintf(builtin_skill_dir, sizeof(builtin_skill_dir), "%s/self-improvement",
+           builtin_dir);
+  snprintf(user_skill_dir, sizeof(user_skill_dir), "%s/self-improvement",
+           user_dir);
+  make_dir(builtin_skill_dir);
+  make_dir(user_skill_dir);
+
+  char builtin_skill[256];
+  char user_skill[256];
+  snprintf(builtin_skill, sizeof(builtin_skill), "%s/SKILL.md",
+           builtin_skill_dir);
+  snprintf(user_skill, sizeof(user_skill), "%s/SKILL.md", user_skill_dir);
+  write_file(builtin_skill,
+             "---\nname: builtin-self\ndescription: built in\n---\nbody");
+  write_file(user_skill,
+             "---\nname: user-self\ndescription: user override\n---\nbody");
+
+  char *summary = skills_build_summary(builtin_dir, NULL, user_dir, NULL);
+  munit_assert_not_null(summary);
+  munit_assert_true(strstr(summary, "Loaded skills: 1") != NULL);
+  munit_assert_true(strstr(summary, "- self-improvement [user]") != NULL);
+  munit_assert_true(strstr(summary, "Name: user-self") != NULL);
+  munit_assert_true(strstr(summary, "built in") == NULL);
+  free(summary);
+
+  unlink(builtin_skill);
+  unlink(user_skill);
+  rmdir(builtin_skill_dir);
+  rmdir(user_skill_dir);
+  rmdir(builtin_dir);
+  rmdir(user_dir);
   rmdir(root);
   return MUNIT_OK;
 }
@@ -299,6 +355,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/ignores_directory_without_skill_md",
      test_ignores_directory_without_skill_md, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/builtin_skill_loaded_and_overridden",
+     test_builtin_skill_loaded_and_overridden, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

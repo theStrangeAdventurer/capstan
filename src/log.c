@@ -7,7 +7,7 @@
 #include <time.h>
 
 int log_path(char *buf, size_t buf_size) {
-  return app_config_path(buf, buf_size, "events.log");
+  return app_state_path(buf, buf_size, "events.log");
 }
 
 static void sanitize(char *s) {
@@ -19,7 +19,7 @@ static void sanitize(char *s) {
 
 void log_event(const char *category, const char *message) {
   char path[512];
-  if (app_config_ensure_dir() != 0 || log_path(path, sizeof(path)) != 0)
+  if (app_state_ensure_dir() != 0 || log_path(path, sizeof(path)) != 0)
     return;
 
   FILE *f = fopen(path, "a");

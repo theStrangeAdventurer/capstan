@@ -13,6 +13,9 @@ extern const char *APP_BANNER_TAGLINE;
 int app_config_dir(char *buf, size_t buf_size);
 int app_config_path(char *buf, size_t buf_size, const char *relative_path);
 int app_config_ensure_dir(void);
+int app_state_dir(char *buf, size_t buf_size);
+int app_state_path(char *buf, size_t buf_size, const char *relative_path);
+int app_state_ensure_dir(void);
 void app_workdir_init(const char *argv0);
 const char *app_workdir(void);
 
