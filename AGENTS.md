@@ -266,6 +266,7 @@ Feature specs:
 - [Popups](specs/popups.md)
 - [Plugins](specs/plugins.md)
 - [Project instructions](specs/project-instructions.md)
+- [Public readiness](specs/public-readiness.md)
 - [Fetch plugin](specs/fetch-plugin.md)
 - [File read plugin](specs/file-read-plugin.md)
 - [File edit plugin](specs/file-edit-plugin.md)
@@ -276,6 +277,7 @@ Feature specs:
 - [Runtime state](specs/runtime-state.md)
 - [Skills](specs/skills.md)
 - [Self improvement](specs/self-improvement.md)
+- [Terminal runtime](specs/terminal-runtime.md)
 - [Workspace directory](specs/workspace-directory.md)
 
 ## Conventions

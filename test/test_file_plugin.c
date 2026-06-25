@@ -69,7 +69,7 @@ static MunitResult test_readme_fallback_reads_readme_md(
   munit_assert_not_null(llm);
   munit_assert_true(strstr(ui, "README.md") != NULL);
   munit_assert_true(strstr(llm, "README.md") != NULL);
-  munit_assert_true(strstr(llm, "# tui-agent") != NULL);
+  munit_assert_true(strstr(llm, "# Capstan") != NULL);
 
   lua_close(L);
   return MUNIT_OK;

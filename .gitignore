@@ -22,6 +22,7 @@ vendor/ncurses-src/test/programs
 vendor/ncurses-src/test/modules
 vendor/ncurses-src/test/tracemunch
 vendor/ncurses-src/test/tput-*
+vendor/ncurses-src/misc/capstan-fallback.src
 vendor/lua-5.5.0/src/*.o
 vendor/lua-5.5.0/src/lua
 vendor/lua-5.5.0/src/luac

@@ -88,13 +88,24 @@ banner "[2/4] Building ncurses"
 
 NCURSES_SRC="vendor/ncurses-src"
 NCURSES_INSTALL="vendor/ncurses-install"
+NCURSES_FALLBACKS="xterm-256color,tmux-256color,screen-256color,xterm,screen,ansi,vt100"
+NCURSES_TERMINFO_DIRS="/usr/share/terminfo:/usr/share/lib/terminfo:/usr/local/share/terminfo:/opt/homebrew/share/terminfo"
+NCURSES_DEFAULT_TERMINFO_DIR="/usr/share/terminfo"
+NCURSES_FALLBACK_SRC="misc/capstan-fallback.src"
+NCURSES_BUILD_MARKER="$NCURSES_INSTALL/.capstan-build-flags"
+NCURSES_EXPECTED_FLAGS="fallbacks=$NCURSES_FALLBACKS terminfo_dirs=$NCURSES_TERMINFO_DIRS default=$NCURSES_DEFAULT_TERMINFO_DIR database=$NCURSES_FALLBACK_SRC disable_db_install=1 single_job=1"
 
-if [ -f "$NCURSES_INSTALL/lib/libncursesw.a" ] && [ -f "$NCURSES_INSTALL/lib/libtinfow.a" ]; then
+if [ -f "$NCURSES_INSTALL/lib/libncursesw.a" ] && \
+   [ -f "$NCURSES_INSTALL/lib/libtinfow.a" ] && \
+   [ -f "$NCURSES_BUILD_MARKER" ] && \
+   [ "$(cat "$NCURSES_BUILD_MARKER")" = "$NCURSES_EXPECTED_FLAGS" ]; then
     ok "ncurses already built, skipping"
 else
     if [ ! -d "$NCURSES_SRC" ]; then
         die "ncurses source not found at $NCURSES_SRC"
     fi
+
+    rm -rf "$NCURSES_INSTALL"
 
     echo "  Configuring ncurses for ${OS_NAME} ${ARCH}..."
     (
@@ -108,21 +119,41 @@ else
         # Ensure install directory exists so configure can resolve absolute prefix
         NCURSES_PREFIX="$(cd ../.. && pwd)/vendor/ncurses-install"
         mkdir -p "$NCURSES_PREFIX"
+        NCURSES_FALLBACK_SRC_ABS="$(pwd)/$NCURSES_FALLBACK_SRC"
+
+        echo "  Generating minimal terminfo fallback source..."
+        : > "$NCURSES_FALLBACK_SRC"
+        OLD_IFS=$IFS
+        IFS=,
+        for term in $NCURSES_FALLBACKS; do
+            if ! infocmp -x "$term" >> "$NCURSES_FALLBACK_SRC"; then
+                die "Cannot read terminfo entry for fallback terminal: $term"
+            fi
+            printf '\n' >> "$NCURSES_FALLBACK_SRC"
+        done
+        IFS=$OLD_IFS
 
         ./configure \
             --enable-widec \
             --with-termlib \
+            --with-fallbacks="$NCURSES_FALLBACKS" \
+            --with-database="$NCURSES_FALLBACK_SRC_ABS" \
+            --with-terminfo-dirs="$NCURSES_TERMINFO_DIRS" \
+            --with-default-terminfo-dir="$NCURSES_DEFAULT_TERMINFO_DIR" \
+            --disable-db-install \
             --without-tests \
             --without-shared \
             --without-cxx-binding \
             --prefix="$NCURSES_PREFIX"
     )
 
-    echo "  Compiling ncurses (${JOBS} jobs)..."
-    make -C "$NCURSES_SRC" -j"$JOBS"
+    echo "  Compiling ncurses (single job; fallback generation is not parallel-safe)..."
+    make -C "$NCURSES_SRC" -j1
 
     echo "  Installing ncurses to vendor/ncurses-install..."
     make -C "$NCURSES_SRC" install
+
+    printf '%s' "$NCURSES_EXPECTED_FLAGS" > "$NCURSES_BUILD_MARKER"
 
     ok "ncurses build complete"
 fi
