@@ -87,13 +87,14 @@ fi
 banner "[2/4] Building ncurses"
 
 NCURSES_SRC="vendor/ncurses-src"
+NCURSES_BUILD="vendor/ncurses-build"
 NCURSES_INSTALL="vendor/ncurses-install"
 NCURSES_FALLBACKS="xterm-256color,tmux-256color,screen-256color,xterm,screen,ansi,vt100"
 NCURSES_TERMINFO_DIRS="/usr/share/terminfo:/usr/share/lib/terminfo:/usr/local/share/terminfo:/opt/homebrew/share/terminfo"
 NCURSES_DEFAULT_TERMINFO_DIR="/usr/share/terminfo"
-NCURSES_FALLBACK_SRC="misc/capstan-fallback.src"
+NCURSES_FALLBACK_SRC="capstan-fallback.src"
 NCURSES_BUILD_MARKER="$NCURSES_INSTALL/.capstan-build-flags"
-NCURSES_EXPECTED_FLAGS="fallbacks=$NCURSES_FALLBACKS terminfo_dirs=$NCURSES_TERMINFO_DIRS default=$NCURSES_DEFAULT_TERMINFO_DIR database=$NCURSES_FALLBACK_SRC disable_db_install=1 single_job=1"
+NCURSES_EXPECTED_FLAGS="fallbacks=$NCURSES_FALLBACKS terminfo_dirs=$NCURSES_TERMINFO_DIRS default=$NCURSES_DEFAULT_TERMINFO_DIR database=$NCURSES_FALLBACK_SRC disable_db_install=1 single_job=1 out_of_tree=1"
 
 if [ -f "$NCURSES_INSTALL/lib/libncursesw.a" ] && \
    [ -f "$NCURSES_INSTALL/lib/libtinfow.a" ] && \
@@ -106,15 +107,12 @@ else
     fi
 
     rm -rf "$NCURSES_INSTALL"
+    rm -rf "$NCURSES_BUILD"
+    mkdir -p "$NCURSES_BUILD"
 
     echo "  Configuring ncurses for ${OS_NAME} ${ARCH}..."
     (
-        cd "$NCURSES_SRC"
-
-        # Wipe artefacts from other platforms
-        if [ -f Makefile ] && grep -q 'Makefile' Makefile 2>/dev/null; then
-            make distclean 2>/dev/null || true
-        fi
+        cd "$NCURSES_BUILD"
 
         # Ensure install directory exists so configure can resolve absolute prefix
         NCURSES_PREFIX="$(cd ../.. && pwd)/vendor/ncurses-install"
@@ -133,7 +131,7 @@ else
         done
         IFS=$OLD_IFS
 
-        ./configure \
+        ../ncurses-src/configure \
             --enable-widec \
             --with-termlib \
             --with-fallbacks="$NCURSES_FALLBACKS" \
@@ -145,13 +143,31 @@ else
             --without-shared \
             --without-cxx-binding \
             --prefix="$NCURSES_PREFIX"
+
+        echo "  Preparing ncurses generated sources in build tree..."
+        for generated in \
+            codes.c comp_captab.c comp_userdefs.c expanded.c init_keytry.h \
+            keys.list lib_gen.c lib_keyname.c link_test.c names.c unctrl.c
+        do
+            cp "../ncurses-src/ncurses/$generated" "ncurses/$generated"
+        done
+        (
+            cd ncurses
+            /bin/sh -e ../../ncurses-src/ncurses/tinfo/MKfallback.sh \
+                "$NCURSES_DEFAULT_TERMINFO_DIR" \
+                "$NCURSES_FALLBACK_SRC_ABS" \
+                "/usr/bin/tic" \
+                "/usr/bin/infocmp" \
+                xterm-256color tmux-256color screen-256color xterm screen ansi vt100 \
+                > fallback.c
+        )
     )
 
     echo "  Compiling ncurses (single job; fallback generation is not parallel-safe)..."
-    make -C "$NCURSES_SRC" -j1
+    make -C "$NCURSES_BUILD" -j1
 
     echo "  Installing ncurses to vendor/ncurses-install..."
-    make -C "$NCURSES_SRC" install
+    make -C "$NCURSES_BUILD" install
 
     printf '%s' "$NCURSES_EXPECTED_FLAGS" > "$NCURSES_BUILD_MARKER"
 
