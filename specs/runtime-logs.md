@@ -18,7 +18,9 @@ Each line includes a local timestamp, category, and compact message:
 ```
 
 The `/logs [n]` command displays the last `n` log lines in the conversation.
-If `n` is omitted, it shows the last 80 lines. The maximum is 500 lines.
+The same plugin exposes a `logs` model tool so the agent can inspect recent
+runtime events when debugging failed tools, plugins, hooks, or API calls. If
+`n` or `limit` is omitted, it shows the last 80 lines. The maximum is 500 lines.
 
 ## Logged Events
 
@@ -39,6 +41,8 @@ If `n` is omitted, it shows the last 80 lines. The maximum is 500 lines.
   first line and the executed command on a quieter second line.
 - [Permission](permissions.md) checks and prompt decisions
 - Tool completion and result size
+- Tool handler failures, including compact diagnostic text
+- Plugin load/reload failures from `~/.config/capstan/plugins/*.lua`
 - Continuation after tool results
 - [Hook](hooks.md) errors with stage and source
 

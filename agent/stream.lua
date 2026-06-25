@@ -60,7 +60,7 @@ function M.stream(provider, on_result, initial_prompt_tokens)
             reasoning_chunks = reasoning_chunks + 1
             accumulated_reasoning = accumulated_reasoning .. chunk.content
             reasoning_token_estimate = reasoning_token_estimate + tokens.estimate_text_tokens(chunk.content)
-            if provider.context_limit and provider.context_limit > 0 then
+            if not provider.suppress_agent_state and provider.context_limit and provider.context_limit > 0 then
                 local completion_estimate = text_token_estimate + reasoning_token_estimate
                 agent.set_usage(
                     prompt_estimate,
@@ -71,17 +71,17 @@ function M.stream(provider, on_result, initial_prompt_tokens)
             end
             if not reasoning_active then
                 reasoning_active = true
-                agent.set_thinking(true)
+                if not provider.suppress_agent_state then agent.set_thinking(true) end
             end
         elseif chunk.type == "text" and chunk.content then
             text_chunks = text_chunks + 1
             if reasoning_active then
                 reasoning_active = false
-                agent.set_thinking(false)
+                if not provider.suppress_agent_state then agent.set_thinking(false) end
             end
             accumulated_text = accumulated_text .. chunk.content
             text_token_estimate = text_token_estimate + tokens.estimate_text_tokens(chunk.content)
-            if provider.context_limit and provider.context_limit > 0 then
+            if not provider.suppress_agent_state and provider.context_limit and provider.context_limit > 0 then
                 local completion_estimate = text_token_estimate + reasoning_token_estimate
                 agent.set_usage(
                     prompt_estimate,
@@ -117,29 +117,32 @@ function M.stream(provider, on_result, initial_prompt_tokens)
             end
         elseif chunk.type == "usage" and chunk.usage then
             usage_chunks = usage_chunks + 1
-            agent.set_usage(
-                chunk.usage.prompt_tokens or 0,
-                chunk.usage.completion_tokens or 0,
-                chunk.usage.total_tokens or 0,
-                provider.context_limit or 0
-            )
+            if not provider.suppress_agent_state then
+                agent.set_usage(
+                    chunk.usage.prompt_tokens or 0,
+                    chunk.usage.completion_tokens or 0,
+                    chunk.usage.total_tokens or 0,
+                    provider.context_limit or 0
+                )
+            end
         end
     end
 
     return function(raw, is_done, err, body)
         if err then
-            if reasoning_active then agent.set_thinking(false) end
+            if reasoning_active and not provider.suppress_agent_state then agent.set_thinking(false) end
             local msg = err
             if body and body ~= "" then
                 msg = err .. "\n" .. body
             end
             popup.error("API Error", msg)
+            on_result({ok = false, error = msg, text = ""}, true)
             return
         end
         if is_done then
             if reasoning_active then
                 reasoning_active = false
-                agent.set_thinking(false)
+                if not provider.suppress_agent_state then agent.set_thinking(false) end
             end
             if #buf > 0 then
                 local chunk = on_chunk(buf)

@@ -122,6 +122,8 @@ const char *app_workdir(void) {
   return g_workdir;
 }
 
+int app_workdir_set(const char *path) { return set_workdir(path); }
+
 int app_config_dir(char *buf, size_t buf_size) {
   const char *home = getenv("HOME");
   if (!home || !home[0] || buf_size == 0)

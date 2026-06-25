@@ -89,9 +89,37 @@ static MunitResult test_logs_tail_limit(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_logs_tool_metadata(const MunitParameter params[],
+                                           void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_state();
+  load_logs_plugin(L);
+
+  lua_getfield(L, -1, "tool");
+  munit_assert_true(lua_istable(L, -1));
+
+  lua_getfield(L, -1, "name");
+  munit_assert_string_equal(lua_tostring(L, -1), "logs");
+  lua_pop(L, 1);
+
+  lua_getfield(L, -1, "description");
+  munit_assert_true(strstr(lua_tostring(L, -1), "debug failed tools") != NULL);
+  lua_pop(L, 1);
+
+  lua_getfield(L, -1, "parameters");
+  munit_assert_true(lua_istable(L, -1));
+  lua_pop(L, 2);
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/tail_limit", test_logs_tail_limit, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/tool_metadata", test_logs_tool_metadata, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite logs_plugin_suite = {"/logs_plugin", tests, NULL, 1,

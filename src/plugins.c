@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <time.h>
 
@@ -357,6 +358,14 @@ static int l_capstan_state_ensure_dir(lua_State *l) {
   return 1;
 }
 
+static int l_capstan_now_ms(lua_State *l) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  lua_pushnumber(l, (lua_Number)tv.tv_sec * 1000.0 +
+                        (lua_Number)tv.tv_usec / 1000.0);
+  return 1;
+}
+
 static void register_capstan_runtime(void) {
   lua_getglobal(L, "capstan");
   if (!lua_istable(L, -1)) {
@@ -372,6 +381,9 @@ static void register_capstan_runtime(void) {
 
   lua_pushcfunction(L, l_capstan_state_ensure_dir);
   lua_setfield(L, -2, "state_ensure_dir");
+
+  lua_pushcfunction(L, l_capstan_now_ms);
+  lua_setfield(L, -2, "now_ms");
 
   lua_setglobal(L, "capstan");
 }
@@ -672,17 +684,58 @@ static void install_plugin_hooks_by_id(const char *id) {
   lua_pop(L, 2);
 }
 
+static void record_plugin_error(const char *source, const char *message) {
+  char log_msg[2048];
+  snprintf(log_msg, sizeof(log_msg), "source=%s error=%s",
+           source ? source : "unknown", message ? message : "unknown");
+  log_event("plugin", log_msg);
+
+  if (!L)
+    return;
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "capstan");
+  }
+
+  lua_getfield(L, -1, "plugin_errors");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, -3, "plugin_errors");
+  }
+
+  lua_newtable(L);
+  lua_pushstring(L, source ? source : "unknown");
+  lua_setfield(L, -2, "source");
+  lua_pushstring(L, message ? message : "unknown");
+  lua_setfield(L, -2, "message");
+  lua_rawseti(L, -2, (int)lua_rawlen(L, -2) + 1);
+  lua_pop(L, 2);
+}
+
 static Plugin *plugin_load_from_chunk(const char *name, const char *data,
                                       size_t size) {
   if (lua_dobuffer_named(L, name, data, size) !=
       LUA_OK) { // Выполняет lua файл и кладет результат выполнения на стек lua
-    fprintf(stderr, "Error loading plugin: %s\n", lua_tostring(L, -1));
+    const char *err = lua_tostring(L, -1);
+    fprintf(stderr, "Error loading plugin: %s\n", err);
+    record_plugin_error(name, err);
+    lua_pop(L, 1);
     return NULL;
   }
   if (!lua_istable(L, -1)) { // Проверяем самый верхний элемент на стеке
     fprintf(stderr, "Plugin must return a table\n");
+    record_plugin_error(name, "Plugin must return a table");
+    lua_pop(L, 1);
     return NULL;
   }
+
+  lua_pushstring(L, name ? name : "unknown");
+  lua_setfield(L, -2, "_source_path");
 
   Plugin *p = calloc(1, sizeof(Plugin));
 
@@ -699,6 +752,7 @@ static Plugin *plugin_load_from_chunk(const char *name, const char *data,
   p->id = lua_get_required_string(L, -1, "id");
   if (!p->id) {
     fprintf(stderr, "Plugin must define id\n");
+    record_plugin_error(name, "Plugin must define id");
     free(p);
     lua_pop(L, 1);
     return NULL;
@@ -907,12 +961,18 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
   lua_pushcfunction(L, l_ctx_replace);
   lua_setfield(L, -2, "replace");
 
+  lua_getglobal(L, "debug");
+  lua_getfield(L, -1, "traceback");
+  lua_remove(L, -2);
+  lua_insert(L, -2);
   lua_rawgeti(L, LUA_REGISTRYINDEX, plugin->handler_ref);
   lua_insert(L, -2);
 
-  if (lua_pcall(L, 1, 2, 0) != LUA_OK) {
+  if (lua_pcall(L, 1, 2, 1) != LUA_OK) {
     popup_show_message("Plugin Error", lua_tostring(L, -1), 1);
-    lua_pop(L, 1);
+    record_plugin_error(plugin->source_path ? plugin->source_path : plugin->id,
+                        lua_tostring(L, -1));
+    lua_pop(L, 2);
     return NULL;
   }
 
@@ -930,7 +990,7 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
   PluginResult *r = malloc(sizeof(PluginResult));
   r->ui_result = my_strdup(ui_result);
   r->raw_result = my_strdup(raw_result ? raw_result : ui_result);
-  lua_pop(L, 2);
+  lua_pop(L, 3);
 
   return r;
 }

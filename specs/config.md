@@ -23,6 +23,12 @@ return {
   capabilities = {
     self_improvement = false,
   },
+  subagents = {
+    max_concurrent = 3,
+    max_tasks = 8,
+    max_turns = 6,
+    max_turns_cap = 20,
+  },
   finder = {
     ignore_files = { ".gitignore", ".ignore" },
     ignore_patterns = { "vendor/**", "build/**", "*.o" },
@@ -43,14 +49,19 @@ return {
   provider selection, API keys, model, and context limits.
 - `permissions` entries define editable permission defaults. Runtime prompt
   choices are persisted separately in state and load after config permissions.
-- `capabilities` contains explicit high-risk feature gates. Missing capability
-  flags are treated as disabled.
+- `capabilities` contains explicit feature gates. Missing `subagents` is treated
+  as enabled; high-risk capabilities such as `self_improvement` remain disabled
+  when missing.
 - `finder.ignore_files` lists workspace-root ignore files to read in addition
   to the default `.gitignore`.
 - `finder.ignore_patterns` adds gitignore-like patterns directly.
 - `hooks` registers [agent hook](hooks.md) functions during runtime startup.
 - `capabilities.self_improvement = true` explicitly enables the built-in
   [self-improvement skill](self-improvement.md). It is disabled by default.
+- `capabilities.subagents = false` hides the model tool described in
+  [Subagents](subagents.md). It is enabled by default when the field is omitted.
+- `subagents.max_concurrent`, `max_tasks`, `max_turns`, and `max_turns_cap`
+  limit delegated internal runs.
 
 ## Compatibility
 

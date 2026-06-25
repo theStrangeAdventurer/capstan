@@ -21,6 +21,12 @@ Shift+Tab switches between them. The status bar always shows the current mode.
 | Scroll wheel | Scroll message history |
 | `PgUp`/`PgDn` | Page scroll (5 lines) |
 
+Manual scroll disables tail-follow while output is streaming. When the user
+scrolls up, newly appended agent text must not move the visible message window;
+the viewport stays anchored to the same message lines. Scrolling back to the
+bottom (`scroll == 0`) re-enables tail-follow, and new submissions reset scroll
+state to the bottom.
+
 In input mode, `Tab` opens command and autocomplete popups when the current
 input starts with a command. When a popup is active, popup key handling takes
 precedence over focus mode switching. In selection and

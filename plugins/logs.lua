@@ -5,6 +5,19 @@ plugin.name = "Logs"
 plugin.description = "Show recent runtime log entries"
 plugin.command = "/logs"
 plugin.async = false
+plugin.tool = {
+	name = "logs",
+	description = "Read recent Capstan runtime log lines to debug failed tools, plugins, hooks, or API calls.",
+	parameters = {
+		type = "object",
+		properties = {
+			limit = {
+				type = "integer",
+				description = "Maximum number of recent log lines to return, default 80, maximum 500"
+			}
+		}
+	}
+}
 
 local function log_path()
 	if capstan and capstan.log_path then
@@ -32,7 +45,7 @@ local function read_lines(path)
 end
 
 function plugin.handler(ctx)
-	local limit = tonumber(ctx.args[1]) or 80
+	local limit = tonumber(ctx.tool_args and ctx.tool_args.limit) or tonumber(ctx.args[1]) or 80
 	if limit <= 0 then limit = 80 end
 	if limit > 500 then limit = 500 end
 
