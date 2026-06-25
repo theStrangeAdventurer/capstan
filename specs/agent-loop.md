@@ -111,7 +111,9 @@ through model-tool permission checks.
 ## Lua Agent Cycle
 
 `agent_emit()` calls `_G.on_messages(messages)`, installed by
-`agent/runtime.lua` during startup.
+`agent/runtime.lua` during startup. `_G.on_messages` is now the TUI adapter over
+the reusable `capstan.agent.run(opts, callbacks)` runtime entry point used by
+both TUI and headless CLI mode.
 
 The runtime:
 
@@ -123,6 +125,10 @@ The runtime:
 6. Appends text chunks to the current agent placeholder.
 7. If the final stream result contains tool calls, executes tools and recurses
    with appended `{role="tool"}` messages.
+
+Headless `capstan run` builds the same message shape and calls
+`capstan.agent.run` directly, with callbacks that buffer final stdout instead of
+appending to the TUI message list.
 
 The loop is recursive through a continuation function: every tool round produces
 a new HTTP request with the expanded message history. Space cancellation can stop
@@ -143,16 +149,25 @@ plugin.tool = {
 ```
 
 `agent/tools.lua` converts these tables to OpenAI function-tool schemas. When
-the model calls a tool, Lua decodes JSON arguments, derives a permission target,
-checks `permit`, calls the matching plugin handler with `ctx.tool_args`, and
-adds a tool result message back into the recursive conversation.
+the model calls a permissioned tool, Lua decodes JSON arguments, derives a
+permission target, checks `permit`, calls the matching plugin handler with
+`ctx.tool_args`, and adds a tool result message back into the recursive
+conversation.
 
 Tool handler errors are contained inside the Lua runtime. A failing handler must
-produce a `{role="tool"}` error result, log the failure, and mark the visible
-tool row as an error instead of throwing through the stream callback.
+produce a `{role="tool"}` diagnostic result with plugin id, source, arguments,
+and traceback; log the failure; and mark the visible tool row with a compact
+error reason instead of throwing through the stream callback.
 
 Permission policy is shared: Lua chooses the tool name and target for the check;
 C owns rule storage, matching, saving, and the prompt UI.
+
+The built-in `subagents` tool is not a plugin file. It is collected by
+`agent/tools.lua` unless `capabilities.subagents = false`. It starts multiple
+internal `capstan.agent.run` executions, hides `subagents` from nested tool
+lists, and returns one structured JSON tool result to the orchestrator.
+`subagents` itself does not use a permission target; its availability and scale
+are controlled by `capabilities.subagents` and the `subagents.max_*` limits.
 
 ## Extension Points
 

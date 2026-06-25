@@ -137,7 +137,6 @@ static void render_empty_banner(WINDOW *win, int height, int width) {
 }
 
 void render_all(void) {
-  int scroll_offset = scroll_get();
   const char *input = input_get_text();
   int input_pos = input_get_cursor();
   int rows, cols;
@@ -168,6 +167,8 @@ void render_all(void) {
     line_counts[i] = l;
     total_lines += l + 2;
   }
+  scroll_update_content(total_lines, msg_h);
+  int scroll_offset = scroll_get();
 
   const char **msgs_texts = malloc(msgs->size * sizeof(const char *));
   int *msgs_roles = malloc(msgs->size * sizeof(int));
@@ -203,6 +204,8 @@ void render_all(void) {
     scroll_offset = max_scroll;
   if (scroll_offset < 0)
     scroll_offset = 0;
+  if (scroll_offset != scroll_get())
+    scroll_set(scroll_offset);
 
   int top_line = total_lines - msg_h - scroll_offset;
   if (top_line < 0)

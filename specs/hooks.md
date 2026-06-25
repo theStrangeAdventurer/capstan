@@ -64,6 +64,9 @@ only needed for slash commands.
   more tool calls. This is the point where all tool continuations are done and
   control returns to the user. Receives `ctx.text`, `ctx.messages`,
   `ctx.tools`, `ctx.provider`, `ctx.provider_name`, and `ctx.runtime`.
+- `after_subagents`: after all internal subagent runs complete and before the
+  structured result is returned to the orchestrator as a tool result. May change
+  `ctx.result`.
 
 ## Constraints
 

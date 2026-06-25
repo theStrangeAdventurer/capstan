@@ -86,6 +86,12 @@ If no configured or persisted rule matches:
   workspace directory.
 - All other tools return `ask`.
 
+The `subagents` model tool does not use a permission pattern. It is exposed by
+default and hidden only when `capabilities.subagents = false`. Its scale is
+controlled by `subagents.max_concurrent`, `subagents.max_tasks`,
+`subagents.max_turns`, and `subagents.max_turns_cap`. Tools executed by
+subagents still use their own permission checks.
+
 Pattern matching supports exact target matches and glob-style `*` anywhere in
 the pattern:
 
@@ -106,12 +112,13 @@ UI saves the exact target, not a wildcard.
 
 ## Architecture
 
-`agent/tools.lua` applies permissions while processing model tool calls.
-For `shell`, it uses `capstan.workdir` as the target. Other tools derive the
-target from common tool arguments (`command`, `path`, `url`, `uri`) or fall back
-to the tool name. Local file permission targets (`file_read` and `file_write`)
-are normalized before matching: relative paths resolve against `capstan.workdir`,
-`~/` expands through `HOME`, and `.`/`..` segments are collapsed.
+`agent/tools.lua` applies permissions while processing model tool calls that
+require permission. For `shell`, it uses `capstan.workdir` as the target. Other
+permissioned tools derive the target from common tool arguments (`command`,
+`path`, `url`, `uri`) or fall back to the tool name. Local file permission
+targets (`file_read` and `file_write`) are normalized before matching: relative
+paths resolve against `capstan.workdir`, `~/` expands through `HOME`, and `.`
+and `..` segments are collapsed.
 
 `src/permit.c` owns rule loading, saving, matching, config-rule import, and the
 Lua-facing `permit` table. `src/tui.c` renders the blocking permit confirmation

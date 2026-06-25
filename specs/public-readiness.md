@@ -35,7 +35,6 @@ local data point, not as a universal release guarantee.
 
 Do not present these as implemented:
 
-- headless batch mode;
 - forked subagents;
 - isolated plugin sandboxing;
 - performance superiority beyond measured binary size and smoke-test behavior.

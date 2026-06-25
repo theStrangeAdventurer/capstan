@@ -1,0 +1,108 @@
+#include "cli_args.h"
+#include <string.h>
+
+CliOptions cli_options_default(void) {
+  CliOptions opts = {0};
+  opts.mode = CLI_MODE_TUI;
+  opts.max_turns = 20;
+  return opts;
+}
+
+static int is_flag(const char *arg, const char *flag) {
+  return arg && strcmp(arg, flag) == 0;
+}
+
+static const char *next_value(int argc, char **argv, int *i) {
+  if (*i + 1 >= argc)
+    return NULL;
+  (*i)++;
+  return argv[*i];
+}
+
+CliOptions cli_parse(int argc, char **argv) {
+  CliOptions opts = cli_options_default();
+
+  if (argc <= 1)
+    return opts;
+
+  if (is_flag(argv[1], "--self-test-embedded")) {
+    opts.mode = CLI_MODE_SELF_TEST;
+    return opts;
+  }
+
+  if (is_flag(argv[1], "-h") || is_flag(argv[1], "--help")) {
+    opts.mode = CLI_MODE_HELP;
+    return opts;
+  }
+
+  int start = 1;
+  if (strcmp(argv[1], "run") == 0) {
+    opts.mode = CLI_MODE_RUN;
+    start = 2;
+  } else {
+    opts.mode = CLI_MODE_ERROR;
+    opts.error = "unknown command";
+    return opts;
+  }
+
+  for (int i = start; i < argc; i++) {
+    const char *arg = argv[i];
+    if (is_flag(arg, "--prompt")) {
+      opts.prompt = next_value(argc, argv, &i);
+      if (!opts.prompt)
+        opts.error = "--prompt requires a value";
+    } else if (is_flag(arg, "--prompt-file")) {
+      opts.prompt_file = next_value(argc, argv, &i);
+      if (!opts.prompt_file)
+        opts.error = "--prompt-file requires a value";
+    } else if (is_flag(arg, "--provider")) {
+      opts.provider = next_value(argc, argv, &i);
+      if (!opts.provider)
+        opts.error = "--provider requires a value";
+    } else if (is_flag(arg, "--model")) {
+      opts.model = next_value(argc, argv, &i);
+      if (!opts.model)
+        opts.error = "--model requires a value";
+    } else if (is_flag(arg, "--workdir")) {
+      opts.workdir = next_value(argc, argv, &i);
+      if (!opts.workdir)
+        opts.error = "--workdir requires a value";
+    } else if (is_flag(arg, "--max-turns")) {
+      const char *value = next_value(argc, argv, &i);
+      if (!value) {
+        opts.error = "--max-turns requires a value";
+      } else {
+        int parsed = 0;
+        for (const char *p = value; *p; p++) {
+          if (*p < '0' || *p > '9') {
+            opts.error = "--max-turns must be a positive integer";
+            break;
+          }
+          parsed = parsed * 10 + (*p - '0');
+        }
+        if (!opts.error && parsed <= 0)
+          opts.error = "--max-turns must be a positive integer";
+        if (!opts.error)
+          opts.max_turns = parsed;
+      }
+    } else if (is_flag(arg, "--json")) {
+      opts.json = 1;
+    } else if (is_flag(arg, "-h") || is_flag(arg, "--help")) {
+      opts.mode = CLI_MODE_HELP;
+    } else {
+      opts.error = "unknown run option";
+    }
+
+    if (opts.error) {
+      opts.mode = CLI_MODE_ERROR;
+      return opts;
+    }
+  }
+
+  if (opts.prompt && opts.prompt_file) {
+    opts.mode = CLI_MODE_ERROR;
+    opts.error = "use only one of --prompt or --prompt-file";
+  }
+
+  return opts;
+}

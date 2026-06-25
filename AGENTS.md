@@ -258,6 +258,7 @@ Feature specs:
 
 - [Agent control](specs/agent-control.md)
 - [Agent loop](specs/agent-loop.md)
+- [CLI run mode](specs/cli-run.md)
 - [Config](specs/config.md)
 - [Embedded runtime assets](specs/embedded-runtime-assets.md)
 - [Focus modes](specs/focus-modes.md)
@@ -277,6 +278,7 @@ Feature specs:
 - [Runtime state](specs/runtime-state.md)
 - [Skills](specs/skills.md)
 - [Self improvement](specs/self-improvement.md)
+- [Subagents](specs/subagents.md)
 - [Terminal runtime](specs/terminal-runtime.md)
 - [Workspace directory](specs/workspace-directory.md)
 

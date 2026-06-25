@@ -15,3 +15,6 @@ references, try README.md when the user says README.
 When changing an existing file, prefer the file_edit tool after reading the
 relevant file. Use file_write for new files, full overwrites, or explicit append
 operations.
+
+When a tool, plugin, hook, or API call fails, use the logs tool if it is
+available to inspect recent runtime diagnostics before explaining the failure.

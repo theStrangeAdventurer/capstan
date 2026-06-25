@@ -76,6 +76,13 @@ Smoke-test the embedded runtime without opening the TUI:
 ./build/capstan --self-test-embedded
 ```
 
+Headless one-shot mode:
+
+```sh
+./build/capstan run --prompt "Inspect this repository"
+./build/capstan run --prompt-file task.md --json
+```
+
 ## Config
 
 Capstan loads:
@@ -120,6 +127,12 @@ state directory, not rewritten into `config.lua`.
 - `/logs` shows recent runtime logs.
 - `/skills` lists loaded skills.
 - `/models` selects a model for the current provider from the provider API.
+
+## CLI Run Mode
+
+`capstan run` executes one agent task without opening the TUI. It accepts
+`--prompt`, `--prompt-file`, stdin, `--provider`, `--model`, `--workdir`,
+`--max-turns`, and `--json`.
 
 ## Permissions
 
@@ -178,6 +191,12 @@ return {
 }
 ```
 
+Subagents are enabled by default. Set `capabilities.subagents = false` to hide
+the `subagents` model tool. The tool lets the orchestrator run several focused
+internal agents in parallel. It has no separate permission pattern; use
+`subagents.max_*` config limits for scale, while the tools used inside each
+subagent still pass through their normal permissions.
+
 ## Terminal Compatibility
 
 Capstan builds ncurses with built-in fallback descriptions for common terminal
@@ -190,8 +209,8 @@ diagnostic before opening the TUI.
 
 ## Known Limitations
 
-- No headless batch mode yet.
-- No subagent/forked-agent orchestration yet.
+- Subagents run in-process; network waits are parallel, Lua callbacks/tool
+  handlers remain single-threaded.
 - User Lua plugins are trusted local code, not sandboxed isolates.
 - Blocking Lua plugin work can still block UI cancellation until it returns.
 - `libcurl` is provided by the operating system.

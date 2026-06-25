@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "app_config.h"
+#include "cli_args.h"
 #include "dispatch.h"
 #include "http.h"
 #include "input.h"
@@ -21,6 +22,286 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+typedef struct {
+  char *text;
+  size_t size;
+  size_t cap;
+  int done;
+  int ok;
+  char error[1024];
+} HeadlessRun;
+
+static HeadlessRun g_headless_run = {0};
+
+static void print_help(void) {
+  printf("Usage:\n");
+  printf("  capstan\n");
+  printf("  capstan run [--prompt TEXT | --prompt-file PATH] [options]\n\n");
+  printf("Options:\n");
+  printf("  --provider NAME     Override provider for this run\n");
+  printf("  --model ID          Override model for this run\n");
+  printf("  --workdir PATH      Override workspace directory\n");
+  printf("  --max-turns N       Limit agent continuation rounds (default: 20)\n");
+  printf("  --json              Print structured JSON result\n");
+}
+
+static void headless_append(const char *text) {
+  if (!text)
+    return;
+  size_t len = strlen(text);
+  if (g_headless_run.size + len + 1 > g_headless_run.cap) {
+    size_t next = g_headless_run.cap ? g_headless_run.cap * 2 : 1024;
+    while (next < g_headless_run.size + len + 1)
+      next *= 2;
+    char *new_text = realloc(g_headless_run.text, next);
+    if (!new_text)
+      return;
+    g_headless_run.text = new_text;
+    g_headless_run.cap = next;
+  }
+  memcpy(g_headless_run.text + g_headless_run.size, text, len);
+  g_headless_run.size += len;
+  g_headless_run.text[g_headless_run.size] = '\0';
+}
+
+static int l_headless_on_text(lua_State *l) {
+  headless_append(luaL_optstring(l, 1, ""));
+  return 0;
+}
+
+static int l_headless_on_error(lua_State *l) {
+  const char *message = luaL_optstring(l, 1, "unknown error");
+  snprintf(g_headless_run.error, sizeof(g_headless_run.error), "%s", message);
+  g_headless_run.ok = 0;
+  return 0;
+}
+
+static int l_headless_on_done(lua_State *l) {
+  g_headless_run.done = 1;
+  g_headless_run.ok = 1;
+  if (lua_istable(l, 1)) {
+    lua_getfield(l, 1, "ok");
+    if (lua_isboolean(l, -1) && !lua_toboolean(l, -1))
+      g_headless_run.ok = 0;
+    lua_pop(l, 1);
+
+    lua_getfield(l, 1, "text");
+    const char *text = lua_tostring(l, -1);
+    if (text && g_headless_run.size == 0)
+      headless_append(text);
+    lua_pop(l, 1);
+
+    lua_getfield(l, 1, "error");
+    const char *error = lua_tostring(l, -1);
+    if (error)
+      snprintf(g_headless_run.error, sizeof(g_headless_run.error), "%s",
+               error);
+    lua_pop(l, 1);
+  }
+  return 0;
+}
+
+static char *read_all(FILE *f) {
+  char *buf = NULL;
+  size_t size = 0;
+  size_t cap = 0;
+  char chunk[4096];
+  while (1) {
+    size_t n = fread(chunk, 1, sizeof(chunk), f);
+    if (n > 0) {
+      if (size + n + 1 > cap) {
+        size_t next = cap ? cap * 2 : 4096;
+        while (next < size + n + 1)
+          next *= 2;
+        char *new_buf = realloc(buf, next);
+        if (!new_buf) {
+          free(buf);
+          return NULL;
+        }
+        buf = new_buf;
+        cap = next;
+      }
+      memcpy(buf + size, chunk, n);
+      size += n;
+    }
+    if (n < sizeof(chunk)) {
+      if (ferror(f)) {
+        free(buf);
+        return NULL;
+      }
+      break;
+    }
+  }
+  if (!buf) {
+    buf = malloc(1);
+    if (!buf)
+      return NULL;
+  }
+  buf[size] = '\0';
+  return buf;
+}
+
+static char *read_file_prompt(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f)
+    return NULL;
+  char *content = read_all(f);
+  fclose(f);
+  return content;
+}
+
+static void json_print_string(const char *text) {
+  putchar('"');
+  for (const unsigned char *p = (const unsigned char *)(text ? text : ""); *p;
+       p++) {
+    if (*p == '"' || *p == '\\') {
+      putchar('\\');
+      putchar(*p);
+    } else if (*p == '\n') {
+      printf("\\n");
+    } else if (*p == '\r') {
+      printf("\\r");
+    } else if (*p == '\t') {
+      printf("\\t");
+    } else if (*p < 0x20) {
+      printf("\\u%04x", *p);
+    } else {
+      putchar(*p);
+    }
+  }
+  putchar('"');
+}
+
+static void print_json_result(int ok, const char *text, const char *error) {
+  printf("{\"ok\":%s,\"text\":", ok ? "true" : "false");
+  json_print_string(text ? text : "");
+  printf(",\"error\":");
+  json_print_string(error ? error : "");
+  printf("}\n");
+}
+
+static int run_headless(const CliOptions *opts, const char *argv0) {
+  char *owned_prompt = NULL;
+  const char *prompt = opts->prompt;
+  if (!prompt && opts->prompt_file) {
+    owned_prompt = read_file_prompt(opts->prompt_file);
+    if (!owned_prompt) {
+      fprintf(stderr, "capstan: cannot read prompt file: %s\n",
+              opts->prompt_file);
+      return 1;
+    }
+    prompt = owned_prompt;
+  } else if (!prompt && !isatty(STDIN_FILENO)) {
+    owned_prompt = read_all(stdin);
+    prompt = owned_prompt;
+  }
+  if (!prompt || !prompt[0]) {
+    fprintf(stderr, "capstan: run requires --prompt, --prompt-file, or stdin\n");
+    free(owned_prompt);
+    return 1;
+  }
+
+  app_workdir_init(argv0);
+  if (opts->workdir && !app_workdir_set(opts->workdir)) {
+    fprintf(stderr, "capstan: invalid --workdir: %s\n", opts->workdir);
+    free(owned_prompt);
+    return 1;
+  }
+
+  setlocale(LC_ALL, "");
+  http_set_headless(1);
+  plugins_init();
+  load_embedded_plugins();
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "agent");
+  lua_getfield(L, -1, "run");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "user");
+  lua_setfield(L, -2, "role");
+  lua_pushstring(L, prompt);
+  lua_setfield(L, -2, "content");
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "messages");
+  if (opts->provider) {
+    lua_pushstring(L, opts->provider);
+    lua_setfield(L, -2, "provider");
+  }
+  if (opts->model) {
+    lua_pushstring(L, opts->model);
+    lua_setfield(L, -2, "model");
+  }
+  lua_pushinteger(L, opts->max_turns);
+  lua_setfield(L, -2, "max_turns");
+
+  lua_newtable(L);
+  lua_pushcfunction(L, l_headless_on_text);
+  lua_setfield(L, -2, "on_text");
+  lua_pushcfunction(L, l_headless_on_error);
+  lua_setfield(L, -2, "on_error");
+  lua_pushcfunction(L, l_headless_on_done);
+  lua_setfield(L, -2, "on_done");
+
+  if (lua_pcall(L, 2, 2, 0) != LUA_OK) {
+    const char *message = lua_tostring(L, -1);
+    if (opts->json)
+      print_json_result(0, "", message);
+    else
+      fprintf(stderr, "capstan: %s\n", message);
+    lua_pop(L, 1);
+    plugins_cleanup();
+    free(owned_prompt);
+    return 1;
+  }
+  int started = lua_toboolean(L, -2);
+  const char *start_err = lua_tostring(L, -1);
+  lua_pop(L, 4);
+  if (!started) {
+    const char *message = start_err ? start_err : "run failed";
+    if (opts->json)
+      print_json_result(0, "", message);
+    else
+      fprintf(stderr, "capstan: %s\n", message);
+    plugins_cleanup();
+    free(owned_prompt);
+    return 1;
+  }
+
+  while (!g_headless_run.done && http_is_loading()) {
+    http_poll(L);
+    usleep(10000);
+  }
+
+  if (!g_headless_run.done && !g_headless_run.error[0]) {
+    snprintf(g_headless_run.error, sizeof(g_headless_run.error),
+             "agent stream ended without completion");
+    g_headless_run.ok = 0;
+  }
+
+  if (opts->json) {
+    print_json_result(g_headless_run.ok, g_headless_run.text,
+                      g_headless_run.error);
+  } else if (g_headless_run.ok) {
+    printf("%s", g_headless_run.text ? g_headless_run.text : "");
+    if (!g_headless_run.text || g_headless_run.size == 0 ||
+        g_headless_run.text[g_headless_run.size - 1] != '\n')
+      putchar('\n');
+  } else {
+    fprintf(stderr, "capstan: %s\n",
+            g_headless_run.error[0] ? g_headless_run.error : "run failed");
+  }
+
+  int rc = g_headless_run.ok ? 0 : 1;
+  free(g_headless_run.text);
+  g_headless_run = (HeadlessRun){0};
+  plugins_cleanup();
+  free(owned_prompt);
+  return rc;
+}
 
 static int run_embedded_self_test(void) {
   plugins_init();
@@ -101,12 +382,29 @@ static int verify_terminal(void) {
 }
 
 int main(int argc, char *argv[]) {
-  app_workdir_init(argv[0]);
+  CliOptions cli = cli_parse(argc, argv);
 
-  if (argc == 2 && strcmp(argv[1], "--self-test-embedded") == 0) {
+  if (cli.mode == CLI_MODE_ERROR) {
+    fprintf(stderr, "capstan: %s\n", cli.error ? cli.error : "invalid args");
+    print_help();
+    return 2;
+  }
+
+  if (cli.mode == CLI_MODE_HELP) {
+    print_help();
+    return 0;
+  }
+
+  if (cli.mode == CLI_MODE_SELF_TEST) {
+    app_workdir_init(argv[0]);
     setlocale(LC_ALL, "");
     return run_embedded_self_test();
   }
+
+  if (cli.mode == CLI_MODE_RUN)
+    return run_headless(&cli, argv[0]);
+
+  app_workdir_init(argv[0]);
 
   setlocale(LC_ALL, "");
   if (!verify_terminal())

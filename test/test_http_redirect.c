@@ -263,6 +263,7 @@ static MunitResult test_post_stream_success_done_has_no_error_body(
   int rc = lua_pcall(L, 4, 1, 0);
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 2);
+  lua_gc(L, LUA_GCCOLLECT, 0);
 
   for (int i = 0; i < 100 && stream_done_calls == 0; i++) {
     http_poll(L);

@@ -2,6 +2,7 @@
 
 extern MunitSuite dispatch_suite;
 extern MunitSuite app_config_suite;
+extern MunitSuite cli_args_suite;
 extern MunitSuite finder_suite;
 extern MunitSuite input_suite;
 extern MunitSuite linemap_suite;
@@ -19,6 +20,7 @@ int main(int argc, char *argv[]) {
   MunitSuite suites[] = {
     dispatch_suite,
     app_config_suite,
+    cli_args_suite,
     finder_suite,
     input_suite,
     linemap_suite,
