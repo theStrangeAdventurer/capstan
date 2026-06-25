@@ -1062,6 +1062,8 @@ static MunitResult test_shell_always_allow_uses_workspace_target(
   munit_assert_string_equal(granted_pattern, "/repo/project");
   munit_assert_int(grant_allow, ==, 1);
   munit_assert_int(permit_prompt_calls, ==, 1);
+  munit_assert_true(strstr(captured_agent_appends, "shell: /repo/project") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "  $ pwd") != NULL);
 
   call_on_messages(L);
   munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
@@ -1076,6 +1078,54 @@ static MunitResult test_shell_always_allow_uses_workspace_target(
 
   reset_captures(L);
   lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_shell_tool_display_collapses_home_and_shows_command(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  const char *prev_home = getenv("HOME");
+  char old_home[4096];
+  if (prev_home)
+    snprintf(old_home, sizeof(old_home), "%s", prev_home);
+  munit_assert_int(setenv("HOME", "/Users/tester", 1), ==, 0);
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, "/Users/tester/narnia/tui-agent");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_on_messages(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_shell_display", "shell",
+                 "{\\\"command\\\":\\\"make test\\\"}");
+
+  munit_assert_string_equal(captured_permit_tool, "shell");
+  munit_assert_string_equal(captured_permit_target,
+                            "/Users/tester/narnia/tui-agent");
+  munit_assert_true(strstr(captured_agent_appends,
+                           "shell: ~/narnia/tui-agent") != NULL);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "  $ make test") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "display=~/narnia/tui-agent") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "command=make test") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+
+  if (prev_home)
+    munit_assert_int(setenv("HOME", old_home, 1), ==, 0);
+  else
+    munit_assert_int(unsetenv("HOME"), ==, 0);
+
   return MUNIT_OK;
 }
 
@@ -1351,6 +1401,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_always_allow_uses_workspace_target",
      test_shell_always_allow_uses_workspace_target, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/shell_tool_display_collapses_home_and_shows_command",
+     test_shell_tool_display_collapses_home_and_shows_command, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/after_agent_turn_hook_runs_on_final_text",
      test_after_agent_turn_hook_runs_on_final_text, NULL, NULL,

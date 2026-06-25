@@ -45,6 +45,40 @@ plugin.history = false
 No-history commands show UI feedback but do not add messages, do not add pending
 context, and do not trigger an agent request. `/models` uses this mode.
 
+## Ecosystem
+
+Capstan has three extension tiers. The table below clarifies what each tier is
+for and how they relate.
+
+| | Shell script | Plugin | Skill |
+|---|---|---|---|
+| **What** | Standalone script (`reddit-top.sh`) | Lua file at `~/.config/capstan/plugins/*.lua` returning `{id, command, handler}` | Directory with `SKILL.md` at `.agents/skills/name/` or `~/.agents/skills/name/` |
+| **Caller** | User (manually in terminal) | User (`/command`) or agent (via tool call) | Agent only — via system prompt instruction |
+| **Knows Capstan?** | No | Yes — `http.get/post`, `agent.append`, hooks, ui | No code — only markdown instructions |
+| **Use case** | One-off pipeline, pipe to `jq`, cron job | Execute HTTP, mutate state, render UI feedback | Teach agent *when and how* to use a plugin |
+
+### Flow
+
+```
+Skill           «if the user wants X, call /plugin Y»  (markdown, in prompt)
+    │
+    ▼
+Plugin          /plugin executes http, filters, returns (ui, llm)  (Lua, hot-reloaded)
+    │
+    ▼
+Agent           receives llm_result in context, reasons about it, answers user
+```
+
+A plugin without a skill is a dumb command — the agent won't know when to call
+it. A skill without a plugin is dead instructions — the agent has no code to
+execute. Production features ship as a **plugin + skill pair**.
+
+### When a shell script is enough
+
+If the task is purely for the human (e.g., a cron job that emails weekly Reddit
+digests), a shell script outside Capstan is simpler. No Lua, no hot-reload
+constraints, no need to teach the agent.
+
 ## Tests
 
 The embedded smoke test verifies built-in plugin availability. Runtime reload is

@@ -14,7 +14,7 @@ When `XDG_STATE_HOME` is not set, the fallback is
 Each line includes a local timestamp, category, and compact message:
 
 ```text
-2026-06-19 18:30:00 [tool] call name=file_read target=README args={"path":"README"}
+2026-06-19 18:30:00 [tool] call name=shell target=/Users/me/project display=~/project command=make test args={"command":"make test"}
 ```
 
 The `/logs [n]` command displays the last `n` log lines in the conversation.
@@ -33,7 +33,10 @@ If `n` is omitted, it shows the last 80 lines. The maximum is 500 lines.
 - Final reconstructed tool calls with id, name, and compact arguments
 - Assistant text when the stream completes without tool calls
 - Tool calls received from the model
-- Tool call name, target, and raw JSON arguments
+- Tool call name, permission target, and raw JSON arguments
+- Shell tool calls additionally log a `display` directory and separate
+  `command`. In the conversation, shell status renders the directory on the
+  first line and the executed command on a quieter second line.
 - [Permission](permissions.md) checks and prompt decisions
 - Tool completion and result size
 - Continuation after tool results

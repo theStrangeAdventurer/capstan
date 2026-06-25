@@ -150,6 +150,39 @@ local function normalize_permission_target(permission_tool, target)
     return target
 end
 
+local function collapse_home_path(path)
+    if type(path) ~= "string" or path == "" then return path end
+    local home = os.getenv("HOME")
+    if not home or home == "" then return path end
+    home = home:gsub("/+$", "")
+    if path == home then return "~" end
+    if path:sub(1, #home + 1) == home .. "/" then
+        return "~" .. path:sub(#home + 1)
+    end
+    return path
+end
+
+local function tool_display_target(tool_name, args, target)
+    if tool_name == "shell" then
+        return collapse_home_path(target)
+    end
+    return target
+end
+
+local function tool_display_command(tool_name, args)
+    if tool_name ~= "shell" then return nil end
+    local command = args and args.command
+    if type(command) ~= "string" or command == "" then return nil end
+    return command
+end
+
+local function tool_status_suffix(status, display_command)
+    if display_command then
+        return status .. "\n  $ " .. display_command .. "\n\n"
+    end
+    return status .. "\n\n"
+end
+
 function M.process(current_msgs, combined_tools, tool_calls, assistant_text, continue_fn)
     logging.runtime_log("tools", string.format("received %d tool call(s)", #tool_calls))
     local openai_tool_calls = {}
@@ -191,21 +224,27 @@ function M.process(current_msgs, combined_tools, tool_calls, assistant_text, con
             target = call_ctx.target or target
             permission_tool = call_ctx.permission_tool or permission_tool
             target = normalize_permission_target(permission_tool, target)
-            logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, tc.arguments or ""))
+            local display_target = tool_display_target(tool_name, args, target)
+            local display_command = tool_display_command(tool_name, args)
+            if display_command then
+                logging.runtime_log("tool", string.format("call name=%s target=%s display=%s command=%s args=%s", tool_name, target, display_target, logging.compact(display_command, 240), tc.arguments or ""))
+            else
+                logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, tc.arguments or ""))
+            end
             local perm = permit.check(permission_tool, target)
             logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
 
-            agent.append(string.format("\n⚙ %s: %s ", tool_name, target), "agent")
+            agent.append(string.format("\n⚙ %s: %s ", tool_name, display_target), "agent")
 
             if perm == "deny" then
                 result_content = "Permission denied for " .. tool_name .. " " .. target
-                agent.append("— denied\n\n", "agent")
+                agent.append(tool_status_suffix("— denied", display_command), "agent")
             elseif perm == "ask" then
                 local decision = permit.prompt(permission_tool, target)
                 logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
                 if decision == "deny" then
                     result_content = "User denied " .. tool_name .. " " .. target
-                    agent.append("— denied by user\n\n", "agent")
+                    agent.append(tool_status_suffix("— denied by user", display_command), "agent")
                 else
                     if decision == "always" then
                         permit.grant(permission_tool, target, true)
@@ -215,10 +254,10 @@ function M.process(current_msgs, combined_tools, tool_calls, assistant_text, con
                     result_content, tool_ok = call_plugin_tool(tool_name, args)
                     if tool_ok then
                         logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
-                        agent.append("— done\n\n", "agent")
+                        agent.append(tool_status_suffix("— done", display_command), "agent")
                     else
                         logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
-                        agent.append("— error\n\n", "agent")
+                        agent.append(tool_status_suffix("— error", display_command), "agent")
                     end
                 end
             else
@@ -226,10 +265,10 @@ function M.process(current_msgs, combined_tools, tool_calls, assistant_text, con
                 result_content, tool_ok = call_plugin_tool(tool_name, args)
                 if tool_ok then
                     logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
-                    agent.append("— done\n\n", "agent")
+                    agent.append(tool_status_suffix("— done", display_command), "agent")
                 else
                     logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
-                    agent.append("— error\n\n", "agent")
+                    agent.append(tool_status_suffix("— error", display_command), "agent")
                 end
             end
             local result_ctx = hooks.run("after_tool_call", {

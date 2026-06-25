@@ -14,6 +14,7 @@
 #include <lua.h>
 #include <lualib.h>
 #include <ncursesw/curses.h>
+#include <ncursesw/term.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,6 +65,41 @@ static int run_embedded_self_test(void) {
   return ok ? 0 : 1;
 }
 
+static int verify_terminal(void) {
+  const char *term = getenv("TERM");
+  if (!term || !term[0]) {
+    fprintf(stderr,
+            "capstan: TERM is not set; cannot initialize the terminal UI.\n");
+    fprintf(stderr,
+            "Set TERM to a terminal type such as xterm-256color or "
+            "tmux-256color.\n");
+    return 0;
+  }
+
+  int errret = 0;
+  if (setupterm(NULL, STDOUT_FILENO, &errret) == ERR) {
+    fprintf(stderr,
+            "capstan: terminal type '%s' is not available in terminfo.\n",
+            term);
+    if (errret == 0) {
+      fprintf(stderr,
+              "No terminfo database was found. Capstan includes fallbacks for "
+              "xterm-256color, tmux-256color, screen-256color, xterm, screen, "
+              "ansi, and vt100.\n");
+    } else if (errret == -1) {
+      fprintf(stderr,
+              "The terminfo database could not be opened. Check TERMINFO or "
+              "TERMINFO_DIRS if you intentionally override them.\n");
+    }
+    fprintf(stderr,
+            "Try running with TERM=xterm-256color, or rebuild Capstan with "
+            "./build.sh to refresh vendored ncurses fallbacks.\n");
+    return 0;
+  }
+
+  return 1;
+}
+
 int main(int argc, char *argv[]) {
   app_workdir_init(argv[0]);
 
@@ -73,6 +109,9 @@ int main(int argc, char *argv[]) {
   }
 
   setlocale(LC_ALL, "");
+  if (!verify_terminal())
+    return 1;
+
   set_escdelay(50);
   initscr();
   noecho();
