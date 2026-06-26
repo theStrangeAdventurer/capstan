@@ -3,7 +3,8 @@
 ## Behavior
 
 `/file <path...>` reads files or lists directories and adds the result to the
-conversation context. The agent tool `file_read` uses the same path behavior.
+conversation context. The agent tool `file_read` accepts `{ "path": "..." }`
+and uses the same path behavior.
 
 - Missing paths return `Usage: /file <filename...>`.
 - Absolute paths are used as provided.
@@ -40,5 +41,5 @@ internally, reads workspace-root `.gitignore` by default, and also applies
 
 `make test` covers finder matching, ignore rules, filterable popup input, and
 selection behavior. `make test-http-lua` covers README fallback,
-workspace-relative file reads, and shell-quoting regression for directory
-listing.
+workspace-relative file reads, model-tool `ctx.tool_args.path` handling, and
+shell-quoting regression for directory listing.

@@ -1,7 +1,7 @@
 # Agent Hooks
 
 Hooks let Lua config and plugins extend the agent pipeline without replacing the
-whole `_G.on_messages` runtime.
+whole `_G.agent_entry` runtime.
 
 ## Behavior
 
@@ -70,14 +70,14 @@ only needed for slash commands.
 
 ## Constraints
 
-Hooks are policy and live in Lua. Full `_G.on_messages` replacement is not the
+Hooks are policy and live in Lua. Full `_G.agent_entry` replacement is not the
 default extension mechanism.
 
 `on_stream_chunk` is a hot-path hook. The runtime checks whether the stage has
 registered hooks before allocating hook ctx for stream chunks.
 
 `after_agent_turn` is the right stage for notifications that should fire only
-when the user can respond again. Do not replace `_G.on_messages` for this.
+when the user can respond again. Do not replace `_G.agent_entry` for this.
 
 ## Tests
 

@@ -22,15 +22,18 @@ The permit popup offers:
 
 - `Yes`: allow this one tool call.
 - `No`: deny this one tool call.
+- `Tool run`: temporarily allow this permission tool for the current run scope.
+- `Full run`: temporarily allow all permissioned tools for the current run scope.
 - `Always allow`: allow this call and persist an exact rule for future calls.
   For `shell`, the persisted target is the active workspace directory, so later
   shell commands in that workspace do not prompt again just because the command
   text changed.
 
-The selected choice can be changed with `h`/`k`, left/up arrows,
-`j`/`l`, or right/down arrows. `Enter` and `Tab` confirm the current choice.
-`y`, `n`, and `a` are shortcuts for `Yes`, `No`, and `Always allow`. `Esc`
-denies the call.
+The selected choice can be changed with `k`, up arrow, `j`, or down arrow.
+`Enter` and `Tab` confirm the current choice. Mouse clicks on a choice select
+that choice; mouse clicks outside the permit popup are ignored.
+`y`, `n`, `t`, `f`, and `a` are shortcuts for `Yes`, `No`, `Tool run`,
+`Full run`, and `Always allow`. `Esc` denies the call.
 
 Declarative permission rules are configured in:
 
@@ -74,6 +77,11 @@ Config rules load before runtime-state rules, so choices saved by the runtime
 prompt still take precedence. Saved `tool` and `pattern` values are escaped as
 Lua string contents so quotes, backslashes, control characters, and newlines
 cannot corrupt the state file.
+
+`Tool run` and `Full run` are in-memory only. They are scoped to the active
+agent run. A `subagents` tool call creates one shared child permission scope for
+all subagent tasks in that batch, so approving `Tool run` or `Full run` once
+applies across the sibling subagents without writing persistent rules.
 
 ## Default Policy
 

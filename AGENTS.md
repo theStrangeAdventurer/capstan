@@ -88,7 +88,7 @@ build/capstan              # final binary (gitignored)
 1. `luaL_newstate` → `luaL_openlibs`
 2. `http_init(L)` — registers global `http = {get, post, post_stream}`
 3. `agent_init(L)` — registers global `agent = {append}`
-4. `luaL_dofile(L, "agent/runtime.lua")` — side-effect: sets `_G.on_messages`
+4. `luaL_dofile(L, "agent/runtime.lua")` — side-effect: sets `_G.agent_entry`
 
 Plugins are loaded AFTER this — they can use `http` and `agent` globals.
 
@@ -98,7 +98,7 @@ After ANY Enter (command or plain text):
 ```
 add_message(text, MSG_USER)       // user/plugin text
 add_message("", MSG_AGENT)        // empty green placeholder FIRST
-agent_emit(L)                     // THEN emit — builds history, calls _G.on_messages
+agent_emit(L)                     // THEN emit — builds history, calls _G.agent_entry
 ```
 
 Why this order: `agent_emit` filters empty messages (`text[0] == '\0'`) so the empty AGENT doesn't go to the LLM. But the AGENT message exists in the array — so `agent.append(chunk, "agent")` from Lua callbacks finds and fills it.

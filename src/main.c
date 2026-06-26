@@ -42,7 +42,7 @@ static void print_help(void) {
   printf("  --provider NAME     Override provider for this run\n");
   printf("  --model ID          Override model for this run\n");
   printf("  --workdir PATH      Override workspace directory\n");
-  printf("  --max-turns N       Limit agent continuation rounds (default: 20)\n");
+  printf("  --max-turns N       Limit agent continuation rounds (default: 200)\n");
   printf("  --json              Print structured JSON result\n");
 }
 

@@ -5,7 +5,8 @@ local tokens = require("agent.tokens")
 
 local M = {}
 
-function M.default_on_chunk(raw_event)
+-- Parses one raw SSE event line into a typed chunk: text, reasoning, tool_calls, or usage.
+function M.parse_sse_event(raw_event)
     local data = raw_event:match("^data: (.*)")
     if not data or data == "[DONE]" then return nil end
     local ok, event = pcall(json.decode, data)
@@ -37,13 +38,17 @@ function M.default_on_chunk(raw_event)
     return nil
 end
 
+-- Builds the raw→chunk→callback pipeline. Returns a closure suitable as the
+-- callback argument to http.post_stream. Accumulates text, reasoning, and
+-- tool_call fragments across partial SSE chunks, calls on_result for each
+-- text delta and a final result with collected tool_calls on stream end.
 function M.stream(provider, on_result, initial_prompt_tokens)
     local buf = ""
     local accumulated_text = ""
     local accumulated_reasoning = ""
     local reasoning_active = false
     local tool_calls_accum = {}
-    local on_chunk = provider.on_chunk or M.default_on_chunk
+    local parse_sse_event = provider.parse_sse_event or M.parse_sse_event
     local prompt_estimate = initial_prompt_tokens or 0
     local event_count = 0
     local raw_bytes = 0
@@ -54,6 +59,7 @@ function M.stream(provider, on_result, initial_prompt_tokens)
     local text_token_estimate = 0
     local reasoning_token_estimate = 0
     local has_chunk_hooks = hooks.has("on_stream_chunk")
+    local finished = false
 
     local function process_chunk(chunk)
         if chunk.type == "reasoning" then
@@ -129,7 +135,9 @@ function M.stream(provider, on_result, initial_prompt_tokens)
     end
 
     return function(raw, is_done, err, body)
+        if finished then return end
         if err then
+            finished = true
             if reasoning_active and not provider.suppress_agent_state then agent.set_thinking(false) end
             local msg = err
             if body and body ~= "" then
@@ -140,12 +148,13 @@ function M.stream(provider, on_result, initial_prompt_tokens)
             return
         end
         if is_done then
+            finished = true
             if reasoning_active then
                 reasoning_active = false
                 if not provider.suppress_agent_state then agent.set_thinking(false) end
             end
             if #buf > 0 then
-                local chunk = on_chunk(buf)
+                local chunk = parse_sse_event(buf)
                 if chunk and has_chunk_hooks then
                     local ctx = hooks.run("on_stream_chunk", {
                         provider = provider,
@@ -217,7 +226,7 @@ function M.stream(provider, on_result, initial_prompt_tokens)
             if logging.raw_logging_enabled() then
                 logging.runtime_log("sse_event", logging.compact(event, 1200))
             end
-            local chunk = on_chunk(event)
+            local chunk = parse_sse_event(event)
             if chunk and has_chunk_hooks then
                 local ctx = hooks.run("on_stream_chunk", {
                     provider = provider,

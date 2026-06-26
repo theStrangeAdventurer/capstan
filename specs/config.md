@@ -27,7 +27,7 @@ return {
     max_concurrent = 3,
     max_tasks = 8,
     max_turns = 6,
-    max_turns_cap = 20,
+    max_turns_cap = 200,
   },
   finder = {
     ignore_files = { ".gitignore", ".ignore" },

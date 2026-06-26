@@ -27,7 +27,7 @@ void append_to_last_message(char *text, MessageRole role);
 Messages *get_messages(void);
 void clear_messages(void);
 void agent_init(lua_State *L);
-void agent_emit(lua_State *L);
+void agent_build_and_dispatch(lua_State *L);
 const char *agent_provider_name(void);
 const char *agent_provider_model(void);
 UsageStats agent_usage(void);

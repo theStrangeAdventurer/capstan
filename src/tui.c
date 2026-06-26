@@ -15,31 +15,31 @@
 #include <stdlib.h>
 #include <string.h>
 
-PendingContexts g_pending = {0};
+BufferedPluginResults g_buffered_results = {0};
 
-void pending_add(const char *label, char *ui_result, char *raw_result) {
-  if (g_pending.size >= g_pending.capacity) {
-    g_pending.capacity = g_pending.capacity ? g_pending.capacity * 2 : 4;
-    g_pending.items = realloc(g_pending.items,
-                              g_pending.capacity * sizeof(PendingContext));
+void buffer_plugin_result(const char *label, char *ui_result, char *raw_result) {
+  if (g_buffered_results.size >= g_buffered_results.capacity) {
+    g_buffered_results.capacity = g_buffered_results.capacity ? g_buffered_results.capacity * 2 : 4;
+    g_buffered_results.items = realloc(g_buffered_results.items,
+                              g_buffered_results.capacity * sizeof(BufferedPluginResult));
   }
-  PendingContext *ctx = &g_pending.items[g_pending.size++];
+  BufferedPluginResult *ctx = &g_buffered_results.items[g_buffered_results.size++];
   strncpy(ctx->label, label, MAX_BADGE_LABEL - 1);
   ctx->label[MAX_BADGE_LABEL - 1] = '\0';
   ctx->ui_result = ui_result;
   ctx->raw_result = raw_result;
 }
 
-void pending_clear(void) {
-  for (int i = 0; i < g_pending.size; i++) {
-    free(g_pending.items[i].ui_result);
-    if (g_pending.items[i].raw_result != g_pending.items[i].ui_result)
-      free(g_pending.items[i].raw_result);
+void buffered_results_clear(void) {
+  for (int i = 0; i < g_buffered_results.size; i++) {
+    free(g_buffered_results.items[i].ui_result);
+    if (g_buffered_results.items[i].raw_result != g_buffered_results.items[i].ui_result)
+      free(g_buffered_results.items[i].raw_result);
   }
-  free(g_pending.items);
-  g_pending.items = NULL;
-  g_pending.size = 0;
-  g_pending.capacity = 0;
+  free(g_buffered_results.items);
+  g_buffered_results.items = NULL;
+  g_buffered_results.size = 0;
+  g_buffered_results.capacity = 0;
 }
 
 void init_tui(void) {
@@ -144,7 +144,7 @@ void render_all(void) {
 
   int margin = MARGIN;
   int input_h = INPUT_WIN_HEIGHT;
-  int badge_h = (g_pending.size > 0 && !popup_is_active() && !popup_is_message_active()) ? 1 : 0;
+  int badge_h = (g_buffered_results.size > 0 && !popup_is_active() && !popup_is_message_active()) ? 1 : 0;
   int msg_h = rows - input_h - 2 * margin - badge_h;
   int inner_w = cols - 2 * margin;
   int text_w = inner_w - 2 * MSG_PAD_H;
@@ -339,17 +339,17 @@ void render_all(void) {
     }
   }
 
-  if (g_pending.size > 0 && !popup_is_active() && !popup_is_message_active()) {
+  if (g_buffered_results.size > 0 && !popup_is_active() && !popup_is_message_active()) {
     int badge_y = margin + msg_h;
     int available = inner_w;
-    int show = g_pending.size;
+    int show = g_buffered_results.size;
     int overflow = 0;
 
-    for (int k = g_pending.size; k >= 0; k--) {
-      int ov = g_pending.size - k;
+    for (int k = g_buffered_results.size; k >= 0; k--) {
+      int ov = g_buffered_results.size - k;
       int total = 0;
       for (int i = 0; i < k; i++) {
-        total += (int)strlen(g_pending.items[i].label) + 2;
+        total += (int)strlen(g_buffered_results.items[i].label) + 2;
         if (i > 0) total++;
       }
       if (ov > 0) {
@@ -370,9 +370,9 @@ void render_all(void) {
       if (i > 0)
         mvaddch(badge_y, col++, ' ');
       wattron(stdscr, COLOR_PAIR(4));
-      mvprintw(badge_y, col, " %s ", g_pending.items[i].label);
+      mvprintw(badge_y, col, " %s ", g_buffered_results.items[i].label);
       wattroff(stdscr, COLOR_PAIR(4));
-      col += strlen(g_pending.items[i].label) + 2;
+      col += strlen(g_buffered_results.items[i].label) + 2;
     }
     if (overflow > 0) {
       if (show > 0)
@@ -538,8 +538,8 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
-  int popup_w = 54;
-  int popup_h = 7;
+  int popup_w = 56;
+  int popup_h = 11;
   if (cols < popup_w + 4)
     popup_w = cols - 4;
   if (popup_w < 30)
@@ -553,6 +553,8 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   WINDOW *win = newwin(popup_h, popup_w, popup_y, popup_x);
   if (!win)
     return "deny";
+  keypad(win, TRUE);
+  nodelay(win, FALSE);
 
   wattron(win, COLOR_PAIR(5));
   werase(win);
@@ -563,28 +565,53 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   snprintf(target_line, sizeof(target_line), "%.*s",
            popup_w - 6,
            target);
-  mvwprintw(win, 2, 2, " %s", target_line);
-
-  mvwaddstr(win, 4, 2, "[Y]es   [N]o   [A]lways allow");
+  mvwprintw(win, 2, 2, "%s", target_line);
 
   int choice = PERMIT_CHOICE_YES;
-  const char *labels[] = {"Yes", "No", "Always"};
-  int positions[] = {2, 13, 24};
+  const char *labels[] = {"Yes", "No", "Tool run", "Full run", "Always"};
+  const char *descriptions[] = {
+      "Allow this tool call once",
+      "Deny this tool call",
+      "Allow this tool for this run",
+      "Allow all tools for this run",
+      "Persist exact allow rule",
+  };
+  const char shortcuts[] = {'Y', 'N', 'T', 'F', 'A'};
+  int choice_count = 5;
+  int list_y = 4;
 
   while (1) {
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < choice_count; i++) {
+      int y = list_y + i;
       if (i == choice)
         wattron(win, A_REVERSE);
-      mvwprintw(win, 4, positions[i], "[%c]%s",
-                labels[i][0], labels[i] + 1);
+      mvwhline(win, y, 1, ' ', popup_w - 2);
+      mvwprintw(win, y, 2, "[%c] %-9s %.*s", shortcuts[i], labels[i],
+                popup_w - 18, descriptions[i]);
       if (i == choice)
         wattroff(win, A_REVERSE);
     }
-    wmove(win, 4, positions[choice]);
+    wmove(win, list_y + choice, 2);
     wnoutrefresh(win);
     doupdate();
 
     int ch = wgetch(win);
+    if (ch == KEY_MOUSE) {
+      MEVENT event;
+      if (getmouse(&event) == OK) {
+        int rel_y = event.y - popup_y;
+        int rel_x = event.x - popup_x;
+        int clicked = rel_y - list_y;
+        if (rel_x >= 1 && rel_x < popup_w - 1 && clicked >= 0 &&
+            clicked < choice_count &&
+            (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED |
+                             BUTTON1_RELEASED))) {
+          choice = clicked;
+          goto done;
+        }
+      }
+      continue;
+    }
     if (permit_prompt_handle_key(ch, &choice) == PERMIT_PROMPT_DONE)
       goto done;
   }

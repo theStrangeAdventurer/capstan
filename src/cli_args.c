@@ -4,7 +4,7 @@
 CliOptions cli_options_default(void) {
   CliOptions opts = {0};
   opts.mode = CLI_MODE_TUI;
-  opts.max_turns = 20;
+  opts.max_turns = 200;
   return opts;
 }
 

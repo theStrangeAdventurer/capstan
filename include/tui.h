@@ -11,20 +11,20 @@ typedef struct {
   char label[MAX_BADGE_LABEL];
   char *ui_result;
   char *raw_result;
-} PendingContext;
+} BufferedPluginResult;
 
 typedef struct {
-  PendingContext *items;
+  BufferedPluginResult *items;
   int size;
   int capacity;
-} PendingContexts;
+} BufferedPluginResults;
 
-extern PendingContexts g_pending;
+extern BufferedPluginResults g_buffered_results;
 
 void init_tui(void);
 void render_all(void);
-void pending_add(const char *label, char *ui_result, char *raw_result);
-void pending_clear(void);
+void buffer_plugin_result(const char *label, char *ui_result, char *raw_result);
+void buffered_results_clear(void);
 
 const char *tui_permit_prompt(const char *tool, const char *target);
 
