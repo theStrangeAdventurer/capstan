@@ -7,7 +7,7 @@ static MunitResult test_default_tui(const MunitParameter params[], void *data) {
   char *argv[] = {"capstan"};
   CliOptions opts = cli_parse(1, argv);
   munit_assert_int(opts.mode, ==, CLI_MODE_TUI);
-  munit_assert_int(opts.max_turns, ==, 20);
+  munit_assert_int(opts.max_turns, ==, 200);
   return MUNIT_OK;
 }
 

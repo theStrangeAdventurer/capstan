@@ -71,6 +71,9 @@ plugin.autocomplete = {
 
 function plugin.handler(ctx)
 	local filenames = ctx.args
+	if (#filenames == 0) and ctx.tool_args and type(ctx.tool_args.path) == "string" then
+		filenames = { ctx.tool_args.path }
+	end
 	if #filenames == 0 then
 		return "Usage: /file <filename...>"
 	end
@@ -142,7 +145,7 @@ end
 
 plugin.tool = {
 	name = "file_read",
-	description = "Read the contents of a file at the given path",
+	description = "Read a local file or list a local directory. Use this for local file inspection instead of shell commands like cat, sed, or ls.",
 	parameters = {
 		type = "object",
 		properties = {

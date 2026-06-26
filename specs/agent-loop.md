@@ -36,7 +36,7 @@ curl handle lifecycle, or persisted permission storage.
 
 | Module | Responsibility |
 |--------|----------------|
-| `agent/runtime.lua` | Top-level `_G.on_messages`, request loop, recursive continuation. |
+| `agent/runtime.lua` | Top-level `_G.agent_entry`, request loop, recursive continuation. |
 | `agent/provider_config.lua` | Built-in providers plus `capstan.config` and environment overrides. |
 | `agent/models.lua` | `capstan.models`, provider `/models` fetch, model normalization, context limit lookup. |
 | `agent/state.lua` | Small persisted runtime preferences such as selected models. |
@@ -68,7 +68,7 @@ sequenceDiagram
     else plain text or flushed pending context
         C->>C: add_message(USER, text)
         C->>C: add_message(AGENT, "")
-        C->>Lua: agent_emit() -> _G.on_messages(messages)
+        C->>Lua: agent_emit() -> _G.agent_entry(messages)
         Lua->>Lua: build messages and collect tools
         Lua->>API: http.post_stream(request, callback)
         API-->>Lua: SSE chunks
@@ -110,8 +110,8 @@ through model-tool permission checks.
 
 ## Lua Agent Cycle
 
-`agent_emit()` calls `_G.on_messages(messages)`, installed by
-`agent/runtime.lua` during startup. `_G.on_messages` is now the TUI adapter over
+`agent_emit()` calls `_G.agent_entry(messages)`, installed by
+`agent/runtime.lua` during startup. `_G.agent_entry` is now the TUI adapter over
 the reusable `capstan.agent.run(opts, callbacks)` runtime entry point used by
 both TUI and headless CLI mode.
 
@@ -184,7 +184,7 @@ files.
 Future hook support must extend the pipeline without replacing the whole agent
 loop. The intended hook points are message preparation, tool list preparation,
 request construction, stream chunks, tool-call preparation, and tool results.
-Full `_G.on_messages` replacement is not the default extension mechanism.
+Full `_G.agent_entry` replacement is not the default extension mechanism.
 
 Hooks are agent policy and belong in Lua. Per-stream-chunk hooks are hot-path and
 must be opt-in with a cheap no-hook fast path.

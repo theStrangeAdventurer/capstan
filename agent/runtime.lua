@@ -9,7 +9,7 @@ local tools_runtime = require("agent.tools")
 
 local M = provider_config.build()
 
-M.default_on_chunk = stream.default_on_chunk
+M.parse_sse_event = stream.parse_sse_event
 hooks.install_config((_G.capstan and _G.capstan.config) or {})
 hooks.install_existing_plugins(_G.plugins)
 
@@ -21,13 +21,15 @@ function M.set_model(provider_name, model)
     return models.set(M, provider_name or M.provider, model)
 end
 
-function M.stream(provider_name, on_result, initial_prompt_tokens)
+-- Returns a chunk callback for http.post_stream that feeds SSE events into on_result.
+function M.stream_callback(provider_name, on_result, initial_prompt_tokens)
     local provider = M.providers[provider_name]
     return stream.stream(provider, on_result, initial_prompt_tokens)
 end
 
 models.install_runtime_api(M)
 
+-- Assembles the message list: prepends system_prompt, then copies all messages.
 local function build_messages(messages)
     local msgs = {}
     if _G.system_prompt and _G.system_prompt ~= "" then
@@ -39,7 +41,8 @@ local function build_messages(messages)
     return msgs
 end
 
-local function provider_for(opts)
+-- Resolves and clones provider config for a request (model override, suppress flags).
+local function prepare_provider(opts)
     opts = opts or {}
     local provider_name = opts.provider or M.provider
     local active = M.providers[provider_name]
@@ -61,10 +64,11 @@ local function provider_for(opts)
     return active, provider_name
 end
 
+-- Full agent run: build messages, stream LLM response, handle tool_calls recursively.
 function M.run(opts, callbacks)
     opts = opts or {}
     callbacks = callbacks or {}
-    local active, provider_name = provider_for(opts)
+    local active, provider_name = prepare_provider(opts)
     if not active then
         local message = "Unknown provider: " .. tostring(provider_name)
         logging.runtime_log("provider", "unknown provider: " .. tostring(provider_name))
@@ -117,10 +121,14 @@ function M.run(opts, callbacks)
         ))
     end
 
-    local max_turns = tonumber(opts.max_turns) or 20
-    if max_turns <= 0 then max_turns = 20 end
+    local max_turns = tonumber(opts.max_turns) or 200
+    if max_turns <= 0 then max_turns = 200 end
     local turns = 0
     local started_at = capstan and capstan.now_ms and capstan.now_ms() or (os.clock() * 1000)
+    local permission_scope = opts.permission_scope or {allowed_tools = {}, full_control = false}
+    if type(permission_scope.allowed_tools) ~= "table" then
+        permission_scope.allowed_tools = {}
+    end
 
     local function finish(result)
         result = result or {}
@@ -132,7 +140,9 @@ function M.run(opts, callbacks)
         if callbacks.on_done then callbacks.on_done(result) end
     end
 
-    local function continue(current_msgs, tools)
+    -- One turn of the agent cycle: sends the request, streams the response,
+    -- and either finishes or recurses into handle_tool_calls.
+    local function continue_agent_cycle(current_msgs, tools)
         turns = turns + 1
         if turns > max_turns then
             local message = "Max agent turns exceeded: " .. tostring(max_turns)
@@ -163,7 +173,7 @@ function M.run(opts, callbacks)
             end
 
             if result.tool_calls and #result.tool_calls > 0 then
-                tools_runtime.process(current_msgs, tools, result.tool_calls, result.text, continue, {
+                tools_runtime.handle_tool_calls(current_msgs, tools, result.tool_calls, result.text, continue_agent_cycle, {
                     runtime = M,
                     provider = active,
                     provider_name = provider_name,
@@ -171,6 +181,7 @@ function M.run(opts, callbacks)
                     max_turns = max_turns,
                     tools = tools,
                     silent_tools = opts.silent_tools,
+                    permission_scope = permission_scope,
                     callbacks = callbacks,
                 })
             else
@@ -247,7 +258,7 @@ function M.run(opts, callbacks)
             stream.stream(active, on_result, prompt_estimate))
     end
 
-    continue(msgs, combined_tools)
+    continue_agent_cycle(msgs, combined_tools)
     return true, nil
 end
 
@@ -258,10 +269,12 @@ _G.capstan.agent = {
     end,
 }
 
-_G.on_messages = function(messages)
+-- Entry point called from C via agent_build_and_dispatch. Receives message
+-- history as a Lua table, runs the full agent cycle with UI-visible streaming.
+_G.agent_entry = function(messages)
     M.run({
         messages = messages,
-        max_turns = 20,
+        max_turns = 200,
         update_status = true,
         update_usage = true,
     }, {

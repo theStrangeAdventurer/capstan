@@ -388,12 +388,16 @@ int http_poll(lua_State *L) {
       err_body = malloc(found->err_len + 1);
       memcpy(err_body, found->err_buf, found->err_len + 1);
     }
-    stream_ctx_free(found);
-    streams[found_idx] = NULL;
 
     long http_status = 0;
     curl_easy_getinfo(e, CURLINFO_RESPONSE_CODE, &http_status);
     CURLcode curl_rc = msg->data.result;
+
+    curl_multi_remove_handle(multi_handle, e);
+    streams[found_idx] = NULL;
+    curl_slist_free_all(h);
+    curl_easy_cleanup(e);
+    stream_ctx_free(found);
 
     lua_getglobal(L, "debug");
     lua_getfield(L, -1, "traceback");
@@ -434,9 +438,6 @@ int http_poll(lua_State *L) {
     free(err_body);
 
     luaL_unref(L, LUA_REGISTRYINDEX, cb_ref);
-    curl_slist_free_all(h);
-    curl_multi_remove_handle(multi_handle, e);
-    curl_easy_cleanup(e);
 
     had_events = 1;
   }

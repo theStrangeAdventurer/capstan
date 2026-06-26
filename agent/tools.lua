@@ -53,6 +53,7 @@ local function subagents_tool()
     }
 end
 
+-- Gathers all available LLM tools: plugin tools + optional subagents tool.
 function M.collect(opts)
     opts = opts or {}
     local tools = {}
@@ -112,7 +113,7 @@ local function subagent_max_turns(args)
     if not max_turns or max_turns <= 0 then
         max_turns = subagent_config_number("max_turns", 6)
     end
-    local hard_cap = subagent_config_number("max_turns_cap", 20)
+    local hard_cap = subagent_config_number("max_turns_cap", 200)
     if hard_cap and hard_cap > 0 and max_turns > hard_cap then
         max_turns = hard_cap
     end
@@ -203,6 +204,11 @@ local function run_subagents(args, run_ctx)
     end
 
     local max_concurrent = math.min(subagent_max_concurrent(args), #args.tasks)
+    local parent_scope = run_ctx and run_ctx.permission_scope or nil
+    local permission_scope = {
+        allowed_tools = {},
+        full_control = parent_scope and parent_scope.full_control or false,
+    }
     local group_started_at = now_ms()
     local results = {}
     local states = {}
@@ -240,6 +246,7 @@ local function run_subagents(args, run_ctx)
             silent_tools = true,
             update_status = false,
             update_usage = false,
+            permission_scope = permission_scope,
         }, {
             on_text = function(chunk)
                 table.insert(state.text_chunks, chunk)
@@ -279,7 +286,6 @@ local function run_subagents(args, run_ctx)
         next_index = next_index + 1
     end
 
-    local spins = 0
     while completed < #args.tasks do
         if not http or type(http.poll) ~= "function" then
             return "Subagents failed: http.poll is not available", false
@@ -288,10 +294,6 @@ local function run_subagents(args, run_ctx)
         while next_index <= #args.tasks and active < max_concurrent do
             start_one(next_index)
             next_index = next_index + 1
-        end
-        spins = spins + 1
-        if spins > 200000 then
-            return "Subagents failed: timed out", false
         end
     end
 
@@ -332,6 +334,7 @@ local function run_subagents(args, run_ctx)
     return json.encode(output), true
 end
 
+-- Dispatches a single tool call to its plugin handler (or subagents builtin).
 local function call_plugin_tool(tool_name, args, run_ctx)
     if tool_name == "subagents" then
         return run_subagents(args, run_ctx)
@@ -386,6 +389,7 @@ local function tool_permission_name(tool_name)
     return tool_name
 end
 
+-- Parses the JSON-encoded arguments string from an LLM tool call.
 local function decode_tool_arguments(raw)
     local ok, decoded = pcall(json.decode, raw or "{}")
     if not ok then
@@ -506,7 +510,30 @@ local function tool_error_status(result_content, display_command)
     return tool_status_suffix("— error: " .. reason, display_command)
 end
 
-function M.process(current_msgs, combined_tools, tool_calls, assistant_text, continue_fn, run_ctx)
+local function scope_allows(scope, permission_tool)
+    if not scope or not permission_tool then return false end
+    if scope.full_control then return true end
+    return type(scope.allowed_tools) == "table" and scope.allowed_tools[permission_tool] == true
+end
+
+local function apply_prompt_decision(decision, scope, permission_tool)
+    if decision == "allow_tool_run" then
+        if scope and permission_tool then
+            if type(scope.allowed_tools) ~= "table" then scope.allowed_tools = {} end
+            scope.allowed_tools[permission_tool] = true
+        end
+        return true
+    end
+    if decision == "allow_run" then
+        if scope then scope.full_control = true end
+        return true
+    end
+    return decision == "allow" or decision == "always"
+end
+
+-- Processes tool_calls from an LLM response: decodes, checks permissions,
+-- executes each via call_plugin_tool, appends results, then recurses via continue_fn.
+function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant_text, continue_fn, run_ctx)
     logging.runtime_log("tools", string.format("received %d tool call(s)", #tool_calls))
     local function append_status(text)
         if run_ctx and run_ctx.silent_tools then return end
@@ -564,8 +591,11 @@ function M.process(current_msgs, combined_tools, tool_calls, assistant_text, con
             else
                 logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, tc.arguments or ""))
             end
+            local permission_scope = run_ctx and run_ctx.permission_scope or nil
             local perm = "allow"
-            if permission_tool then
+            if scope_allows(permission_scope, permission_tool) then
+                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
+            elseif permission_tool then
                 perm = permit.check(permission_tool, target)
                 logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
             end
@@ -588,14 +618,19 @@ function M.process(current_msgs, combined_tools, tool_calls, assistant_text, con
                         permit.grant(permission_tool, target, true)
                         permit.save()
                     end
-                    local tool_ok
-                    result_content, tool_ok = call_plugin_tool(tool_name, args, run_ctx)
-                    if tool_ok then
-                        logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
-                        if show_generic_status then append_status(tool_status_suffix("— done", display_command)) end
-                    else
-                        logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
+                    if not apply_prompt_decision(decision, permission_scope, permission_tool) then
+                        result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
                         if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                    else
+                        local tool_ok
+                        result_content, tool_ok = call_plugin_tool(tool_name, args, run_ctx)
+                        if tool_ok then
+                            logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
+                            if show_generic_status then append_status(tool_status_suffix("— done", display_command)) end
+                        else
+                            logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
+                            if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                        end
                     end
                 end
             else

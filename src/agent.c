@@ -27,7 +27,7 @@ static int l_agent_set_thinking(lua_State *L) {
   return 0;
 }
 
-static int l_agent_set_info(lua_State *L) {
+static int l_agent_set_provider_info(lua_State *L) {
   free(g_provider_name);
   free(g_provider_model);
   g_provider_name = NULL;
@@ -136,7 +136,7 @@ void agent_init(lua_State *L) {
   lua_newtable(L);
   lua_pushcfunction(L, l_agent_append);
   lua_setfield(L, -2, "append");
-  lua_pushcfunction(L, l_agent_set_info);
+  lua_pushcfunction(L, l_agent_set_provider_info);
   lua_setfield(L, -2, "set_info");
   lua_pushcfunction(L, l_agent_set_thinking);
   lua_setfield(L, -2, "set_thinking");
@@ -145,7 +145,7 @@ void agent_init(lua_State *L) {
   lua_setglobal(L, "agent");
 }
 
-void agent_emit(lua_State *L) {
+void agent_build_and_dispatch(lua_State *L) {
   Messages *msgs = get_messages();
   lua_newtable(L);
   int idx = 1;
@@ -159,7 +159,7 @@ void agent_emit(lua_State *L) {
     lua_setfield(L, -2, "content");
     lua_rawseti(L, -2, idx++);
   }
-  lua_getglobal(L, "on_messages");
+  lua_getglobal(L, "agent_entry");
   if (lua_isfunction(L, -1)) {
     lua_pushvalue(L, -2);
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {

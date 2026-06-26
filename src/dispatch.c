@@ -83,15 +83,15 @@ static int open_file_finder(Plugin *plugin, size_t cmd_end) {
   return count > 0;
 }
 
-static void flush_pending_and_send(const char *ui_text, const char *raw_text) {
-  if (g_pending.size > 0) {
-    for (int i = 0; i < g_pending.size; i++) {
-      add_message(g_pending.items[i].ui_result,
-                  g_pending.items[i].raw_result, MSG_USER);
-      g_pending.items[i].ui_result = NULL;
-      g_pending.items[i].raw_result = NULL;
+static void flush_buffered_and_send(const char *ui_text, const char *raw_text) {
+  if (g_buffered_results.size > 0) {
+    for (int i = 0; i < g_buffered_results.size; i++) {
+      add_message(g_buffered_results.items[i].ui_result,
+                  g_buffered_results.items[i].raw_result, MSG_USER);
+      g_buffered_results.items[i].ui_result = NULL;
+      g_buffered_results.items[i].raw_result = NULL;
     }
-    pending_clear();
+    buffered_results_clear();
   }
   if (ui_text[0]) {
     char *ui = my_strdup(ui_text);
@@ -100,24 +100,24 @@ static void flush_pending_and_send(const char *ui_text, const char *raw_text) {
   }
   char *empty = my_strdup("");
   add_message(empty, empty, MSG_AGENT);
-  agent_emit(L);
+  agent_build_and_dispatch(L);
 }
 
 static void add_error_and_emit(const char *error) {
-  if (g_pending.size > 0) {
-    for (int i = 0; i < g_pending.size; i++) {
-      add_message(g_pending.items[i].ui_result,
-                  g_pending.items[i].raw_result, MSG_USER);
-      g_pending.items[i].ui_result = NULL;
-      g_pending.items[i].raw_result = NULL;
+  if (g_buffered_results.size > 0) {
+    for (int i = 0; i < g_buffered_results.size; i++) {
+      add_message(g_buffered_results.items[i].ui_result,
+                  g_buffered_results.items[i].raw_result, MSG_USER);
+      g_buffered_results.items[i].ui_result = NULL;
+      g_buffered_results.items[i].raw_result = NULL;
     }
-    pending_clear();
+    buffered_results_clear();
   }
   char *cp_err = my_strdup(error);
   add_message(cp_err, cp_err, MSG_USER);
   char *empty = my_strdup("");
   add_message(empty, empty, MSG_AGENT);
-  agent_emit(L);
+  agent_build_and_dispatch(L);
 }
 
 static void add_plugin_result(Plugin *p, PluginResult *r) {
@@ -126,7 +126,7 @@ static void add_plugin_result(Plugin *p, PluginResult *r) {
     cmd++;
   char label[64];
   snprintf(label, sizeof(label), "ctx:%s", cmd);
-  pending_add(label, r->ui_result, r->raw_result);
+  buffer_plugin_result(label, r->ui_result, r->raw_result);
   free(r);
 }
 
@@ -138,7 +138,7 @@ static void show_plugin_result(Plugin *p, PluginResult *r) {
   free(r);
 }
 
-static int try_command_with_plugin(const char *input, size_t cmd_end) {
+static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
   char command[MAX_COMMAND_LEN];
   size_t ce;
   if (!has_command(input, command, &ce))
@@ -157,7 +157,7 @@ static int try_command_with_plugin(const char *input, size_t cmd_end) {
     agent_set_thinking(0);
     agent_reset_usage();
     clear_messages();
-    pending_clear();
+    buffered_results_clear();
     scroll_reset();
     return 1;
   }
@@ -311,7 +311,7 @@ int dispatch_tab(void) {
 
 void dispatch_submit(void) {
   const char *text = input_get_text();
-  if (!text[0] && g_pending.size == 0)
+  if (!text[0] && g_buffered_results.size == 0)
     return;
 
   scroll_reset();
@@ -319,13 +319,13 @@ void dispatch_submit(void) {
   char command[MAX_COMMAND_LEN];
   size_t cmd_end;
   if (text[0] && has_command(text, command, &cmd_end)) {
-    int handled = try_command_with_plugin(text, cmd_end);
+    int handled = try_builtin_or_plugin_command(text, cmd_end);
     if (handled == 2)
       return;
-  } else if (g_pending.size > 0) {
-    flush_pending_and_send(text, text);
+  } else if (g_buffered_results.size > 0) {
+    flush_buffered_and_send(text, text);
   } else {
-    flush_pending_and_send(text, text);
+    flush_buffered_and_send(text, text);
   }
 
   input_clear();

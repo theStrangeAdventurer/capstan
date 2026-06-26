@@ -17,7 +17,7 @@ echo "Summarize this repo" | capstan run --json
   stdin is not a TTY.
 - `--provider`, `--model`, and `--workdir` override only this process run.
   They do not update runtime state.
-- `--max-turns` caps model-tool continuation rounds; the default is `20`.
+- `--max-turns` caps model-tool continuation rounds; the default is `200`.
 - Plain output writes the final assistant text to stdout.
 - `--json` writes `{ ok, text, error }` to stdout.
 
@@ -28,7 +28,7 @@ without ncurses, calls `capstan.agent.run`, and drives `http_poll()` until the
 Lua run reports completion. Blocking HTTP helpers run in headless mode and do
 not call TUI rendering functions.
 
-`_G.on_messages` remains the TUI adapter. Both TUI and CLI call the same
+`_G.agent_entry` remains the TUI adapter. Both TUI and CLI call the same
 `capstan.agent.run(opts, callbacks)` runtime function.
 
 ## Tests

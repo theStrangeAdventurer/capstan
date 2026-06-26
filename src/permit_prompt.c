@@ -12,16 +12,12 @@ PermitPromptAction permit_prompt_handle_key(int ch, int *choice) {
   clamp_choice(choice);
 
   switch (ch) {
-  case POPUP_KEY_LEFT:
   case POPUP_KEY_UP:
-  case 'h':
   case 'k':
     if (*choice > PERMIT_CHOICE_YES)
       (*choice)--;
     break;
-  case POPUP_KEY_RIGHT:
   case POPUP_KEY_DOWN:
-  case 'l':
   case 'j':
     if (*choice < PERMIT_CHOICE_ALWAYS)
       (*choice)++;
@@ -37,6 +33,14 @@ PermitPromptAction permit_prompt_handle_key(int ch, int *choice) {
   case 'a':
   case 'A':
     *choice = PERMIT_CHOICE_ALWAYS;
+    return PERMIT_PROMPT_DONE;
+  case 't':
+  case 'T':
+    *choice = PERMIT_CHOICE_TOOL_RUN;
+    return PERMIT_PROMPT_DONE;
+  case 'f':
+  case 'F':
+    *choice = PERMIT_CHOICE_FULL_RUN;
     return PERMIT_PROMPT_DONE;
   case '\t':
   case '\n':
@@ -54,6 +58,10 @@ const char *permit_prompt_result(int choice) {
   switch (choice) {
   case PERMIT_CHOICE_YES:
     return "allow";
+  case PERMIT_CHOICE_TOOL_RUN:
+    return "allow_tool_run";
+  case PERMIT_CHOICE_FULL_RUN:
+    return "allow_run";
   case PERMIT_CHOICE_ALWAYS:
     return "always";
   default:
