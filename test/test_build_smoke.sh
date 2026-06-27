@@ -24,7 +24,7 @@ output=$(
 
 printf '%s\n' "$output"
 
-for command in /file /write /edit /shell /fetch /logs /skills /models; do
+for command in /file /write /edit /shell /fetch /logs /skills /models /info; do
   printf '%s\n' "$output" | grep -q "plugin: $command" || {
     echo "missing embedded plugin command: $command" >&2
     exit 1
@@ -55,6 +55,11 @@ printf '%s\n' "$enabled_output" | grep -q -- "- self-improvement \\[builtin\\]" 
   echo "missing gated built-in self-improvement skill" >&2
   exit 1
 }
+
+if [ -e "$homedir/.local/state/capstan/builtin-skills" ]; then
+  echo "built-in skills should not be materialized into runtime state" >&2
+  exit 1
+fi
 
 printf '\nSmoke copy: %s\n' "$bindir/capstan"
 printf 'Run manually from isolated dir:\n'

@@ -97,6 +97,7 @@ void visual_move_line_end(void) {
 }
 
 void visual_set_texts(const char **texts, int count) {
+    /* Takes ownership of the array, but not the message strings it points to. */
     if (g_texts_owned)
         free(g_texts);
     g_texts = texts;

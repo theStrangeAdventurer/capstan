@@ -7,15 +7,12 @@
 extern lua_State *L;
 
 typedef struct Plugin Plugin;
-typedef void (*PluginCallback)(Plugin *plugin, const char *result,
-                               void *user_data);
 struct Plugin {
   char *id;
   char *name;
   char *description;
   char *command;
   char *source_path;
-  int is_async;
   int include_in_history;
   int is_user_plugin;
   long source_mtime;
@@ -23,11 +20,6 @@ struct Plugin {
 
   lua_State *L;
   int handler_ref;
-
-  int async_id;
-  int is_processing;
-  PluginCallback callback;
-  void *user_data;
 
   int has_autocomplete;
   int autocomplete_limit;

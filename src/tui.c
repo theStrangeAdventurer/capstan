@@ -76,17 +76,6 @@ static int count_message_lines(const char *text, int width) {
   return lines;
 }
 
-static int line_contains(const char *start, const char *end, const char *needle) {
-  size_t needle_len = strlen(needle);
-  if (needle_len == 0)
-    return 1;
-  for (const char *p = start; p + needle_len <= end; p++) {
-    if (strncmp(p, needle, needle_len) == 0)
-      return 1;
-  }
-  return 0;
-}
-
 static int spinner_tick = 0;
 static int prev_loading = 0;
 
@@ -258,15 +247,8 @@ void render_all(void) {
 
       if (global_line >= top_line && win_row < msg_h) {
         int is_tool_status = !is_user && strncmp(p, "⚙", strlen("⚙")) == 0;
-        int tool_pair = 0;
         if (is_tool_status) {
-          if (line_contains(p, line_end, "done"))
-            tool_pair = 2;
-          else if (line_contains(p, line_end, "denied"))
-            tool_pair = 6;
-          wattron(msg_win, A_ITALIC);
-          if (tool_pair)
-            wattron(msg_win, COLOR_PAIR(tool_pair));
+          wattron(msg_win, A_DIM | A_ITALIC);
         }
 
         if (is_user)
@@ -274,9 +256,7 @@ void render_all(void) {
         mvwaddnstr(msg_win, win_row, MSG_PAD_H, p, line_end - p);
 
         if (is_tool_status) {
-          if (tool_pair)
-            wattroff(msg_win, COLOR_PAIR(tool_pair));
-          wattroff(msg_win, A_ITALIC);
+          wattroff(msg_win, A_DIM | A_ITALIC);
         }
 
         if (visual_is_active() && global_line >= sel_sl &&
@@ -492,7 +472,10 @@ void render_all(void) {
     if (thinking)
       wattroff(stdscr, COLOR_PAIR(6));
 
-    const char *label = thinking ? "Thinking" : "Answering";
+    const char *activity = agent_activity();
+    const char *label = activity && activity[0] ? activity
+                       : thinking          ? "Thinking"
+                                           : "Answering";
     int label_attr = A_ITALIC | A_DIM;
     if (thinking)
       label_attr |= COLOR_PAIR(6);
@@ -532,6 +515,37 @@ void render_all(void) {
 
   delwin(msg_win);
   delwin(input_win);
+}
+
+void tui_pump_blocking(void) {
+  if (!stdscr)
+    return;
+
+  int ch;
+  while ((ch = getch()) != ERR) {
+    if (popup_is_message_active()) {
+      popup_message_handle_key(ch);
+      continue;
+    }
+
+    if (ch == KEY_MOUSE) {
+      MEVENT event;
+      if (getmouse(&event) == OK) {
+        if (event.bstate & BUTTON4_PRESSED)
+          scroll_up(3);
+        else if (event.bstate & BUTTON5_PRESSED)
+          scroll_down(3);
+      }
+      continue;
+    }
+
+    if (ch == KEY_PPAGE)
+      scroll_up(5);
+    else if (ch == KEY_NPAGE)
+      scroll_down(5);
+  }
+
+  render_all();
 }
 
 const char *tui_permit_prompt(const char *tool, const char *target) {

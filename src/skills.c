@@ -71,6 +71,15 @@ static char *read_file(const char *path) {
   return buf;
 }
 
+static char *copy_content(const char *content, size_t content_size) {
+  char *copy = malloc(content_size + 1);
+  if (!copy)
+    return NULL;
+  memcpy(copy, content, content_size);
+  copy[content_size] = '\0';
+  return copy;
+}
+
 static char *trim_copy(const char *start, size_t len) {
   while (len > 0 && (*start == ' ' || *start == '\t')) {
     start++;
@@ -379,6 +388,41 @@ static void scan_skill_dir(SkillList *list, const char *dir_path,
   closedir(dir);
 }
 
+static void scan_builtin_skills(SkillList *list,
+                                const BuiltinSkill *builtin_skills,
+                                size_t builtin_skill_count) {
+  if (!builtin_skills)
+    return;
+
+  for (size_t i = 0; i < builtin_skill_count; i++) {
+    const BuiltinSkill *builtin = &builtin_skills[i];
+    if (!builtin->name || !builtin->path || !builtin->content)
+      continue;
+
+    char *content = copy_content(builtin->content, builtin->content_size);
+    if (!content)
+      continue;
+
+    char *frontmatter_name = NULL;
+    char *frontmatter_description = NULL;
+    parse_frontmatter(content, &frontmatter_name, &frontmatter_description);
+    if (!frontmatter_name)
+      frontmatter_name = my_strdup(builtin->name);
+    if (!frontmatter_description)
+      frontmatter_description = my_strdup("");
+
+    char *resources = my_strdup("");
+    if (!skill_list_add(list, builtin->name, builtin->path, "builtin",
+                        frontmatter_name, frontmatter_description,
+                        resources)) {
+      free(frontmatter_name);
+      free(frontmatter_description);
+      free(resources);
+    }
+    free(content);
+  }
+}
+
 static int compare_skills(const void *a, const void *b) {
   const SkillDef *sa = (const SkillDef *)a;
   const SkillDef *sb = (const SkillDef *)b;
@@ -419,14 +463,14 @@ static int append_text(char **buf, size_t *len, size_t *capacity,
   return 1;
 }
 
-char *skills_build_prompt(const char *builtin_skills_dir,
+char *skills_build_prompt(const BuiltinSkill *builtin_skills,
+                          size_t builtin_skill_count,
                           const char *project_skills_dir,
                           const char *user_skills_dir,
                           const char *common_skills_dir) {
   SkillList list = {0};
 
-  if (builtin_skills_dir)
-    scan_skill_dir(&list, builtin_skills_dir, "builtin");
+  scan_builtin_skills(&list, builtin_skills, builtin_skill_count);
   if (common_skills_dir)
     scan_skill_dir(&list, common_skills_dir, "common");
   if (user_skills_dir)
@@ -485,14 +529,14 @@ fail:
   return my_strdup("");
 }
 
-char *skills_build_summary(const char *builtin_skills_dir,
+char *skills_build_summary(const BuiltinSkill *builtin_skills,
+                           size_t builtin_skill_count,
                            const char *project_skills_dir,
                            const char *user_skills_dir,
                            const char *common_skills_dir) {
   SkillList list = {0};
 
-  if (builtin_skills_dir)
-    scan_skill_dir(&list, builtin_skills_dir, "builtin");
+  scan_builtin_skills(&list, builtin_skills, builtin_skill_count);
   if (common_skills_dir)
     scan_skill_dir(&list, common_skills_dir, "common");
   if (user_skills_dir)

@@ -20,8 +20,8 @@ vendored Lua modules, plugins, and gated built-in skills without also copying
 - User plugins from `~/.config/capstan/plugins/*.lua` are loaded after embedded
   plugins and watched for hot reload. If a user plugin returns the same
   `plugin.id` as a built-in plugin, it replaces the built-in plugin.
-- `skills/self-improvement/SKILL.md` is embedded. It is materialized into the
-  Capstan state directory and loaded only when
+- `skills/self-improvement/SKILL.md` is embedded. It is loaded directly from
+  memory as `embedded:skills/self-improvement/SKILL.md` only when
   `capabilities.self_improvement = true` is set in
   `~/.config/capstan/config.lua`.
 - Runtime startup does not require a `plugins/` directory beside the binary.
@@ -44,7 +44,7 @@ chunk names in Lua errors. User Lua config still uses `luaL_dofile`.
 - Adding a new built-in plugin requires adding its Lua file to
   `CORE_PLUGIN_ASSETS` and rebuilding the binary.
 - Adding a new embedded built-in skill requires adding its files to
-  `EMBEDDED_ASSETS` and deciding the config gate that materializes it.
+  `EMBEDDED_ASSETS` and deciding the config gate that exposes it.
 - User plugin override identity is `plugin.id`, not filename.
 
 ## Test Notes

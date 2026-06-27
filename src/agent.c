@@ -16,6 +16,7 @@ Messages *get_messages(void) { return &messages; }
 
 static char *g_provider_name = NULL;
 static char *g_provider_model = NULL;
+static char *g_activity = NULL;
 static int g_thinking = 0;
 static UsageStats g_usage = {0};
 
@@ -24,6 +25,23 @@ int  agent_is_thinking(void)      { return g_thinking; }
 
 static int l_agent_set_thinking(lua_State *L) {
   agent_set_thinking(lua_toboolean(L, 1));
+  return 0;
+}
+
+void agent_set_activity(const char *label) {
+  free(g_activity);
+  g_activity = NULL;
+  if (label && label[0])
+    g_activity = my_strdup(label);
+}
+
+const char *agent_activity(void) { return g_activity ? g_activity : ""; }
+
+static int l_agent_set_activity(lua_State *L) {
+  if (lua_isnoneornil(L, 1))
+    agent_set_activity(NULL);
+  else
+    agent_set_activity(luaL_checkstring(L, 1));
   return 0;
 }
 
@@ -53,23 +71,21 @@ static int l_agent_set_usage(lua_State *L) {
 }
 
 static Message *find_last_message_by_role(MessageRole role) {
-  Message *m = NULL;
-
   if (!messages.items || !messages.size)
-    return m;
+    return NULL;
 
   for (int i = messages.size - 1; i >= 0; i--) {
-    m = messages.items[i];
+    Message *m = messages.items[i];
     if (m->role == role) {
       return m;
     }
   }
-  return m;
+  return NULL;
 }
 
 // FIXME: пока тут код такой из предположения что text и raw_text одинаковые для
 // сообщения с ролью агента, но в целом точно будут кейсы когда оно разное
-void append_to_last_message(char *text, MessageRole role) {
+void append_to_last_message(const char *text, MessageRole role) {
 
   Message *m = find_last_message_by_role(role);
 
@@ -128,7 +144,7 @@ static int l_agent_append(lua_State *L) {
       role = MSG_AGENT;
   }
 
-  append_to_last_message((char *)text, role);
+  append_to_last_message(text, role);
   return 0;
 }
 
@@ -140,6 +156,8 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "set_info");
   lua_pushcfunction(L, l_agent_set_thinking);
   lua_setfield(L, -2, "set_thinking");
+  lua_pushcfunction(L, l_agent_set_activity);
+  lua_setfield(L, -2, "set_activity");
   lua_pushcfunction(L, l_agent_set_usage);
   lua_setfield(L, -2, "set_usage");
   lua_setglobal(L, "agent");

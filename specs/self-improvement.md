@@ -24,23 +24,21 @@ missing section, or any other value keeps it disabled.
 
 - The skill is embedded into the binary as `skills/self-improvement/SKILL.md`.
 - At startup, after `config.lua` is loaded, Capstan checks the permission flag.
-- If allowed, Capstan writes the embedded skill to:
+- If allowed, Capstan loads the embedded skill directly from memory as:
 
 ```text
-$XDG_STATE_HOME/capstan/builtin-skills/self-improvement/SKILL.md
+embedded:skills/self-improvement/SKILL.md
 ```
 
-When `XDG_STATE_HOME` is unset, the fallback is:
-
-```text
-~/.local/state/capstan/builtin-skills/self-improvement/SKILL.md
-```
-
-- The materialized state directory is scanned as skill source `builtin`.
+- The in-memory skill is scanned as skill source `builtin`; no `SKILL.md` copy
+  is written into the state directory.
+- Startup removes the legacy materialized
+  `builtin-skills/self-improvement/SKILL.md` state file from older Capstan
+  versions, then removes the generated directories only if they are empty.
 - Source priority still allows user and project skills to override the built-in
   `self-improvement` skill by defining the same skill name.
-- If permission is disabled, the skill is not materialized and does not appear
-  in the system prompt skill index or `/skills`.
+- If permission is disabled, the skill is not loaded and does not appear in the
+  system prompt skill index or `/skills`.
 
 ## Scope
 

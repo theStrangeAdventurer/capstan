@@ -29,7 +29,7 @@ static int glob_match(const char *pattern, const char *target) {
     if (*pattern == '*') {
       star = pattern++;
       retry = target;
-    } else if (*pattern == *target) {
+    } else if (*pattern == '?' || *pattern == *target) {
       pattern++;
       target++;
     } else if (star) {
@@ -58,7 +58,7 @@ int permit_pattern_match(const char *pattern, const char *target) {
     if (strlen(target) == dir_len && strncmp(target, pattern, dir_len) == 0)
       return 1;
   }
-  if (strchr(pattern, '*'))
+  if (strchr(pattern, '*') || strchr(pattern, '?'))
     return glob_match(pattern, target);
   return strcmp(pattern, target) == 0;
 }

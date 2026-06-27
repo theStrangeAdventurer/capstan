@@ -477,7 +477,10 @@ static MunitResult test_request_enables_auto_tool_choice(
 
   int rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
-  lua_pop(L, 1);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
 
   call_agent_entry(L);
 
@@ -506,7 +509,10 @@ static MunitResult test_subagents_tool_enabled_by_default(
 
   int rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
-  lua_pop(L, 1);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
 
   call_agent_entry(L);
 
@@ -550,7 +556,10 @@ static MunitResult test_subagents_tool_returns_structured_results(
 
   int rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
-  lua_pop(L, 1);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
 
   rc = luaL_dostring(
       L,
@@ -609,6 +618,205 @@ static MunitResult test_subagents_tool_returns_structured_results(
   munit_assert_string_equal(captured_permit_target, "");
   munit_assert_true(strstr(captured_agent_appends, "subagents: running 2/2") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "subagents: done 2/2") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_subagents_wait_loop_yields_between_polls(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "subagent_callbacks = {}\n"
+      "subagent_wait_frames = 0\n"
+      "subagent_result = ''\n"
+      "http.poll_index = 0\n"
+      "http.poll = function()\n"
+      "  http.poll_index = http.poll_index + 1\n"
+      "  local cb = subagent_callbacks[http.poll_index]\n"
+      "  if cb then cb.on_done({ok = true, text = 'ok', turns = 1}) end\n"
+      "  return cb and 1 or 0\n"
+      "end\n"
+      "http.wait_frame = function() subagent_wait_frames = subagent_wait_frames + 1 end\n"
+      "capstan.agent.run = function(opts, callbacks)\n"
+      "  table.insert(subagent_callbacks, callbacks)\n"
+      "  return true, nil\n"
+      "end\n"
+      "local available = tools.collect()\n"
+      "tools.handle_tool_calls({}, available, {{id='call_subs_wait', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"one\\\",\\\"task\\\":\\\"one\\\"},{\\\"id\\\":\\\"two\\\",\\\"task\\\":\\\"two\\\"}],\\\"max_concurrent\\\":1}'}}, '', function(msgs)\n"
+      "  subagent_result = msgs[#msgs].content\n"
+      "end, {tools = available, depth = 0})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "subagent_wait_frames");
+  munit_assert_int((int)lua_tointeger(L, -1), >=, 2);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "subagent_result");
+  const char *result = lua_tostring(L, -1);
+  munit_assert_not_null(result);
+  munit_assert_true(strstr(result, "\"id\":\"one\"") != NULL);
+  munit_assert_true(strstr(result, "\"id\":\"two\"") != NULL);
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_subagents_retry_transient_http_errors(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "subagent_attempts = 0\n"
+      "subagent_result = ''\n"
+      "capstan.agent.run = function(opts, callbacks)\n"
+      "  subagent_attempts = subagent_attempts + 1\n"
+      "  if subagent_attempts < 3 then\n"
+      "    callbacks.on_done({ok = false, error = 'HTTP 429', text = '', turns = 1})\n"
+      "  else\n"
+      "    callbacks.on_done({ok = true, text = 'ok', turns = 1})\n"
+      "  end\n"
+      "  return true, nil\n"
+      "end\n"
+      "local available = tools.collect()\n"
+      "tools.handle_tool_calls({}, available, {{id='call_subs_retry', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"limited\\\",\\\"task\\\":\\\"limited\\\"}]}' }}, '', function(msgs)\n"
+      "  subagent_result = msgs[#msgs].content\n"
+      "end, {tools = available, depth = 0})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "subagent_attempts");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 3);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "subagent_result");
+  const char *result = lua_tostring(L, -1);
+  munit_assert_not_null(result);
+  munit_assert_true(strstr(result, "\"ok\":true") != NULL);
+  munit_assert_true(strstr(result, "\"attempts\":3") != NULL);
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_subagents_do_not_retry_http_400(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "subagent_attempts = 0\n"
+      "subagent_result = ''\n"
+      "capstan.agent.run = function(opts, callbacks)\n"
+      "  subagent_attempts = subagent_attempts + 1\n"
+      "  callbacks.on_done({ok = false, error = 'HTTP 400', text = '', turns = 1})\n"
+      "  return true, nil\n"
+      "end\n"
+      "local available = tools.collect()\n"
+      "tools.handle_tool_calls({}, available, {{id='call_subs_400', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"bad\\\",\\\"task\\\":\\\"bad\\\"}]}' }}, '', function(msgs)\n"
+      "  subagent_result = msgs[#msgs].content\n"
+      "end, {tools = available, depth = 0})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "subagent_attempts");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "subagent_result");
+  const char *result = lua_tostring(L, -1);
+  munit_assert_not_null(result);
+  munit_assert_true(strstr(result, "\"ok\":false") != NULL);
+  munit_assert_true(strstr(result, "\"error\":\"HTTP 400\"") != NULL);
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_subagents_use_current_provider_models_only(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  mock_models_success = 1;
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "subagents_providers = {}\n"
+      "subagents_models = {}\n"
+      "capstan.agent.run = function(opts, callbacks)\n"
+      "  table.insert(subagents_providers, opts.provider or '')\n"
+      "  table.insert(subagents_models, opts.model or '')\n"
+      "  callbacks.on_done({ok = true, text = 'done', turns = 1})\n"
+      "  return true, nil\n"
+      "end\n"
+      "local current_msgs = {}\n"
+      "local available = tools.collect()\n"
+      "tools.handle_tool_calls(current_msgs, available, {{id='call_subs_models', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"valid\\\",\\\"task\\\":\\\"valid\\\",\\\"provider\\\":\\\"deepseek\\\",\\\"model\\\":\\\"model/a\\\"},{\\\"id\\\":\\\"invalid\\\",\\\"task\\\":\\\"invalid\\\",\\\"provider\\\":\\\"deepseek\\\",\\\"model\\\":\\\"gpt-4.1\\\"}]}' }}, '', function() end, {runtime = capstan.agent_runtime, provider = capstan.agent_runtime.providers.openrouter, provider_name = 'openrouter', tools = available, depth = 0})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "subagents_providers");
+  lua_rawgeti(L, -1, 1);
+  munit_assert_string_equal(lua_tostring(L, -1), "openrouter");
+  lua_pop(L, 1);
+  lua_rawgeti(L, -1, 2);
+  munit_assert_string_equal(lua_tostring(L, -1), "openrouter");
+  lua_pop(L, 2);
+
+  lua_getglobal(L, "subagents_models");
+  lua_rawgeti(L, -1, 1);
+  munit_assert_string_equal(lua_tostring(L, -1), "model/a");
+  lua_pop(L, 1);
+  lua_rawgeti(L, -1, 2);
+  munit_assert_string_equal(lua_tostring(L, -1), "config/model");
+  lua_pop(L, 2);
+
+  munit_assert_true(strstr(captured_get_url, "/models") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "ignored unavailable model=gpt-4.1") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[subagents] start index=1 id=valid attempt=1/3 provider=openrouter model=model/a prompt=valid") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[subagents] start index=2 id=invalid attempt=1/3 provider=openrouter model=config/model prompt=invalid") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -1306,7 +1514,7 @@ static MunitResult test_shell_always_allow_uses_workspace_target(
   munit_assert_int(grant_allow, ==, 1);
   munit_assert_int(permit_prompt_calls, ==, 1);
   munit_assert_true(strstr(captured_agent_appends, "shell: /repo/project") != NULL);
-  munit_assert_true(strstr(captured_agent_appends, "  $ pwd") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "  $ pwd") == NULL);
 
   call_agent_entry(L);
   munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
@@ -1318,6 +1526,36 @@ static MunitResult test_shell_always_allow_uses_workspace_target(
   munit_assert_int(permit_check_calls, ==, 2);
   munit_assert_int(permit_prompt_calls, ==, 1);
   munit_assert_true(strstr(captured_body, "shell llm: ls src") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_shell_tool_redacts_command_before_continuation(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, "/repo/project");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_shell_secret", "shell",
+                 "{\\\"command\\\":\\\"curl -H 'Authorization: Bearer secret-token' https://example.test\\\"}");
+
+  munit_assert_true(strstr(captured_agent_appends, "secret-token") == NULL);
+  munit_assert_true(strstr(captured_logs, "secret-token") == NULL);
+  munit_assert_true(strstr(captured_body, "secret-token") == NULL);
+  munit_assert_true(strstr(captured_body, "curl") != NULL);
+  munit_assert_true(strstr(captured_body, "https://example.test") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -1427,7 +1665,7 @@ static MunitResult test_subagents_share_child_permission_scope(
   return MUNIT_OK;
 }
 
-static MunitResult test_shell_tool_display_collapses_home_and_shows_command(
+static MunitResult test_shell_tool_display_collapses_home_and_hides_command(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -1458,11 +1696,11 @@ static MunitResult test_shell_tool_display_collapses_home_and_shows_command(
   munit_assert_true(strstr(captured_agent_appends,
                            "shell: ~/narnia/tui-agent") != NULL);
   munit_assert_true(strstr(captured_agent_appends,
-                           "  $ make test") != NULL);
+                           "  $ make test") == NULL);
   munit_assert_true(strstr(captured_logs,
                            "display=~/narnia/tui-agent") != NULL);
   munit_assert_true(strstr(captured_logs,
-                           "command=make test") != NULL);
+                           "args={\"command\":\"shell\"}") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -1532,6 +1770,96 @@ static MunitResult test_after_agent_turn_hook_waits_for_tool_continuation(
 
   send_text_done(L, "final");
   munit_assert_true(strstr(captured_logs, "[test] after_agent_turn text=final") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_after_agent_turn_hook_skips_subagent_by_default(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_config_hook(L,
+                  "after_agent_turn = function(ctx) "
+                  "capstan.log('test', 'after_agent_turn depth=' .. tostring(ctx.run and ctx.run.depth or 0)) "
+                  "return ctx "
+                  "end");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "agent");
+  lua_getfield(L, -1, "run");
+  lua_newtable(L);
+  lua_pushinteger(L, 1);
+  lua_setfield(L, -2, "depth");
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "user");
+  lua_setfield(L, -2, "role");
+  lua_pushstring(L, "subtask");
+  lua_setfield(L, -2, "content");
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "messages");
+  lua_newtable(L);
+  rc = lua_pcall(L, 2, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 4);
+
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_text_done(L, "subagent final");
+  munit_assert_true(strstr(captured_logs, "[test] after_agent_turn") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_after_agent_turn_hook_scope_all_runs_for_subagent(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_config_hook(L,
+                  "after_agent_turn = { scope = 'all', handler = function(ctx) "
+                  "capstan.log('test', 'after_agent_turn depth=' .. tostring(ctx.run and ctx.run.depth or 0)) "
+                  "return ctx "
+                  "end }");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "agent");
+  lua_getfield(L, -1, "run");
+  lua_newtable(L);
+  lua_pushinteger(L, 1);
+  lua_setfield(L, -2, "depth");
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "user");
+  lua_setfield(L, -2, "role");
+  lua_pushstring(L, "subtask");
+  lua_setfield(L, -2, "content");
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "messages");
+  lua_newtable(L);
+  rc = lua_pcall(L, 2, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 4);
+
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_text_done(L, "subagent final");
+  munit_assert_true(strstr(captured_logs, "[test] after_agent_turn depth=1") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -1748,6 +2076,18 @@ static MunitTest tests[] = {
     {"/subagents_tool_returns_structured_results",
      test_subagents_tool_returns_structured_results, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/subagents_wait_loop_yields_between_polls",
+     test_subagents_wait_loop_yields_between_polls, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/subagents_retry_transient_http_errors",
+     test_subagents_retry_transient_http_errors, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/subagents_do_not_retry_http_400",
+     test_subagents_do_not_retry_http_400, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/subagents_use_current_provider_models_only",
+     test_subagents_use_current_provider_models_only, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_config_sets_default_model",
      test_provider_config_sets_default_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -1798,6 +2138,9 @@ static MunitTest tests[] = {
     {"/shell_always_allow_uses_workspace_target",
      test_shell_always_allow_uses_workspace_target, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/shell_tool_redacts_command_before_continuation",
+     test_shell_tool_redacts_command_before_continuation, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_run_permission_skips_later_same_tool_prompts",
      test_tool_run_permission_skips_later_same_tool_prompts, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -1807,14 +2150,20 @@ static MunitTest tests[] = {
     {"/subagents_share_child_permission_scope",
      test_subagents_share_child_permission_scope, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/shell_tool_display_collapses_home_and_shows_command",
-     test_shell_tool_display_collapses_home_and_shows_command, NULL, NULL,
+    {"/shell_tool_display_collapses_home_and_hides_command",
+     test_shell_tool_display_collapses_home_and_hides_command, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/after_agent_turn_hook_runs_on_final_text",
      test_after_agent_turn_hook_runs_on_final_text, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/after_agent_turn_hook_waits_for_tool_continuation",
      test_after_agent_turn_hook_waits_for_tool_continuation, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/after_agent_turn_hook_skips_subagent_by_default",
+     test_after_agent_turn_hook_skips_subagent_by_default, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/after_agent_turn_hook_scope_all_runs_for_subagent",
+     test_after_agent_turn_hook_scope_all_runs_for_subagent, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/config_before_request_hook_mutates_body",
      test_config_before_request_hook_mutates_body, NULL, NULL,

@@ -11,26 +11,32 @@ char *my_strdup(const char *s) {
   return memcpy(new, s, len);
 }
 
-int replace_with(char *input, size_t input_size, char *from, char *to) {
-  if (input == NULL || from == NULL || to == NULL || input_size == 0) {
+int replace_with(char *input, size_t input_size, const char *from,
+                 const char *to) {
+  if (input == NULL || from == NULL || to == NULL || input_size == 0 ||
+      from[0] == '\0') {
     return -1;
   }
 
-  char temp[input_size];
-  strcpy(temp, input);
-  char *p = strstr(temp, from);
+  char *input_end = memchr(input, '\0', input_size);
+  if (!input_end)
+    return -1;
+
+  char *p = strstr(input, from);
 
   if (!p) {
     return 0;
   }
 
-  size_t prefix_len = p - temp;
-  char suffix[input_size];
-  strcpy(suffix, p + strlen(from));
-  memcpy(input, temp, prefix_len);
-  input[prefix_len] = '\0';
-  strcat(input, to);
-  strcat(input, suffix);
+  size_t prefix_len = (size_t)(p - input);
+  size_t from_len = strlen(from);
+  size_t to_len = strlen(to);
+  size_t suffix_len = strlen(p + from_len);
+  if (prefix_len + to_len + suffix_len + 1 > input_size)
+    return -1;
+
+  memmove(input + prefix_len + to_len, p + from_len, suffix_len + 1);
+  memcpy(input + prefix_len, to, to_len);
 
   return 1;
 }

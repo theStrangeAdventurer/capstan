@@ -406,6 +406,8 @@ void popup_show_message(const char *title, const char *text, int is_error) {
   g_msgpopup.win = NULL;
   g_msgpopup.last_rows = -1;
   g_msgpopup.last_cols = -1;
+  g_msgpopup.created_at = time(NULL);
+  g_msgpopup.auto_close_after_sec = is_error ? 8 : 0;
 }
 
 int popup_is_message_active(void) { return g_msgpopup.active; }
@@ -427,6 +429,8 @@ void popup_close_message(void) {
   g_msgpopup.is_error = 0;
   g_msgpopup.last_rows = -1;
   g_msgpopup.last_cols = -1;
+  g_msgpopup.created_at = 0;
+  g_msgpopup.auto_close_after_sec = 0;
 }
 
 int popup_message_handle_key(int ch) {

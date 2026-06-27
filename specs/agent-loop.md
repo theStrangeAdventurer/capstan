@@ -135,6 +135,11 @@ a new HTTP request with the expanded message history. Space cancellation can sto
 active curl streams, but it cannot interrupt synchronous Lua work inside tool
 processing until control returns to the main loop.
 
+Synchronous tool work runs on the UI thread. Any blocking C helper used by a
+tool must periodically yield through the TUI pump so the screen can repaint and
+safe navigation keys can be handled. It must not recursively call `http_poll()`
+from inside stream callback/tool execution paths.
+
 ## Tool Contract
 
 Plugins may expose a model tool by returning `plugin.tool`:
@@ -158,6 +163,11 @@ Tool handler errors are contained inside the Lua runtime. A failing handler must
 produce a `{role="tool"}` diagnostic result with plugin id, source, arguments,
 and traceback; log the failure; and mark the visible tool row with a compact
 error reason instead of throwing through the stream callback.
+
+Long-running built-in tools should log start/finish timing in the runtime log.
+The shell tool is the reference case: it waits for subprocess output with a
+short poll interval, pumps the TUI between waits, and uses non-blocking
+`waitpid()` so post-permission execution does not freeze the interface.
 
 Permission policy is shared: Lua chooses the tool name and target for the check;
 C owns rule storage, matching, saving, and the prompt UI.

@@ -19,6 +19,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 
 #define PLUGIN_RESPONSE_MAX_SIZE 4096
 #define PLUGIN_CAPACITY_INCREMENT 10
@@ -85,30 +86,6 @@ static int lua_doasset_or_file(lua_State *l, const char *asset_path,
   }
 
   return lua_dobuffer_named(l, asset_path, asset->data, asset->size);
-}
-
-static int ensure_dir(const char *path) {
-  struct stat st;
-  if (stat(path, &st) == 0)
-    return S_ISDIR(st.st_mode) ? 0 : -1;
-  if (mkdir(path, 0755) != 0)
-    return -1;
-  return 0;
-}
-
-static int write_embedded_asset_file(const char *asset_path,
-                                     const char *target_path) {
-  const EmbeddedAsset *asset = embedded_asset_find(asset_path);
-  if (!asset)
-    return -1;
-
-  FILE *f = fopen(target_path, "wb");
-  if (!f)
-    return -1;
-
-  size_t written = fwrite(asset->data, 1, asset->size, f);
-  int close_ok = fclose(f) == 0;
-  return written == asset->size && close_ok ? 0 : -1;
 }
 
 static int l_require_embedded_json(lua_State *l) {
@@ -191,34 +168,45 @@ static int self_improvement_allowed(void) {
   return capstan_config_bool("capabilities", "self_improvement");
 }
 
-static const char *materialize_builtin_self_improvement_skill(
-    char *builtin_skills_dir, size_t builtin_skills_dir_size) {
-  if (!self_improvement_allowed())
-    return NULL;
-  if (app_state_ensure_dir() != 0)
-    return NULL;
-  if (app_state_path(builtin_skills_dir, builtin_skills_dir_size,
-                     "builtin-skills") != 0)
-    return NULL;
-  if (ensure_dir(builtin_skills_dir) != 0)
-    return NULL;
-
-  char skill_dir[512];
-  int n = snprintf(skill_dir, sizeof(skill_dir), "%s/self-improvement",
-                   builtin_skills_dir);
-  if (n < 0 || (size_t)n >= sizeof(skill_dir))
-    return NULL;
-  if (ensure_dir(skill_dir) != 0)
-    return NULL;
-
+static void cleanup_materialized_builtin_skills(void) {
   char skill_path[512];
-  n = snprintf(skill_path, sizeof(skill_path), "%s/SKILL.md", skill_dir);
-  if (n < 0 || (size_t)n >= sizeof(skill_path))
-    return NULL;
-  if (write_embedded_asset_file("skills/self-improvement/SKILL.md",
-                                skill_path) != 0)
-    return NULL;
-  return builtin_skills_dir;
+  if (app_state_path(skill_path, sizeof(skill_path),
+                     "builtin-skills/self-improvement/SKILL.md") != 0)
+    return;
+
+  unlink(skill_path);
+
+  char self_improvement_dir[512];
+  if (app_state_path(self_improvement_dir, sizeof(self_improvement_dir),
+                     "builtin-skills/self-improvement") == 0)
+    rmdir(self_improvement_dir);
+
+  char builtin_skills_dir[512];
+  if (app_state_path(builtin_skills_dir, sizeof(builtin_skills_dir),
+                     "builtin-skills") == 0)
+    rmdir(builtin_skills_dir);
+}
+
+static size_t collect_builtin_skills(BuiltinSkill *builtin_skills,
+                                     size_t builtin_skill_capacity) {
+  size_t count = 0;
+  if (!self_improvement_allowed())
+    return 0;
+  if (count >= builtin_skill_capacity)
+    return count;
+
+  const EmbeddedAsset *asset =
+      embedded_asset_find("skills/self-improvement/SKILL.md");
+  if (!asset)
+    return count;
+
+  builtin_skills[count++] = (BuiltinSkill){
+      .name = "self-improvement",
+      .path = "embedded:skills/self-improvement/SKILL.md",
+      .content = asset->data,
+      .content_size = asset->size,
+  };
+  return count;
 }
 
 static void load_system_prompt(void) {
@@ -235,11 +223,13 @@ static void load_system_prompt(void) {
   }
 
   char project_skills[512];
-  char builtin_skills[512];
   char user_skills[512];
   char common_skills[512];
-  const char *builtin_skills_dir = materialize_builtin_self_improvement_skill(
-      builtin_skills, sizeof(builtin_skills));
+  BuiltinSkill builtin_skills[1];
+  cleanup_materialized_builtin_skills();
+  size_t builtin_skill_count =
+      collect_builtin_skills(builtin_skills,
+                             sizeof(builtin_skills) / sizeof(builtin_skills[0]));
   int n = snprintf(project_skills, sizeof(project_skills), "%s/.agents/skills",
                    app_workdir());
   const char *project_skills_dir =
@@ -257,11 +247,13 @@ static void load_system_prompt(void) {
       common_skills_dir = common_skills;
   }
   char *skills_prompt =
-      skills_build_prompt(builtin_skills_dir, project_skills_dir,
+      skills_build_prompt(builtin_skills, builtin_skill_count,
+                          project_skills_dir,
                           user_skills_dir,
                           common_skills_dir);
   char *skills_summary =
-      skills_build_summary(builtin_skills_dir, project_skills_dir,
+      skills_build_summary(builtin_skills, builtin_skill_count,
+                           project_skills_dir,
                            user_skills_dir,
                            common_skills_dir);
 
@@ -353,6 +345,37 @@ static int l_capstan_state_path(lua_State *l) {
   return 1;
 }
 
+static int l_capstan_state_dir(lua_State *l) {
+  char path[512];
+  if (app_state_dir(path, sizeof(path)) != 0) {
+    lua_pushnil(l);
+    return 1;
+  }
+  lua_pushstring(l, path);
+  return 1;
+}
+
+static int l_capstan_config_path(lua_State *l) {
+  const char *relative = luaL_optstring(l, 1, "config.lua");
+  char path[512];
+  if (app_config_path(path, sizeof(path), relative) != 0) {
+    lua_pushnil(l);
+    return 1;
+  }
+  lua_pushstring(l, path);
+  return 1;
+}
+
+static int l_capstan_config_dir(lua_State *l) {
+  char path[512];
+  if (app_config_dir(path, sizeof(path)) != 0) {
+    lua_pushnil(l);
+    return 1;
+  }
+  lua_pushstring(l, path);
+  return 1;
+}
+
 static int l_capstan_state_ensure_dir(lua_State *l) {
   lua_pushboolean(l, app_state_ensure_dir() == 0);
   return 1;
@@ -378,6 +401,15 @@ static void register_capstan_runtime(void) {
 
   lua_pushcfunction(L, l_capstan_state_path);
   lua_setfield(L, -2, "state_path");
+
+  lua_pushcfunction(L, l_capstan_state_dir);
+  lua_setfield(L, -2, "state_dir");
+
+  lua_pushcfunction(L, l_capstan_config_path);
+  lua_setfield(L, -2, "config_path");
+
+  lua_pushcfunction(L, l_capstan_config_dir);
+  lua_setfield(L, -2, "config_dir");
 
   lua_pushcfunction(L, l_capstan_state_ensure_dir);
   lua_setfield(L, -2, "state_ensure_dir");
@@ -537,7 +569,6 @@ static void plugin_free(Plugin *p) {
   free(p->description);
   free(p->command);
   free(p->source_path);
-  free(p->user_data);
   if (p->handler_ref > 0)
     luaL_unref(p->L, LUA_REGISTRYINDEX, p->handler_ref);
   free(p->autocomplete_title);
@@ -564,30 +595,44 @@ static void remove_lua_plugin_entry(const char *id) {
 }
 
 char *get_plugins_info() {
-  char *result = malloc(100 * plugins_registry.count);
-  int len = 0;
-
-  len += sprintf(result, "count: %d", plugins_registry.count);
+  size_t needed = snprintf(NULL, 0, "count: %d", plugins_registry.count) + 1;
   for (int i = 0; i < plugins_registry.count; i++) {
     Plugin *p = plugins_registry.plugins[i];
-
     if (!p || !p->command)
       continue;
+    needed += snprintf(NULL, 0, "*** %s[%s] *** ",
+                       p->name ? p->name : "", p->command);
+  }
 
-    len += sprintf(result + len, "*** %s[%s] *** ", p->name, p->command);
+  char *result = malloc(needed);
+  if (!result)
+    return NULL;
+
+  size_t len = snprintf(result, needed, "count: %d", plugins_registry.count);
+  for (int i = 0; i < plugins_registry.count; i++) {
+    Plugin *p = plugins_registry.plugins[i];
+    if (!p || !p->command)
+      continue;
+    len += snprintf(result + len, needed - len, "*** %s[%s] *** ",
+                    p->name ? p->name : "", p->command);
   }
 
   return result;
 }
 
 void plugin_registry_add(Plugin *plugin) {
+  if (!plugin)
+    return;
   if (plugins_registry.count >= plugins_registry.capacity) {
-    plugins_registry.capacity += PLUGIN_CAPACITY_INCREMENT;
-    plugins_registry.plugins =
-        realloc(plugins_registry.plugins,
-                plugins_registry.capacity *
-                    sizeof(Plugin *)); // Выделяем место под большее количество
-                                       // указателей на плагины
+    int new_capacity = plugins_registry.capacity + PLUGIN_CAPACITY_INCREMENT;
+    Plugin **new_plugins =
+        realloc(plugins_registry.plugins, new_capacity * sizeof(Plugin *));
+    if (!new_plugins) {
+      plugin_free(plugin);
+      return;
+    }
+    plugins_registry.plugins = new_plugins;
+    plugins_registry.capacity = new_capacity;
   }
   plugins_registry.plugins[plugins_registry.count++] = plugin;
 }
@@ -738,12 +783,13 @@ static Plugin *plugin_load_from_chunk(const char *name, const char *data,
   lua_setfield(L, -2, "_source_path");
 
   Plugin *p = calloc(1, sizeof(Plugin));
+  if (!p) {
+    record_plugin_error(name, "Out of memory allocating plugin");
+    lua_pop(L, 1);
+    return NULL;
+  }
 
   p->L = L;
-
-  lua_getfield(L, -1, "is_async");
-  p->is_async = lua_toboolean(L, -1);
-  lua_pop(L, 1);
 
   lua_getfield(L, -1, "history");
   p->include_in_history = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : 1;
@@ -864,8 +910,6 @@ static Plugin *plugin_load_from_chunk(const char *name, const char *data,
   lua_setfield(L, -2, p->id);
   lua_pop(L, 2);
 
-  p->callback = NULL;
-  p->user_data = NULL;
   return p;
 }
 

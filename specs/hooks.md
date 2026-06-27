@@ -11,13 +11,24 @@ Hooks are registered by stage name:
 capstan.hooks.register("before_request", function(ctx)
   ctx.request.temperature = 0.2
   return ctx
-end, {priority = 50})
+end, {priority = 50, scope = "all"})
 ```
 
 Lower priority values run first. Equal priorities run in registration order. A
 hook may mutate `ctx` in place and return nothing, or return a replacement ctx
 table. Hook errors are caught, logged under the `hook` category, and the agent
 cycle continues with the previous ctx value.
+
+Hook scope controls whether a hook runs for the top-level orchestrator agent,
+internal subagents, or both:
+
+- `scope = "orchestrator"`: top-level run only.
+- `scope = "subagents"`: internal subagent runs only.
+- `scope = "all"`: both top-level and subagent runs.
+
+`after_agent_turn` defaults to `orchestrator` because it commonly drives user
+notifications and should fire when control returns to the user, not when an
+internal subagent finishes. Other hook stages default to `all`.
 
 `config.lua` may declare hooks directly:
 
@@ -46,6 +57,25 @@ plugin.hooks = {
 Plugins may be hook-only: `id` is required, while `command` and `handler` are
 only needed for slash commands.
 
+To make all hooks in a plugin run only for the orchestrator, set:
+
+```lua
+plugin.hooks_scope = "orchestrator"
+```
+
+To override scope for one hook, use the table form:
+
+```lua
+plugin.hooks = {
+  after_agent_turn = {
+    scope = "all",
+    handler = function(ctx)
+      return ctx
+    end,
+  },
+}
+```
+
 ## Hook Stages
 
 - `before_messages`: after system prompt and history are assembled. May change
@@ -63,7 +93,8 @@ only needed for slash commands.
 - `after_agent_turn`: after the final model stream completes without requesting
   more tool calls. This is the point where all tool continuations are done and
   control returns to the user. Receives `ctx.text`, `ctx.messages`,
-  `ctx.tools`, `ctx.provider`, `ctx.provider_name`, and `ctx.runtime`.
+  `ctx.tools`, `ctx.provider`, `ctx.provider_name`, `ctx.runtime`, and
+  `ctx.run`.
 - `after_subagents`: after all internal subagent runs complete and before the
   structured result is returned to the orchestrator as a tool result. May change
   `ctx.result`.
