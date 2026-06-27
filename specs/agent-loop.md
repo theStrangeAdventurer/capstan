@@ -180,6 +180,15 @@ markup such as Minimax/OpenRouter sentinel fragments from the raw JSON argument
 string and from decoded string values. This normalization is intentionally scoped
 to tool-call arguments so ordinary assistant text is not rewritten.
 
+If a Minimax-family model emits a tool call as ordinary assistant text instead
+of structured `tool_calls`, the runtime treats it as a provider/model protocol
+error. It does not try to infer or execute the textual call. Minimax text chunks
+are buffered until stream completion so leaked pseudo-tool payloads such as
+`old_text`/`new_text` file edits are not appended to the visible conversation
+before the final protocol decision. On violation, the runtime appends a compact
+provider error, logs `minimax_text_tool_call_protocol_error`, and finishes the
+run with `ok = false`.
+
 Long-running built-in tools should log start/finish timing in the runtime log.
 The shell tool is the reference case: it waits for subprocess output with a
 short poll interval, pumps the TUI between waits, and uses non-blocking

@@ -130,11 +130,24 @@ function plugin.handler(ctx)
 		else
 			local content = file:read("*a")
 			file:close()
-			table.insert(ui_parts, "📄 " .. resolved_filename)
-			table.insert(llm_parts, string.format(
-				"📄 %s\n─────────────\n%s\n─────────────",
-				resolved_filename, content
-			))
+			if content == nil then
+				local ls = list_dir(resolved_filename)
+				local listed = ls and ls:read("*a") or ""
+				if ls then ls:close() end
+				if listed ~= "" then
+					table.insert(ui_parts, "📁 " .. resolved_filename)
+					table.insert(llm_parts, "📁 " .. resolved_filename .. "\n" .. listed)
+				else
+					table.insert(ui_parts, "❌ " .. resolved_filename .. " (could not read file or list directory)")
+					table.insert(llm_parts, "❌ Cannot open " .. resolved_filename .. ": could not read file or list directory")
+				end
+			else
+				table.insert(ui_parts, "📄 " .. resolved_filename)
+				table.insert(llm_parts, string.format(
+					"📄 %s\n─────────────\n%s\n─────────────",
+					resolved_filename, content
+				))
+			end
 		end
 	end
 

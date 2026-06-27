@@ -2168,7 +2168,7 @@ static MunitResult test_tool_arguments_strip_minimax_markup(
   return MUNIT_OK;
 }
 
-static MunitResult test_minimax_text_tool_call_fallback_runs_shell(
+static MunitResult test_minimax_text_tool_call_protocol_error(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -2188,10 +2188,50 @@ static MunitResult test_minimax_text_tool_call_fallback_runs_shell(
   munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
   send_text_done(L, "$ echo ok ]<]minimax[>[</command>]<]minimax[>[</tool_call>");
 
-  munit_assert_string_equal(captured_permit_tool, "shell");
-  munit_assert_string_equal(captured_permit_target, "/repo/project");
-  munit_assert_true(strstr(captured_body, "shell llm: echo ok") != NULL);
-  munit_assert_true(strstr(captured_logs, "minimax_text_tool_call_fallback") != NULL);
+  munit_assert_string_equal(captured_permit_tool, "");
+  munit_assert_true(strstr(captured_body, "shell llm: echo ok") == NULL);
+  munit_assert_true(strstr(captured_agent_appends, "]<]minimax") == NULL);
+  munit_assert_true(strstr(captured_agent_appends, "</tool_call>") == NULL);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "provider error: model emitted a textual tool call") != NULL);
+  munit_assert_true(strstr(captured_logs, "minimax_text_tool_call_protocol_error") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_minimax_normal_text_is_buffered_until_done(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_provider_config(L);
+  set_capstan_state_model(L, "openrouter", "minimax/minimax-m3");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L, "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n");
+  lua_pushboolean(L, 0);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_string_equal(captured_agent_appends, "");
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_string_equal(captured_agent_appends, "hello");
 
   reset_captures(L);
   lua_close(L);
@@ -2852,8 +2892,11 @@ static MunitTest tests[] = {
     {"/tool_arguments_strip_minimax_markup",
      test_tool_arguments_strip_minimax_markup, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/minimax_text_tool_call_fallback_runs_shell",
-     test_minimax_text_tool_call_fallback_runs_shell, NULL, NULL,
+    {"/minimax_text_tool_call_protocol_error",
+     test_minimax_text_tool_call_protocol_error, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/minimax_normal_text_is_buffered_until_done",
+     test_minimax_normal_text_is_buffered_until_done, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_arguments_keep_markup_for_non_minimax_model",
      test_tool_arguments_keep_markup_for_non_minimax_model, NULL, NULL,
