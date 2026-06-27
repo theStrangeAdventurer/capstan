@@ -161,6 +161,121 @@ local function now_ms()
     return os.clock() * 1000
 end
 
+local function sorted_keys(tbl)
+    local keys = {}
+    for key in pairs(tbl or {}) do
+        table.insert(keys, key)
+    end
+    table.sort(keys, function(a, b)
+        return tostring(a) < tostring(b)
+    end)
+    return keys
+end
+
+local function stable_encode(value)
+    local value_type = type(value)
+    if value_type ~= "table" then
+        local ok, encoded = pcall(json.encode, value)
+        return ok and encoded or tostring(value)
+    end
+
+    local max_index = 0
+    local array_like = true
+    for key in pairs(value) do
+        if type(key) ~= "number" or key < 1 or math.floor(key) ~= key then
+            array_like = false
+            break
+        end
+        if key > max_index then max_index = key end
+    end
+
+    if array_like then
+        local parts = {}
+        for i = 1, max_index do
+            table.insert(parts, stable_encode(value[i]))
+        end
+        return "[" .. table.concat(parts, ",") .. "]"
+    end
+
+    local parts = {}
+    for _, key in ipairs(sorted_keys(value)) do
+        table.insert(parts, stable_encode(tostring(key)) .. ":" .. stable_encode(value[key]))
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local function tool_signature(tool_name, args)
+    return tostring(tool_name or "") .. ":" .. stable_encode(args or {})
+end
+
+local function shell_signature(args)
+    args = args or {}
+    return tostring(args.command or "") .. "\0" .. tostring(args.timeout or "")
+end
+
+local function guard_duration_error(guard)
+    if not guard or not guard.max_duration_ms or guard.max_duration_ms <= 0 then
+        return nil
+    end
+    if now_ms() - guard.started_at > guard.max_duration_ms then
+        return string.format("agent run exceeded %ds", math.floor(guard.max_duration_ms / 1000))
+    end
+    return nil
+end
+
+local function guard_before_tool(tool_name, args, run_ctx)
+    local guard = run_ctx and run_ctx.guard
+    if not guard then return nil end
+
+    local duration_error = guard_duration_error(guard)
+    if duration_error then return duration_error end
+
+    guard.total_tool_calls = (tonumber(guard.total_tool_calls) or 0) + 1
+    local max_tool_calls = tonumber(guard.max_tool_calls) or 0
+    if max_tool_calls > 0 and guard.total_tool_calls > max_tool_calls then
+        return string.format("too many tool calls (%d > %d)", guard.total_tool_calls, max_tool_calls)
+    end
+
+    if tool_name == "shell" then
+        guard.last_tool_signature = nil
+        guard.same_tool_count = 0
+        local signature_shell = shell_signature(args)
+        if guard.last_shell_signature == signature_shell then
+            guard.same_shell_count = (tonumber(guard.same_shell_count) or 0) + 1
+        else
+            guard.last_shell_signature = signature_shell
+            guard.same_shell_count = 1
+        end
+        local max_same_shell_command = tonumber(guard.max_same_shell_command) or 0
+        if max_same_shell_command > 0 and guard.same_shell_count > max_same_shell_command then
+            return string.format("repeated shell command (%d > %d)",
+                guard.same_shell_count,
+                max_same_shell_command
+            )
+        end
+    else
+        guard.last_shell_signature = nil
+        guard.same_shell_count = 0
+        local signature = tool_signature(tool_name, args)
+        if guard.last_tool_signature == signature then
+            guard.same_tool_count = (tonumber(guard.same_tool_count) or 0) + 1
+        else
+            guard.last_tool_signature = signature
+            guard.same_tool_count = 1
+        end
+        local max_same_tool_call = tonumber(guard.max_same_tool_call) or 0
+        if max_same_tool_call > 0 and guard.same_tool_count > max_same_tool_call then
+            return string.format("repeated tool call %s (%d > %d)",
+                tostring(tool_name),
+                guard.same_tool_count,
+                max_same_tool_call
+            )
+        end
+    end
+
+    return nil
+end
+
 local function task_label(task)
     local id = tostring(task.id or "task")
     local text = tostring(task.task or "")
@@ -516,15 +631,51 @@ local function tool_permission_name(tool_name)
 end
 
 -- Parses the JSON-encoded arguments string from an LLM tool call.
-local function decode_tool_arguments(raw)
-    local ok, decoded = pcall(json.decode, raw or "{}")
+local function should_strip_minimax_tool_markup(run_ctx)
+    local provider_name = tostring(run_ctx and run_ctx.provider_name or ""):lower()
+    local provider = run_ctx and run_ctx.provider or nil
+    local model = tostring(provider and provider.model or ""):lower()
+    return provider_name:find("minimax", 1, true) ~= nil or model:find("minimax", 1, true) ~= nil
+end
+
+local function strip_minimax_tool_markup(text)
+    if type(text) ~= "string" or text == "" then return text end
+    local result = text
+    result = result:gsub("%]%<%]minimax%[%>%[</?[%w_%-]+>%]?", "")
+    for _, tag in ipairs({"tool_call", "tool_calls", "command", "arguments", "function_call", "function"}) do
+        result = result:gsub("</?" .. tag .. ">", "")
+    end
+    return result
+end
+
+local function sanitize_tool_value(value, run_ctx)
+    if not should_strip_minimax_tool_markup(run_ctx) then return value end
+    if type(value) == "string" then
+        return strip_minimax_tool_markup(value)
+    end
+    if type(value) ~= "table" then return value end
+    for k, v in pairs(value) do
+        value[k] = sanitize_tool_value(v, run_ctx)
+    end
+    return value
+end
+
+local function sanitize_tool_arguments(raw, run_ctx)
+    raw = raw or "{}"
+    if not should_strip_minimax_tool_markup(run_ctx) then return raw end
+    return strip_minimax_tool_markup(raw)
+end
+
+local function decode_tool_arguments(raw, run_ctx)
+    local sanitized = sanitize_tool_arguments(raw, run_ctx)
+    local ok, decoded = pcall(json.decode, sanitized)
     if not ok then
         return nil, "Invalid JSON arguments: " .. tostring(decoded)
     end
     if type(decoded) ~= "table" then
         return nil, "Invalid tool arguments: expected object"
     end
-    return decoded, nil
+    return sanitize_tool_value(decoded, run_ctx), nil
 end
 
 local function is_absolute_path(path)
@@ -789,6 +940,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
     end
     local openai_tool_calls = {}
     for _, tc in ipairs(tool_calls) do
+        tc.arguments = sanitize_tool_arguments(tc.arguments, run_ctx)
         table.insert(openai_tool_calls, {
             id = tc.id,
             type = "function",
@@ -807,7 +959,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
 
     for _, tc in ipairs(tool_calls) do
         local result_content
-        local args, decode_err = decode_tool_arguments(tc.arguments)
+        local args, decode_err = decode_tool_arguments(tc.arguments, run_ctx)
 
         if decode_err then
             result_content = decode_err
@@ -834,6 +986,15 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
             end
             if permission_tool then
                 target = normalize_permission_target(permission_tool, target)
+            end
+            local guard_error = guard_before_tool(tool_name, args, run_ctx)
+            if guard_error then
+                if run_ctx and type(run_ctx.stop_run) == "function" then
+                    run_ctx.stop_run(guard_error, current_msgs)
+                else
+                    logging.runtime_log("tool_guard", logging.compact(guard_error, 500))
+                end
+                return
             end
             local display_target = tool_display_target(tool_name, args, target)
             local display_command = tool_display_command(tool_name, args)

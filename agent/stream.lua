@@ -45,6 +45,40 @@ local function loggable_tool_arguments(name, raw_arguments)
     return "{\"command\":\"shell\"}"
 end
 
+local function minimax_model(provider)
+    local model = tostring(provider and provider.model or ""):lower()
+    return model:find("minimax", 1, true) ~= nil
+end
+
+local function strip_minimax_sentinel(text)
+    if type(text) ~= "string" then return "" end
+    local result = text:gsub("%]%<%]minimax%[%>%[</?[%w_%-]+>%]?", "")
+    for _, tag in ipairs({"tool_call", "invoke", "command"}) do
+        result = result:gsub("</?" .. tag .. ">", "")
+    end
+    return result
+end
+
+local function minimax_text_tool_calls(provider, text)
+    if not minimax_model(provider) or type(text) ~= "string" then return nil end
+    if not text:find("]%<%]minimax%[%>%[</command>") then return nil end
+
+    local command = text:match("⚙%s*shell%s*%$%s*(.-)%s*%]%<%]minimax%[%>%[</command>")
+    if not command or command == "" then
+        command = text:match("%$%s*(.-)%s*%]%<%]minimax%[%>%[</command>")
+    end
+    if not command or command == "" then return nil end
+
+    command = strip_minimax_sentinel(command):gsub("^%s+", ""):gsub("%s+$", "")
+    if command == "" or command == "shell" then return nil end
+
+    return {{
+        id = "minimax_text_shell_1",
+        name = "shell",
+        arguments = json.encode({command = command}),
+    }}
+end
+
 local think_tags = {"<think>", "</think>"}
 
 local function longest_tag_prefix_suffix(text, tags)
@@ -318,6 +352,14 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
 
             if tool_delta_chunks > 0 and #final_calls == 0 then
                 logging.runtime_log("stream", "tool_deltas_without_final_calls")
+            end
+            if #final_calls == 0 then
+                local fallback_calls = minimax_text_tool_calls(provider, accumulated_text)
+                if fallback_calls then
+                    final_calls = fallback_calls
+                    accumulated_text = ""
+                    logging.runtime_log("stream", "minimax_text_tool_call_fallback count=" .. tostring(#final_calls))
+                end
             end
 
             logging.runtime_log("stream", string.format(

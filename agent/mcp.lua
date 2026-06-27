@@ -537,10 +537,30 @@ function M.init()
   end
 
   local configs = servers_config()
+  local total = #configs
+  local done = 0
+
+  if agent and type(agent.set_activity) == "function" then
+    if total == 0 then
+      agent.set_activity("MCP: no servers configured")
+    else
+      agent.set_activity("Connecting to MCP (0/" .. total .. ")")
+    end
+  end
+
   for _, cfg in ipairs(configs) do
     if type(cfg) == "table" and cfg.name and (cfg.command or cfg.url) then
+      if agent and type(agent.set_activity) == "function" then
+        agent.set_activity("Connecting to MCP (" .. done .. "/" .. total ..
+                           ") — " .. tostring(cfg.name))
+      end
       init_server(cfg)
+      done = done + 1
     end
+  end
+
+  if agent and type(agent.set_activity) == "function" then
+    agent.set_activity(nil)
   end
 end
 

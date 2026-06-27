@@ -135,6 +135,17 @@ a new HTTP request with the expanded message history. Space cancellation can sto
 active curl streams, but it cannot interrupt synchronous Lua work inside tool
 processing until control returns to the main loop.
 
+Agent runs also carry an automatic guard to catch runaway loops before the next
+tool executes. By default the guard stops after 80 turns, 900 seconds, 80 total
+tool calls, or 3 consecutive identical non-shell tool calls. The shell-specific
+repeated-command guard is disabled by default because real coding workflows
+often repeat commands such as `pwd`, `git status`, or `make test`; it can be
+enabled with `agent.max_same_shell_command`. These values can be overridden with
+the `agent.max_*` fields in `config.lua`. When the guard trips, the runtime
+appends a visible `[stopped: ...]` marker, logs `tool_guard`, calls the run error
+callback, and finishes the run with `ok = false`. The guard runs before
+permission checks and before tool execution.
+
 Synchronous tool work runs on the UI thread. Any blocking C helper used by a
 tool must periodically yield through the TUI pump so the screen can repaint and
 safe navigation keys can be handled. It must not recursively call `http_poll()`
@@ -163,6 +174,11 @@ Tool handler errors are contained inside the Lua runtime. A failing handler must
 produce a `{role="tool"}` diagnostic result with plugin id, source, arguments,
 and traceback; log the failure; and mark the visible tool row with a compact
 error reason instead of throwing through the stream callback.
+
+Before decoding tool arguments, the runtime strips known provider-leaked tool
+markup such as Minimax/OpenRouter sentinel fragments from the raw JSON argument
+string and from decoded string values. This normalization is intentionally scoped
+to tool-call arguments so ordinary assistant text is not rewritten.
 
 Long-running built-in tools should log start/finish timing in the runtime log.
 The shell tool is the reference case: it waits for subprocess output with a

@@ -42,8 +42,15 @@ Manual slash commands bypass model-tool permission prompts because the user
 directly chose the command. Model-initiated shell tool calls still go through
 normal shell permissions.
 
+The agent loop has a separate runaway guard for repeated shell commands. By
+default this shell-specific guard is disabled because normal coding workflows
+often repeat commands such as `pwd`, `git status`, or `make test`. When
+`agent.max_same_shell_command` is set to a positive value, only consecutive
+identical shell commands count toward the threshold, and the over-limit command
+is stopped before permission checks and before spawning a process.
+
 ## Tests
 
 `make test-http-lua` covers manual command joining, timeout parsing, shell output
-redaction, curl header redaction, runtime log redaction, and hidden command
-status text.
+redaction, curl header redaction, runtime log redaction, hidden command status
+text, and repeated-command guard behavior.
