@@ -1,3 +1,4 @@
+#include "agent.h"
 #include "munit.h"
 #include <lauxlib.h>
 #include <lua.h>
@@ -158,7 +159,8 @@ static lua_State *new_provider_state(void) {
   lua_setfield(L, -2, "post_stream");
   lua_setglobal(L, "http");
 
-  lua_newtable(L);
+  agent_init(L);
+  lua_getglobal(L, "agent");
   lua_pushcfunction(L, l_agent_append);
   lua_setfield(L, -2, "append");
   lua_pushcfunction(L, l_noop);
@@ -528,6 +530,7 @@ static void call_agent_entry(lua_State *L) {
 
 static void send_tool_call(lua_State *L, const char *call_id,
                            const char *name, const char *arguments);
+static void send_text_done(lua_State *L, const char *text);
 
 static MunitResult test_request_enables_auto_tool_choice(
     const MunitParameter params[], void *data) {
@@ -1149,6 +1152,52 @@ static MunitResult test_provider_models_set_weak_persists_state_file(
   munit_assert_true(strstr(contents, "model = \"persisted/weak\"") != NULL);
 
   unlink(temp_state_path);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_compact_uses_weak_model_and_replaces_history(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  clear_messages();
+  set_capstan_provider_config(L);
+  set_capstan_config_weak_model(L, "openrouter", "weak/model");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  char *user = malloc(strlen("please implement compact") + 1);
+  char *assistant = malloc(strlen("I changed files") + 1);
+  munit_assert_not_null(user);
+  munit_assert_not_null(assistant);
+  strcpy(user, "please implement compact");
+  strcpy(assistant, "I changed files");
+  add_message(user, user, MSG_USER);
+  add_message(assistant, assistant, MSG_AGENT);
+
+  agent_compact(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  munit_assert_true(strstr(captured_body, "\"model\":\"weak/model\"") != NULL);
+  munit_assert_true(strstr(captured_body, "\"tools\"") == NULL);
+  munit_assert_true(strstr(captured_body, "operational handoff summary") != NULL);
+
+  send_text_done(L, "Goal: continue compact work");
+
+  Messages *msgs = get_messages();
+  munit_assert_size(msgs->size, ==, 1);
+  munit_assert_int(msgs->items[0]->role, ==, MSG_USER);
+  munit_assert_true(strstr(msgs->items[0]->text, "[context compacted]") != NULL);
+  munit_assert_true(strstr(msgs->items[0]->text,
+                           "Goal: continue compact work") != NULL);
+  munit_assert_true(strstr(msgs->items[0]->raw_text,
+                           "Previous conversation was compacted") != NULL);
+
+  clear_messages();
   reset_captures(L);
   lua_close(L);
   return MUNIT_OK;
@@ -2351,6 +2400,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_set_weak_persists_state_file",
      test_provider_models_set_weak_persists_state_file, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/compact_uses_weak_model_and_replaces_history",
+     test_compact_uses_weak_model_and_replaces_history, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_list_uses_api_response",
      test_provider_models_list_uses_api_response, NULL, NULL,

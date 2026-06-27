@@ -281,6 +281,83 @@ _G.capstan.agent = {
     end,
 }
 
+local compact_instruction = [[
+Compact the conversation above into an operational handoff summary for a coding agent.
+
+Preserve only information needed to continue the work correctly:
+- current user goal and latest instruction overrides;
+- repository/project constraints and conventions;
+- files inspected or changed, with important paths;
+- commands run and verification results;
+- decisions made and why;
+- pending TODOs, blockers, and risks;
+- user changes that must not be reverted.
+
+Do not write a conversational recap. Do not omit concrete file names, model/provider choices, test results, or unresolved work. Use concise Markdown.
+]]
+
+local function compact_run_options(messages)
+    local compact_messages = {}
+    for _, message in ipairs(messages or {}) do
+        table.insert(compact_messages, message)
+    end
+    table.insert(compact_messages, {
+        role = "user",
+        content = compact_instruction,
+    })
+
+    local weak = models.weak(M)
+    local opts = {
+        messages = compact_messages,
+        max_turns = 1,
+        tools = {},
+        update_status = false,
+        update_usage = false,
+    }
+    if weak then
+        opts.provider = weak.provider
+        opts.model = weak.model
+    end
+    return opts, weak
+end
+
+_G.compact_entry = function(messages)
+    if not messages or #messages == 0 then
+        popup.error("Compact", "No conversation to compact")
+        return
+    end
+
+    local chunks = {}
+    local opts, weak = compact_run_options(messages)
+    agent.set_activity(weak and "Compacting" or "Compacting")
+    agent.set_thinking(true)
+    M.run(opts, {
+        on_text = function(chunk)
+            table.insert(chunks, chunk)
+        end,
+        on_error = function(message)
+            agent.set_thinking(false)
+            agent.set_activity(nil)
+            popup.error("Compact", message)
+        end,
+        on_done = function(result)
+            agent.set_thinking(false)
+            agent.set_activity(nil)
+            if not result or result.ok == false then
+                local message = result and result.error or "compact failed"
+                popup.error("Compact", message)
+                return
+            end
+            local text = result.text or table.concat(chunks)
+            if text == "" then
+                popup.error("Compact", "Compact returned an empty summary")
+                return
+            end
+            agent.replace_compacted_context(text)
+        end,
+    })
+end
+
 -- Entry point called from C via agent_build_and_dispatch. Receives message
 -- history as a Lua table, runs the full agent cycle with UI-visible streaming.
 _G.agent_entry = function(messages)

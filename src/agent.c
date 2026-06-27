@@ -134,6 +134,32 @@ void free_message(Message *m) {
 
 void clear_messages(void) { da_free_each(&messages, free_message); }
 
+static int l_agent_replace_compacted_context(lua_State *L) {
+  const char *summary = luaL_checkstring(L, 1);
+  size_t raw_len = snprintf(NULL, 0,
+                            "Previous conversation was compacted. Continue "
+                            "from this state:\n\n%s",
+                            summary);
+  char *raw = malloc(raw_len + 1);
+  if (!raw)
+    return 0;
+  snprintf(raw, raw_len + 1,
+           "Previous conversation was compacted. Continue from this state:\n\n%s",
+           summary);
+
+  size_t ui_len = snprintf(NULL, 0, "[context compacted]\n\n%s", summary);
+  char *ui = malloc(ui_len + 1);
+  if (!ui) {
+    free(raw);
+    return 0;
+  }
+  snprintf(ui, ui_len + 1, "[context compacted]\n\n%s", summary);
+
+  clear_messages();
+  add_message(ui, raw, MSG_USER);
+  return 0;
+}
+
 static int l_agent_append(lua_State *L) {
   const char *text = luaL_checkstring(L, 1);
   MessageRole role = MSG_USER;
@@ -160,10 +186,12 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "set_activity");
   lua_pushcfunction(L, l_agent_set_usage);
   lua_setfield(L, -2, "set_usage");
+  lua_pushcfunction(L, l_agent_replace_compacted_context);
+  lua_setfield(L, -2, "replace_compacted_context");
   lua_setglobal(L, "agent");
 }
 
-void agent_build_and_dispatch(lua_State *L) {
+static void push_messages_table(lua_State *L) {
   Messages *msgs = get_messages();
   lua_newtable(L);
   int idx = 1;
@@ -177,6 +205,10 @@ void agent_build_and_dispatch(lua_State *L) {
     lua_setfield(L, -2, "content");
     lua_rawseti(L, -2, idx++);
   }
+}
+
+void agent_build_and_dispatch(lua_State *L) {
+  push_messages_table(L);
   lua_getglobal(L, "agent_entry");
   if (lua_isfunction(L, -1)) {
     lua_pushvalue(L, -2);
@@ -185,6 +217,33 @@ void agent_build_and_dispatch(lua_State *L) {
       lua_pop(L, 1);
     }
   } else {
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+}
+
+void agent_compact(lua_State *L) {
+  Messages *msgs = get_messages();
+  int non_empty = 0;
+  for (size_t i = 0; i < msgs->size; i++) {
+    if (msgs->items[i]->text && msgs->items[i]->text[0] != '\0')
+      non_empty++;
+  }
+  if (non_empty == 0) {
+    popup_show_message("Compact", "No conversation to compact", 0);
+    return;
+  }
+
+  push_messages_table(L);
+  lua_getglobal(L, "compact_entry");
+  if (lua_isfunction(L, -1)) {
+    lua_pushvalue(L, -2);
+    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+      popup_show_message("Compact Error", lua_tostring(L, -1), 1);
+      lua_pop(L, 1);
+    }
+  } else {
+    popup_show_message("Compact Error", "Compact runtime is not initialized", 1);
     lua_pop(L, 1);
   }
   lua_pop(L, 1);

@@ -162,6 +162,11 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
     return 1;
   }
 
+  if (strcmp(command, "/compact") == 0) {
+    agent_compact(L);
+    return 1;
+  }
+
   Plugin *p = plugin_registry_find(command);
   if (p) {
     if (plugin_has_autocomplete(p)) {
@@ -200,7 +205,7 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
 
   if (strcmp(command, "/") == 0) {
     int pc = plugin_registry_count();
-    int builtins = 2;
+    int builtins = 3;
     int command_plugins = 0;
     for (int i = 0; i < pc; i++) {
       Plugin *pp = plugin_registry_at(i);
@@ -214,6 +219,8 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
       items[0].value = my_strdup("/editor");
       items[1].text = my_strdup("/new  Clear messages and token usage");
       items[1].value = my_strdup("/new");
+      items[2].text = my_strdup("/compact  Compact conversation context");
+      items[2].value = my_strdup("/compact");
       int out = builtins;
       for (int i = 0; i < pc; i++) {
         Plugin *pp = plugin_registry_at(i);
@@ -252,7 +259,7 @@ int dispatch_tab(void) {
 
   if (strcmp(command, "/") == 0) {
     int pc = plugin_registry_count();
-    int builtins = 2;
+    int builtins = 3;
     int command_plugins = 0;
     for (int i = 0; i < pc; i++) {
       Plugin *pp = plugin_registry_at(i);
@@ -268,6 +275,8 @@ int dispatch_tab(void) {
     items[0].value = my_strdup("/editor");
     items[1].text = my_strdup("/new  Clear messages and token usage");
     items[1].value = my_strdup("/new");
+    items[2].text = my_strdup("/compact  Compact conversation context");
+    items[2].value = my_strdup("/compact");
     int out = builtins;
     for (int i = 0; i < pc; i++) {
       Plugin *pp = plugin_registry_at(i);
