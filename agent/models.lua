@@ -141,6 +141,30 @@ function M.list(runtime, provider_name)
     return normalize_models_response(decoded), nil
 end
 
+function M.list_all(runtime)
+    local items = {}
+    local provider_names = {}
+    for provider_name, _ in pairs(runtime.providers or {}) do
+        table.insert(provider_names, provider_name)
+    end
+    table.sort(provider_names)
+
+    for _, provider_name in ipairs(provider_names) do
+        local list = M.list(runtime, provider_name)
+        if list then
+            for _, model in ipairs(list) do
+                table.insert(items, {
+                    provider = provider_name,
+                    id = model.id,
+                    text = string.format("%s/%s", provider_name, model.text or model.id),
+                    context_limit = model.context_limit,
+                })
+            end
+        end
+    end
+    return items
+end
+
 function M.set(runtime, provider_name, model)
     provider_name = provider_name or runtime.provider
     if type(model) ~= "string" or model == "" then
@@ -152,11 +176,36 @@ function M.set(runtime, provider_name, model)
     end
     provider.model = model
     provider.context_limit = 0
+    runtime.provider = provider_name
     state.set_model(provider_name, model)
     if agent and agent.set_info then
         agent.set_info(provider_name, provider.model)
     end
     return true, nil
+end
+
+function M.set_weak(runtime, provider_name, model)
+    if type(model) ~= "string" or model == "" then
+        return false, "Missing model"
+    end
+    if type(provider_name) ~= "string" or provider_name == "" then
+        return false, "Missing provider"
+    end
+    if not runtime.providers[provider_name] then
+        return false, "Unknown provider: " .. tostring(provider_name)
+    end
+    runtime.weak_model = { provider = provider_name, model = model }
+    return state.set_weak_model(provider_name, model)
+end
+
+function M.weak(runtime)
+    local weak = runtime.weak_model
+    if type(weak) == "table" and
+       type(weak.provider) == "string" and weak.provider ~= "" and
+       type(weak.model) == "string" and weak.model ~= "" then
+        return { provider = weak.provider, model = weak.model }
+    end
+    return nil
 end
 
 function M.install_runtime_api(runtime)
@@ -170,8 +219,20 @@ function M.install_runtime_api(runtime)
         list = function()
             return M.list(runtime, runtime.provider)
         end,
+        list_all = function()
+            return M.list_all(runtime)
+        end,
         set = function(model)
             return M.set(runtime, runtime.provider, model)
+        end,
+        set_for = function(provider_name, model)
+            return M.set(runtime, provider_name, model)
+        end,
+        weak = function()
+            return M.weak(runtime)
+        end,
+        set_weak = function(provider_name, model)
+            return M.set_weak(runtime, provider_name, model)
         end,
     }
 end

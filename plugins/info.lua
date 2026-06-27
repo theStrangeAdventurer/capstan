@@ -32,6 +32,16 @@ local function current_model()
 	return "(unavailable)"
 end
 
+local function weak_model()
+	if capstan and capstan.models and capstan.models.weak then
+		local ok, value = pcall(capstan.models.weak)
+		if ok and type(value) == "table" and value.provider and value.model then
+			return tostring(value.provider) .. "/" .. tostring(value.model)
+		end
+	end
+	return "(unavailable)"
+end
+
 local function join_path(base, child)
 	if not base or base == "" or base == "(unavailable)" then
 		return "(unavailable)"
@@ -68,6 +78,7 @@ function plugin.handler(ctx)
 		"Agent",
 		"  provider: " .. current_provider(),
 		"  model: " .. current_model(),
+		"  weak model: " .. weak_model(),
 	}
 
 	return ctx:replace(table.concat(lines, "\n"))

@@ -28,15 +28,28 @@ The runtime exposes these helpers to Lua:
 `config.lua` is the editable source of defaults. Runtime choices should not
 rewrite `config.lua`.
 
-Currently persisted runtime state includes selected provider models:
+Currently persisted runtime state includes the active provider, selected
+provider models, and an optional weak model:
 
 ```lua
 return {
+  provider = "openrouter",
   models = {
     openrouter = "openai/gpt-4.1",
   },
+  weak_model = {
+    provider = "openrouter",
+    model = "minimax/minimax-m3",
+  },
 }
 ```
+
+Provider precedence is:
+
+1. environment provider override;
+2. persisted runtime state;
+3. `config.lua`;
+4. built-in provider default.
 
 Model precedence is:
 
@@ -44,6 +57,12 @@ Model precedence is:
 2. persisted runtime state;
 3. `config.lua`;
 4. built-in provider default.
+
+Weak model precedence is:
+
+1. persisted runtime state;
+2. `config.lua` `weak_model = { provider = "...", model = "..." }`;
+3. unavailable.
 
 Permission prompt choices made with `Always allow` are stored separately in:
 
@@ -58,4 +77,5 @@ the `permissions` key.
 ## Tests
 
 `make test` covers XDG state path selection. `make test-http-lua` covers
-persisting selected models and applying state during provider runtime startup.
+persisting selected primary and weak models and applying state during provider
+runtime startup.

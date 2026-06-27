@@ -12,7 +12,8 @@ The popup includes:
 - config directory and important config paths
 - skill directories and embedded skill sources loaded by the runtime
 - state directory, runtime state, permissions file, and current log file
-- active provider and model when the model runtime is available
+- active provider/model and weak provider/model when the model runtime is
+  available
 
 The empty conversation screen stays minimal and does not duplicate this
 diagnostic information.

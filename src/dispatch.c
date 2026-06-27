@@ -172,7 +172,11 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
       plugin_autocomplete_fetch(p, input, cmd_end, &items, &count,
                                 &title, &limit, &multi);
       if (count > 0) {
-        popup_open_with_plugin(items, count, title, limit, multi, p, cmd_end);
+        if (strcmp(command, "/models") == 0)
+          popup_open_filterable_with_plugin(items, count, title, limit, multi,
+                                            p, cmd_end);
+        else
+          popup_open_with_plugin(items, count, title, limit, multi, p, cmd_end);
         free(title);
         for (int i = 0; i < count; i++) {
           free(items[i].text);
@@ -298,8 +302,13 @@ int dispatch_tab(void) {
   int limit, multi;
   plugin_autocomplete_fetch(p, text, cmd_end, &items, &count,
                             &title, &limit, &multi);
-  if (count > 0)
-    popup_open_with_plugin(items, count, title, limit, multi, p, cmd_end);
+  if (count > 0) {
+    if (strcmp(command, "/models") == 0)
+      popup_open_filterable_with_plugin(items, count, title, limit, multi, p,
+                                        cmd_end);
+    else
+      popup_open_with_plugin(items, count, title, limit, multi, p, cmd_end);
+  }
   for (int i = 0; i < count; i++) {
     free(items[i].text);
     free(items[i].value);

@@ -28,12 +28,44 @@ function M.model_for(provider_name)
     return nil
 end
 
+function M.provider()
+    local st = state()
+    if type(st.provider) == "string" and st.provider ~= "" then
+        return st.provider
+    end
+    return nil
+end
+
+function M.weak_model()
+    local st = state()
+    local value = st.weak_model
+    if type(value) == "table" and
+       type(value.provider) == "string" and value.provider ~= "" and
+       type(value.model) == "string" and value.model ~= "" then
+        return { provider = value.provider, model = value.model }
+    end
+    return nil
+end
+
+function M.set_provider(provider_name)
+    local st = state()
+    st.provider = provider_name
+    return M.save()
+end
+
 function M.set_model(provider_name, model)
     local st = state()
     if type(st.models) ~= "table" then
         st.models = {}
     end
     st.models[provider_name] = model
+    st.provider = provider_name
+    return M.save()
+end
+
+function M.set_weak_model(provider_name, model)
+    local st = state()
+    st.weak_model = { provider = provider_name, model = model }
     return M.save()
 end
 
@@ -57,6 +89,9 @@ function M.save()
     end
 
     file:write("return {\n")
+    if type(st.provider) == "string" and st.provider ~= "" then
+        file:write("  provider = ", lua_quote(st.provider), ",\n")
+    end
     file:write("  models = {\n")
     if type(st.models) == "table" then
         local keys = {}
@@ -71,6 +106,14 @@ function M.save()
         end
     end
     file:write("  },\n")
+    if type(st.weak_model) == "table" and
+       type(st.weak_model.provider) == "string" and
+       type(st.weak_model.model) == "string" then
+        file:write("  weak_model = {\n")
+        file:write("    provider = ", lua_quote(st.weak_model.provider), ",\n")
+        file:write("    model = ", lua_quote(st.weak_model.model), ",\n")
+        file:write("  },\n")
+    end
     file:write("}\n")
     file:close()
     return true, nil
