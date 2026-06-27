@@ -284,6 +284,7 @@ Feature specs:
 - [Subagents](specs/subagents.md)
 - [Terminal runtime](specs/terminal-runtime.md)
 - [Workspace directory](specs/workspace-directory.md)
+- [MCP client](specs/mcp-client.md)
 
 ## Conventions
 

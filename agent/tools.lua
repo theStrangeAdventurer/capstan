@@ -1,6 +1,7 @@
 local json = require("vendor.rxi.json")
 local hooks = require("agent.hooks")
 local logging = require("agent.logging")
+local mcp_client = require("agent.mcp")
 
 local M = {}
 
@@ -73,6 +74,12 @@ function M.collect(opts)
     if capability_enabled("subagents") and not opts.disable_subagents then
         table.insert(tools, subagents_tool())
     end
+
+    -- MCP tools (collected from connected servers, empty if not configured)
+    for _, t in ipairs(mcp_client.collect_tools()) do
+        table.insert(tools, t)
+    end
+
     return tools
 end
 
@@ -442,11 +449,18 @@ local function run_subagents(args, run_ctx)
     return json.encode(output), true
 end
 
--- Dispatches a single tool call to its plugin handler (or subagents builtin).
+-- Dispatches a single tool call to its plugin handler (or subagents builtin or MCP server).
 local function call_plugin_tool(tool_name, args, run_ctx)
     if tool_name == "subagents" then
         return run_subagents(args, run_ctx)
     end
+
+    -- MCP tool routing: names like "mcp__browser__browser_navigate"
+    if mcp_client.is_mcp_tool(tool_name) then
+        local result, ok = mcp_client.call(tool_name, args)
+        return result, ok
+    end
+
     local p = find_plugin_tool(tool_name)
     if not p then
         if not _G.plugins then return "No plugins loaded", false end
@@ -490,6 +504,10 @@ local function call_plugin_tool(tool_name, args, run_ctx)
 end
 
 local function tool_permission_name(tool_name)
+    -- MCP tools use a shared "mcp" permission key
+    if mcp_client.is_mcp_tool(tool_name) then
+        return "mcp"
+    end
     local p = find_plugin_tool(tool_name)
     if p and p.tool and p.tool.permission and p.tool.permission ~= "" then
         return p.tool.permission
@@ -703,22 +721,26 @@ end
 
 local function tool_display_target(tool_name, args, target)
     if tool_name == "shell" then
-        local command = args and args.command
-        local summary = summarize_shell_command(command, nil)
-        if summary then return summary end
-        return collapse_home_path(target)
+        return "shell"
     end
     return target
 end
 
 local function tool_display_command(tool_name, args)
+    if tool_name == "shell" and args and type(args.command) == "string" and args.command ~= "" then
+        return redact_sensitive_text(args.command)
+    end
     return nil
 end
 
-local function tool_status_suffix(status, display_command)
+local function tool_status_prefix(tool_name, display_target, display_command)
     if display_command then
-        return status .. "\n  $ " .. display_command .. "\n\n"
+        return string.format("\n⚙ %s\n  $ %s ", tool_name, display_command)
     end
+    return string.format("\n⚙ %s: %s ", tool_name, display_target)
+end
+
+local function tool_status_suffix(status, _display_command)
     return status .. "\n\n"
 end
 
@@ -833,7 +855,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
             end
 
             if show_generic_status then
-                append_status(string.format("\n⚙ %s: %s ", tool_name, display_target))
+                append_status(tool_status_prefix(tool_name, display_target, display_command))
             end
 
             if perm == "deny" then
