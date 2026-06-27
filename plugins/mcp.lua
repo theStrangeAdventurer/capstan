@@ -20,6 +20,9 @@ local function format_servers()
     end
 
     local line = string.format("  %s %s — %s", status_icon, s.name, s.status)
+    if s.transport then
+      line = line .. string.format(" [%s]", s.transport)
+    end
     if s.tools_count > 0 then
       line = line .. string.format(" (%d tools)", s.tools_count)
     end

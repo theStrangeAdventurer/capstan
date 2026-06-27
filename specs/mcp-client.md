@@ -1,8 +1,8 @@
 # MCP Client
 
 Model Context Protocol (MCP) client support for capstan. Capstan acts as an
-MCP **client** that connects to external MCP **servers** over the stdio
-transport, discovers their tools, and exposes them to the LLM alongside
+MCP **client** that connects to external MCP **servers** over stdio or
+Streamable HTTP, discovers their tools, and exposes them to the LLM alongside
 built-in plugin tools.
 
 ## Behavior
@@ -15,9 +15,20 @@ built-in plugin tools.
   framing).
 - stderr from the server is captured for logging but not parsed.
 
+### Transport: Streamable HTTP
+
+- Capstan connects to a configured remote MCP endpoint with JSON-RPC over HTTP.
+- Requests are sent with `Content-Type: application/json`,
+  `Accept: application/json, text/event-stream`, and `MCP-Protocol-Version`.
+- If the server returns `Mcp-Session-Id`, Capstan stores it and sends it on
+  later requests to the same server.
+- HTTP responses may be JSON-RPC JSON or a finite `text/event-stream` response;
+  Capstan extracts the JSON-RPC response matching the original request id.
+
 ### Lifecycle
 
-1. **Spawn** — `fork+exec` the server command with configured args and env.
+1. **Connect** — either `fork+exec` the stdio server command or prepare the
+   remote HTTP endpoint.
 2. **Initialize** — send `initialize` request with `protocolVersion`,
    `clientInfo`, and `capabilities`. Wait for response.
 3. **Initialized notification** — send `notifications/initialized`.
@@ -44,7 +55,7 @@ LLM calls "mcp__browser__browser_navigate"
   → tools.lua:call_plugin_tool()
     → mcp.call("mcp__browser__browser_navigate", {url="..."})
       → fill missing arguments from tool schema defaults
-      → McpStdioClient: send tools/call request
+      → MCP transport: send tools/call request
       → read response (blocking with timeout)
       → extract content[1].text from result
     → return text to LLM as tool result
@@ -98,6 +109,16 @@ capstan.config = {
         env = {},                    -- optional extra env vars
         timeout = 30000,             -- per-call timeout in ms (default 30000)
       },
+      {
+        name = "tracker",
+        enabled = true,
+        transport = "http",          -- or "streamable_http"
+        url = "https://example.com/mcp",
+        headers = {
+          Authorization = "Bearer ...",
+        },
+        timeout = 30000,
+      },
     },
   },
 }
@@ -111,15 +132,17 @@ capstan.config = {
 | `mcp.servers` | table | `{}` | Array of server configs |
 | `servers[].name` | string | required | Unique server name (used in tool prefix) |
 | `servers[].enabled` | bool | `true` | Skip if false |
-| `servers[].transport` | string | `"stdio"` | Only `stdio` supported |
-| `servers[].command` | string | required | Executable to spawn |
+| `servers[].transport` | string | `"stdio"` | `stdio`, `http`, or `streamable_http` |
+| `servers[].command` | string | required for stdio | Executable to spawn |
 | `servers[].args` | table | `{}` | Arguments passed to command |
 | `servers[].env` | table | `{}` | Extra environment variables |
+| `servers[].url` | string | required for HTTP | Streamable HTTP MCP endpoint |
+| `servers[].headers` | table | `{}` | Extra HTTP headers, usually auth |
 | `servers[].timeout` | number | `30000` | Per-tool-call timeout in ms |
 
 ## Architecture
 
-### C layer: `src/mcp.c`
+### C layers: `src/mcp.c` and `src/http.c`
 
 Provides `mcp` Lua global with bidirectional subprocess management:
 
@@ -134,6 +157,16 @@ mcp.kill(handle)               → void
 Implementation: `fork()` + `pipe()` for stdin/stdout, `execvp()` in child.
 `recv()` uses `select()` with timeout, reads line-by-line. UI is pumped via
 `tui_pump_blocking()` during blocking reads.
+
+`src/http.c` also exposes:
+
+```lua
+http.post_response(url, body, headers, timeout_ms)
+  → {status=number, body=string, headers=table}
+```
+
+The headers table uses lowercase header names. MCP HTTP uses this to capture
+`mcp-session-id` and detect `content-type`.
 
 ### Lua layer: `agent/mcp.lua`
 
@@ -166,9 +199,10 @@ Slash command `/mcp`:
 ## Constraints
 
 - **Single-threaded**: tool calls block the main loop. The UI is pumped via
-  `tui_pump_blocking()` during blocking reads, so the spinner stays animated.
-- **No HTTP transport**: only stdio is supported. HTTP/SSE transport is a
-  future enhancement.
+	  `tui_pump_blocking()` during blocking reads, so the spinner stays animated.
+- **HTTP is request/response first**: finite JSON and finite SSE responses are
+  supported. A separate long-lived server-to-client stream can be added when a
+  connector requires it.
 - **No sampling**: MCP servers cannot request LLM completions from capstan
   (the `sampling` capability is not advertised).
 - **No resources/prompts**: only `tools` are supported. Resources and prompts

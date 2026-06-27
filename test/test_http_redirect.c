@@ -178,6 +178,62 @@ static pid_t start_stream_server(int *port_out) {
   return pid;
 }
 
+static pid_t start_post_response_server(int *port_out) {
+  int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_fd < 0)
+    return -1;
+
+  int yes = 1;
+  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  addr.sin_port = htons(0);
+  if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+    close(server_fd);
+    return -1;
+  }
+  if (listen(server_fd, 1) != 0) {
+    close(server_fd);
+    return -1;
+  }
+
+  socklen_t addr_len = sizeof(addr);
+  if (getsockname(server_fd, (struct sockaddr *)&addr, &addr_len) != 0) {
+    close(server_fd);
+    return -1;
+  }
+  *port_out = ntohs(addr.sin_port);
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(server_fd);
+    return -1;
+  }
+  if (pid == 0) {
+    int client = accept_one(server_fd);
+    if (client >= 0) {
+      read_request(client);
+      write_all(client,
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                "Mcp-Session-Id: session-123\r\n"
+                "Content-Length: 11\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "{\"ok\":true}");
+      close(client);
+    }
+    close(server_fd);
+    _exit(0);
+  }
+
+  close(server_fd);
+  return pid;
+}
+
 static int stream_capture_callback(lua_State *L) {
   int argc = lua_gettop(L);
   if (argc >= 1 && lua_isstring(L, 1))
@@ -288,12 +344,65 @@ static MunitResult test_post_stream_success_done_has_no_error_body(
   return MUNIT_OK;
 }
 
+static MunitResult test_post_response_returns_headers(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  int port = 0;
+  pid_t server_pid = start_post_response_server(&port);
+  if (server_pid < 0)
+    return MUNIT_SKIP;
+
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  http_init(L);
+
+  char url[256];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/rpc", port);
+
+  lua_getglobal(L, "http");
+  lua_getfield(L, -1, "post_response");
+  lua_pushstring(L, url);
+  lua_pushstring(L, "{}");
+  lua_newtable(L);
+  lua_pushinteger(L, 1000);
+  int rc = lua_pcall(L, 4, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getfield(L, -1, "status");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 200);
+  lua_pop(L, 1);
+
+  lua_getfield(L, -1, "body");
+  munit_assert_string_equal(lua_tostring(L, -1), "{\"ok\":true}");
+  lua_pop(L, 1);
+
+  lua_getfield(L, -1, "headers");
+  lua_getfield(L, -1, "mcp-session-id");
+  munit_assert_string_equal(lua_tostring(L, -1), "session-123");
+  lua_pop(L, 2);
+
+  lua_pop(L, 2);
+  http_cleanup();
+  lua_close(L);
+
+  int status = 0;
+  waitpid(server_pid, &status, 0);
+  munit_assert_true(WIFEXITED(status));
+  munit_assert_int(WEXITSTATUS(status), ==, 0);
+
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/get_follows_redirect", test_http_get_follows_redirect, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/post_stream_success_done_has_no_error_body",
      test_post_stream_success_done_has_no_error_body, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/post_response_returns_headers", test_post_response_returns_headers, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite http_redirect_suite = {"/http_redirect", tests, NULL, 1,
