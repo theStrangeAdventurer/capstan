@@ -25,6 +25,15 @@ static int l_path_join(lua_State *L) {
   return 1;
 }
 
+static int l_weak_model(lua_State *L) {
+  lua_newtable(L);
+  lua_pushstring(L, "openrouter");
+  lua_setfield(L, -2, "provider");
+  lua_pushstring(L, "minimax/minimax-m3");
+  lua_setfield(L, -2, "model");
+  return 1;
+}
+
 static void set_const_string(lua_State *L, const char *name,
                              const char *value) {
   lua_pushstring(L, value);
@@ -55,6 +64,8 @@ static lua_State *new_state(void) {
   lua_newtable(L);
   set_const_string(L, "current_provider", "deepseek");
   set_const_string(L, "current_model", "deepseek-chat");
+  lua_pushcfunction(L, l_weak_model);
+  lua_setfield(L, -2, "weak");
   lua_setfield(L, -2, "models");
   lua_setglobal(L, "capstan");
 
@@ -122,6 +133,7 @@ static MunitResult test_info_includes_runtime_paths(const MunitParameter params[
   munit_assert_true(strstr(ui, "current log: /home/me/.local/state/capstan/logs/2026-06-27.log") != NULL);
   munit_assert_true(strstr(ui, "provider: deepseek") != NULL);
   munit_assert_true(strstr(ui, "model: deepseek-chat") != NULL);
+  munit_assert_true(strstr(ui, "weak model: openrouter/minimax/minimax-m3") != NULL);
 
   lua_close(L);
   return MUNIT_OK;

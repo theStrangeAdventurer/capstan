@@ -16,7 +16,7 @@ end
 function M.build()
     local config = (_G.capstan and _G.capstan.config) or {}
     local runtime = {
-        provider = os.getenv("AI_PROVIDER") or config.provider or "deepseek",
+        provider = os.getenv("AI_PROVIDER") or state.provider() or config.provider or "deepseek",
         providers = {
             deepseek = {
                 api_key = os.getenv("DEEPSEEK_API_KEY"),
@@ -49,6 +49,21 @@ function M.build()
         if saved_model then
             provider.model = saved_model
         end
+    end
+
+    local configured_weak = config.weak_model
+    if type(configured_weak) == "table" and
+       type(configured_weak.provider) == "string" and configured_weak.provider ~= "" and
+       type(configured_weak.model) == "string" and configured_weak.model ~= "" then
+        runtime.weak_model = {
+            provider = configured_weak.provider,
+            model = configured_weak.model,
+        }
+    end
+
+    local saved_weak = state.weak_model()
+    if saved_weak then
+        runtime.weak_model = saved_weak
     end
 
     if os.getenv("DEEPSEEK_API_KEY") and runtime.providers.deepseek then

@@ -17,8 +17,20 @@ function M.list_models(provider_name)
     return models.list(M, provider_name or M.provider)
 end
 
+function M.list_all_models()
+    return models.list_all(M)
+end
+
 function M.set_model(provider_name, model)
     return models.set(M, provider_name or M.provider, model)
+end
+
+function M.set_weak_model(provider_name, model)
+    return models.set_weak(M, provider_name, model)
+end
+
+function M.get_weak_model()
+    return models.weak(M)
 end
 
 -- Returns a chunk callback for http.post_stream that feeds SSE events into on_result.

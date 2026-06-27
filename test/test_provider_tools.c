@@ -369,6 +369,67 @@ static void set_capstan_state_model(lua_State *L, const char *provider,
   lua_setglobal(L, "capstan");
 }
 
+static void set_capstan_state_provider(lua_State *L, const char *provider) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_getfield(L, -1, "state");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_pushstring(L, provider);
+  lua_setfield(L, -2, "provider");
+  lua_setfield(L, -2, "state");
+  lua_setglobal(L, "capstan");
+}
+
+static void set_capstan_config_weak_model(lua_State *L, const char *provider,
+                                          const char *model) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_getfield(L, -1, "config");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_newtable(L);
+  lua_pushstring(L, provider);
+  lua_setfield(L, -2, "provider");
+  lua_pushstring(L, model);
+  lua_setfield(L, -2, "model");
+  lua_setfield(L, -2, "weak_model");
+  lua_setfield(L, -2, "config");
+  lua_setglobal(L, "capstan");
+}
+
+static void set_capstan_state_weak_model(lua_State *L, const char *provider,
+                                         const char *model) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_getfield(L, -1, "state");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_newtable(L);
+  lua_pushstring(L, provider);
+  lua_setfield(L, -2, "provider");
+  lua_pushstring(L, model);
+  lua_setfield(L, -2, "model");
+  lua_setfield(L, -2, "weak_model");
+  lua_setfield(L, -2, "state");
+  lua_setglobal(L, "capstan");
+}
+
 static void set_config_hook(lua_State *L, const char *hook_lua) {
   char script[4096];
   snprintf(script, sizeof(script),
@@ -866,6 +927,52 @@ static MunitResult test_provider_state_model_overrides_config_model(
   return MUNIT_OK;
 }
 
+static MunitResult test_provider_state_provider_overrides_config_provider(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  set_capstan_state_provider(L, "deepseek");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+
+  munit_assert_true(strstr(captured_body, "\"model\":\"deepseek-chat\"") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_provider_env_provider_overrides_state_provider(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  setenv("AI_PROVIDER", "openrouter", 1);
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  set_capstan_state_provider(L, "deepseek");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+
+  munit_assert_true(strstr(captured_body, "\"model\":\"config/model\"") != NULL);
+
+  unsetenv("AI_PROVIDER");
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_provider_env_model_overrides_state_model(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -885,6 +992,43 @@ static MunitResult test_provider_env_model_overrides_state_model(
   munit_assert_true(strstr(captured_body, "\"model\":\"env/model\"") != NULL);
 
   unsetenv("OPENROUTER_MODEL");
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_provider_models_set_for_persists_active_provider(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "models");
+  lua_getfield(L, -1, "set_for");
+  lua_pushstring(L, "deepseek");
+  lua_pushstring(L, "deepseek-chat");
+  rc = lua_pcall(L, 2, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_true(lua_toboolean(L, -2));
+
+  lua_getfield(L, -3, "current_provider");
+  rc = lua_pcall(L, 0, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_string_equal(lua_tostring(L, -1), "deepseek");
+
+  char contents[768];
+  read_file(temp_state_path, contents, sizeof(contents));
+  munit_assert_true(strstr(contents, "provider = \"deepseek\"") != NULL);
+  munit_assert_true(strstr(contents, "[\"deepseek\"] = \"deepseek-chat\"") != NULL);
+
+  unlink(temp_state_path);
   reset_captures(L);
   lua_close(L);
   return MUNIT_OK;
@@ -913,6 +1057,96 @@ static MunitResult test_provider_models_set_persists_state_file(
   char contents[512];
   read_file(temp_state_path, contents, sizeof(contents));
   munit_assert_true(strstr(contents, "[\"openrouter\"] = \"persisted/model\"") != NULL);
+
+  unlink(temp_state_path);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_provider_config_sets_weak_model(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  set_capstan_config_weak_model(L, "deepseek", "deepseek-chat");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "models");
+  lua_getfield(L, -1, "weak");
+  rc = lua_pcall(L, 0, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getfield(L, -1, "provider");
+  lua_getfield(L, -2, "model");
+  munit_assert_string_equal(lua_tostring(L, -2), "deepseek");
+  munit_assert_string_equal(lua_tostring(L, -1), "deepseek-chat");
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_provider_state_weak_model_overrides_config(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  set_capstan_config_weak_model(L, "deepseek", "config/weak");
+  set_capstan_state_weak_model(L, "openrouter", "state/weak");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "models");
+  lua_getfield(L, -1, "weak");
+  rc = lua_pcall(L, 0, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getfield(L, -1, "provider");
+  lua_getfield(L, -2, "model");
+  munit_assert_string_equal(lua_tostring(L, -2), "openrouter");
+  munit_assert_string_equal(lua_tostring(L, -1), "state/weak");
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_provider_models_set_weak_persists_state_file(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "models");
+  lua_getfield(L, -1, "set_weak");
+  lua_pushstring(L, "openrouter");
+  lua_pushstring(L, "persisted/weak");
+  rc = lua_pcall(L, 2, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_true(lua_toboolean(L, -2));
+
+  char contents[768];
+  read_file(temp_state_path, contents, sizeof(contents));
+  munit_assert_true(strstr(contents, "weak_model = {") != NULL);
+  munit_assert_true(strstr(contents, "provider = \"openrouter\"") != NULL);
+  munit_assert_true(strstr(contents, "model = \"persisted/weak\"") != NULL);
 
   unlink(temp_state_path);
   reset_captures(L);
@@ -2094,11 +2328,29 @@ static MunitTest tests[] = {
     {"/provider_state_model_overrides_config_model",
      test_provider_state_model_overrides_config_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_state_provider_overrides_config_provider",
+     test_provider_state_provider_overrides_config_provider, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_env_provider_overrides_state_provider",
+     test_provider_env_provider_overrides_state_provider, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_env_model_overrides_state_model",
      test_provider_env_model_overrides_state_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_models_set_for_persists_active_provider",
+     test_provider_models_set_for_persists_active_provider, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_set_persists_state_file",
      test_provider_models_set_persists_state_file, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_config_sets_weak_model",
+     test_provider_config_sets_weak_model, NULL, NULL, MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/provider_state_weak_model_overrides_config",
+     test_provider_state_weak_model_overrides_config, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_models_set_weak_persists_state_file",
+     test_provider_models_set_weak_persists_state_file, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_list_uses_api_response",
      test_provider_models_list_uses_api_response, NULL, NULL,
