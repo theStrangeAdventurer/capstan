@@ -23,6 +23,7 @@ extern BufferedPluginResults g_buffered_results;
 
 void init_tui(void);
 void render_all(void);
+void tui_pump_blocking(void);
 void buffer_plugin_result(const char *label, char *ui_result, char *raw_result);
 void buffered_results_clear(void);
 

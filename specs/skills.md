@@ -8,8 +8,8 @@ directories at startup.
 - Project skills are read from `.agents/skills/` under the active workspace.
 - Shared home skills are read from `~/.agents/skills/`.
 - User skills are read from `~/.config/capstan/skills/`.
-- Gated built-in skills may be materialized under the Capstan state directory
-  and loaded as source `builtin`.
+- Gated built-in skills are loaded from embedded binary assets and listed as
+  source `builtin` with `embedded:` skill paths.
 - A skill must be a directory containing `SKILL.md`, such as
   `skills/code-review/SKILL.md`.
 - Direct markdown files like `skills/debug.md` are ignored.
@@ -35,10 +35,8 @@ directories at startup.
 - The `self-improvement` built-in skill is disabled unless
   `capabilities.self_improvement = true` is present in
   `~/.config/capstan/config.lua`.
-  When enabled, Capstan writes its embedded `SKILL.md` to
-  `$XDG_STATE_HOME/capstan/builtin-skills/self-improvement/SKILL.md`, or
-  `~/.local/state/capstan/builtin-skills/self-improvement/SKILL.md` when
-  `XDG_STATE_HOME` is unset, then includes that directory in the skill scan.
+  When enabled, Capstan reads its embedded `SKILL.md` from memory as
+  `embedded:skills/self-improvement/SKILL.md` and includes it in the skill scan.
 - The lightweight skill index is appended to the Lua `system_prompt` global, so
   every provider can discover available skills without loading their full text.
 - `/skills` shows the loaded skill list, including each skill source,
@@ -60,7 +58,7 @@ that value.
 
 - Skills are loaded once at process startup. Editing a skill requires restarting
   Capstan before the updated instructions are sent to the model.
-- Built-in gated skill files are regenerated at startup from embedded assets.
+- Built-in gated skill files are exposed from embedded assets at startup.
   User or project skills can still override them by defining the same skill
   directory name.
 - Full `SKILL.md` contents and resource files are not included until the agent

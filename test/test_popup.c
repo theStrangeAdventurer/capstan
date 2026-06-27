@@ -40,6 +40,20 @@ static MunitResult test_close_data_inactive(const MunitParameter p[], void *d) {
   return MUNIT_OK;
 }
 
+static MunitResult test_error_message_auto_closes(const MunitParameter p[],
+                                                  void *d) {
+  (void)p; (void)d;
+  popup_show_message("Error", "boom", 1);
+  munit_assert_int(popup_is_message_active(), ==, 1);
+  munit_assert_int(g_msgpopup.auto_close_after_sec, >, 0);
+  popup_close_message();
+
+  popup_show_message("Info", "ok", 0);
+  munit_assert_int(g_msgpopup.auto_close_after_sec, ==, 0);
+  popup_close_message();
+  return MUNIT_OK;
+}
+
 static MunitResult test_j_down(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(5, 0);
@@ -509,6 +523,7 @@ static MunitResult test_scrollbar_clamps_scroll_and_thumb(
 static MunitTest tests[] = {
   {"/open_active", test_open_active, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/close_data_inactive", test_close_data_inactive, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/error_message_auto_closes", test_error_message_auto_closes, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/j_down", test_j_down, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/k_up", test_k_up, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/j_clamp_bottom", test_j_clamp_bottom, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

@@ -1,5 +1,6 @@
 #include "app_config.h"
 #include "dyn_arr.h"
+#include "log.h"
 #include "permit.h"
 #include "tui.h"
 #include "utils.h"
@@ -13,12 +14,19 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 extern lua_State *L;
 
 static PermEntries g_entries = {0};
+
+static long long now_ms(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
+}
 
 const char *permit_config_dir(void) {
   static char path[512];
@@ -255,8 +263,6 @@ void permit_init(lua_State *L) {
   lua_setglobal(L, "permit");
 }
 
-static void sigalrm_handler(int sig) { (void)sig; }
-
 static int l_tools_shell(lua_State *L) {
   const char *command = luaL_checkstring(L, 1);
   int timeout = PERMIT_DEFAULT_SHELL_TIMEOUT;
@@ -321,79 +327,111 @@ static int l_tools_shell(lua_State *L) {
   close(out_pipe[1]);
   close(err_pipe[1]);
 
-  struct sigaction sa_old, sa_new;
-  sa_new.sa_handler = sigalrm_handler;
-  sigemptyset(&sa_new.sa_mask);
-  sa_new.sa_flags = 0;
-  sigaction(SIGALRM, &sa_new, &sa_old);
-  alarm(timeout);
-
   char *out_buf = malloc(PERMIT_MAX_STDOUT + 1);
   char *err_buf = malloc(PERMIT_MAX_STDERR + 1);
   size_t out_len = 0, err_len = 0;
   int timed_out = 0;
+  int out_open = 1;
+  int err_open = 1;
+  long long started_ms = now_ms();
+  long long timeout_ms = (long long)timeout * 1000LL;
 
   out_buf[0] = '\0';
   err_buf[0] = '\0';
 
-  while (1) {
+  char log_msg[512];
+  snprintf(log_msg, sizeof(log_msg), "shell start timeout=%d command=%s",
+           timeout, command);
+  log_event("tool", log_msg);
+
+  while (out_open || err_open) {
+    long long elapsed_ms = now_ms() - started_ms;
+    if (!timed_out && elapsed_ms >= timeout_ms) {
+      timed_out = 1;
+      kill(pid, SIGKILL);
+    }
+
     fd_set rfds;
     FD_ZERO(&rfds);
-    FD_SET(out_pipe[0], &rfds);
-    FD_SET(err_pipe[0], &rfds);
-    int maxfd = out_pipe[0] > err_pipe[0] ? out_pipe[0] : err_pipe[0];
+    int maxfd = -1;
+    if (out_open) {
+      FD_SET(out_pipe[0], &rfds);
+      if (out_pipe[0] > maxfd)
+        maxfd = out_pipe[0];
+    }
+    if (err_open) {
+      FD_SET(err_pipe[0], &rfds);
+      if (err_pipe[0] > maxfd)
+        maxfd = err_pipe[0];
+    }
 
     struct timeval tv = {.tv_sec = 0, .tv_usec = 100000};
     int n = select(maxfd + 1, &rfds, NULL, NULL, &tv);
     if (n < 0) {
-      if (errno == EINTR) {
-        timed_out = 1;
-        kill(pid, SIGKILL);
-        break;
-      }
+      if (errno == EINTR)
+        continue;
       break;
     }
-    if (n == 0)
+    if (n == 0) {
+      tui_pump_blocking();
       continue;
+    }
 
-    if (FD_ISSET(out_pipe[0], &rfds)) {
+    if (out_open && FD_ISSET(out_pipe[0], &rfds)) {
       char tmp[4096];
       ssize_t r = read(out_pipe[0], tmp, sizeof(tmp));
-      if (r <= 0)
-        FD_CLR(out_pipe[0], &rfds);
-      else if (out_len + r < PERMIT_MAX_STDOUT) {
+      if (r <= 0) {
+        out_open = 0;
+      } else if (out_len + r < PERMIT_MAX_STDOUT) {
         memcpy(out_buf + out_len, tmp, r);
         out_len += r;
         out_buf[out_len] = '\0';
       }
     }
 
-    if (FD_ISSET(err_pipe[0], &rfds)) {
+    if (err_open && FD_ISSET(err_pipe[0], &rfds)) {
       char tmp[4096];
       ssize_t r = read(err_pipe[0], tmp, sizeof(tmp));
-      if (r <= 0)
-        FD_CLR(err_pipe[0], &rfds);
-      else if (err_len + r < PERMIT_MAX_STDERR) {
+      if (r <= 0) {
+        err_open = 0;
+      } else if (err_len + r < PERMIT_MAX_STDERR) {
         memcpy(err_buf + err_len, tmp, r);
         err_len += r;
         err_buf[err_len] = '\0';
       }
     }
 
-    if (!FD_ISSET(out_pipe[0], &rfds) && !FD_ISSET(err_pipe[0], &rfds))
-      break;
+    tui_pump_blocking();
   }
-
-  alarm(0);
-  sigaction(SIGALRM, &sa_old, NULL);
 
   int status = 0;
   int exit_code = -1;
-  waitpid(pid, &status, 0);
+  while (1) {
+    pid_t waited = waitpid(pid, &status, WNOHANG);
+    if (waited == pid)
+      break;
+    if (waited < 0) {
+      if (errno == EINTR)
+        continue;
+      break;
+    }
+
+    long long elapsed_ms = now_ms() - started_ms;
+    if (!timed_out && elapsed_ms >= timeout_ms) {
+      timed_out = 1;
+      kill(pid, SIGKILL);
+    }
+    tui_pump_blocking();
+    usleep(100000);
+  }
+
   if (WIFEXITED(status))
     exit_code = WEXITSTATUS(status);
-  else if (WIFSIGNALED(status))
+  else if (WIFSIGNALED(status)) {
+    if (WTERMSIG(status) == SIGALRM)
+      timed_out = 1;
     exit_code = 128 + WTERMSIG(status);
+  }
 
   close(out_pipe[0]);
   close(err_pipe[0]);
@@ -410,6 +448,11 @@ static int l_tools_shell(lua_State *L) {
 
   free(out_buf);
   free(err_buf);
+
+  snprintf(log_msg, sizeof(log_msg),
+           "shell done exit=%d timed_out=%d duration_ms=%lld command=%s",
+           exit_code, timed_out, now_ms() - started_ms, command);
+  log_event("tool", log_msg);
 
   return 1;
 }

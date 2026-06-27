@@ -22,9 +22,9 @@ function M.set_model(provider_name, model)
 end
 
 -- Returns a chunk callback for http.post_stream that feeds SSE events into on_result.
-function M.stream_callback(provider_name, on_result, initial_prompt_tokens)
+function M.stream_callback(provider_name, on_result, initial_prompt_tokens, run_opts)
     local provider = M.providers[provider_name]
-    return stream.stream(provider, on_result, initial_prompt_tokens)
+    return stream.stream(provider, on_result, initial_prompt_tokens, run_opts)
 end
 
 models.install_runtime_api(M)
@@ -255,7 +255,7 @@ function M.run(opts, callbacks)
         ))
 
         http.post_stream(endpoint, body, headers,
-            stream.stream(active, on_result, prompt_estimate))
+            stream.stream(active, on_result, prompt_estimate, opts))
     end
 
     continue_agent_cycle(msgs, combined_tools)

@@ -143,6 +143,11 @@ void popup_render(void) {
 void popup_render_message(void) {
   if (!g_msgpopup.active)
     return;
+  if (g_msgpopup.auto_close_after_sec > 0 &&
+      time(NULL) - g_msgpopup.created_at >= g_msgpopup.auto_close_after_sec) {
+    popup_close_message();
+    return;
+  }
 
   int rows, cols;
   getmaxyx(stdscr, rows, cols);

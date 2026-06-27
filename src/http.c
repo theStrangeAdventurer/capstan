@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "http.h"
@@ -38,6 +39,9 @@ static int stream_count = 0;
 static int stream_cap = 0;
 static int g_sync_active = 0;
 static int g_headless = 0;
+static long long g_last_wait_render_ms = 0;
+
+#define HTTP_WAIT_RENDER_INTERVAL_MS 16
 
 int http_is_loading(void) {
   return g_sync_active || stream_count > 0;
@@ -45,12 +49,23 @@ int http_is_loading(void) {
 
 void http_set_headless(int headless) { g_headless = headless; }
 
+static long long http_now_ms(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
+}
+
 static void http_wait_frame(void) {
   if (g_headless) {
     usleep(10000);
   } else {
     napms(10);
-    render_all();
+    long long now = http_now_ms();
+    if (g_last_wait_render_ms == 0 ||
+        now - g_last_wait_render_ms >= HTTP_WAIT_RENDER_INTERVAL_MS) {
+      render_all();
+      g_last_wait_render_ms = now;
+    }
   }
 }
 
@@ -342,6 +357,12 @@ static int l_http_poll(lua_State *L) {
   return 1;
 }
 
+static int l_http_wait_frame(lua_State *L) {
+  (void)L;
+  http_wait_frame();
+  return 0;
+}
+
 static int l_http_is_loading(lua_State *L) {
   lua_pushboolean(L, http_is_loading());
   return 1;
@@ -493,6 +514,9 @@ void http_init(lua_State *L) {
 
   lua_pushcfunction(L, l_http_poll);
   lua_setfield(L, -2, "poll");
+
+  lua_pushcfunction(L, l_http_wait_frame);
+  lua_setfield(L, -2, "wait_frame");
 
   lua_pushcfunction(L, l_http_is_loading);
   lua_setfield(L, -2, "is_loading");

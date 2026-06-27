@@ -23,7 +23,7 @@ typedef struct {
 } Messages;
 
 void add_message(char *text, char *raw_text, MessageRole role);
-void append_to_last_message(char *text, MessageRole role);
+void append_to_last_message(const char *text, MessageRole role);
 Messages *get_messages(void);
 void clear_messages(void);
 void agent_init(lua_State *L);
@@ -35,5 +35,7 @@ void agent_reset_usage(void);
 
 void agent_set_thinking(int active);
 int  agent_is_thinking(void);
+void agent_set_activity(const char *label);
+const char *agent_activity(void);
 
 #endif

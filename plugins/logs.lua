@@ -24,10 +24,10 @@ local function log_path()
 		return capstan.log_path()
 	end
 	if capstan and capstan.state_path then
-		return capstan.state_path("events.log")
+		return capstan.state_path("logs/" .. os.date("%Y-%m-%d") .. ".log")
 	end
 	local home = os.getenv("HOME") or "."
-	return home .. "/.local/state/capstan/events.log"
+	return home .. "/.local/state/capstan/logs/" .. os.date("%Y-%m-%d") .. ".log"
 end
 
 local function read_lines(path)

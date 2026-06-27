@@ -100,14 +100,15 @@ controlled by `subagents.max_concurrent`, `subagents.max_tasks`,
 `subagents.max_turns`, and `subagents.max_turns_cap`. Tools executed by
 subagents still use their own permission checks.
 
-Pattern matching supports exact target matches and glob-style `*` anywhere in
-the pattern:
+Pattern matching supports exact target matches, glob-style `*` for any sequence,
+and `?` for one character anywhere in the pattern:
 
 ```lua
 { tool = "fetch", pattern = "*", allow = true }
 { tool = "fetch", pattern = "https://api.openai.com/*", allow = true }
 { tool = "fetch", pattern = "https://*.example.com/*", allow = true }
 { tool = "fetch", pattern = "*://api.example.com/*", allow = true }
+{ tool = "file_read", pattern = "~/notes/file?.md", allow = true }
 ```
 
 A pattern ending in `/*` also matches the directory or URL root before the slash,
@@ -131,6 +132,12 @@ and `..` segments are collapsed.
 `src/permit.c` owns rule loading, saving, matching, config-rule import, and the
 Lua-facing `permit` table. `src/tui.c` renders the blocking permit confirmation
 popup.
+
+The permit popup itself is a synchronous modal prompt. After the user confirms a
+tool call, any C-side blocking work must periodically pump the TUI instead of
+waiting in a raw blocking syscall. In particular, `tools.shell` keeps rendering
+and handles safe scroll/resize-style input while waiting for the subprocess to
+finish, then logs the shell duration and timeout status.
 
 Plugin metadata may declare a `permission` field to share permission policy
 between related tools. For example, `file_edit` uses `file_write` permission

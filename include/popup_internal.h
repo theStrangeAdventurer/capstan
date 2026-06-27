@@ -3,6 +3,7 @@
 
 #include "popup.h"
 #include <stddef.h>
+#include <time.h>
 
 #define POPUP_KEY_UP    0403
 #define POPUP_KEY_DOWN  0402
@@ -46,6 +47,8 @@ typedef struct {
   void *win;
   int last_rows;
   int last_cols;
+  time_t created_at;
+  int auto_close_after_sec;
 } MsgPopup;
 
 extern MsgPopup g_msgpopup;

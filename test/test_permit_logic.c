@@ -76,6 +76,16 @@ static MunitResult test_pattern_glob_matches_fetch_domains(
   return MUNIT_OK;
 }
 
+static MunitResult test_pattern_question_matches_one_character(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  munit_assert_int(permit_pattern_match("file?.txt", "file1.txt"), ==, 1);
+  munit_assert_int(permit_pattern_match("file?.txt", "file12.txt"), ==, 0);
+  munit_assert_int(permit_pattern_match("file?.txt", "file.txt"), ==, 0);
+  return MUNIT_OK;
+}
+
 static MunitResult test_pattern_tilde_expands_home(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -188,6 +198,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/pattern_glob_matches_fetch_domains",
      test_pattern_glob_matches_fetch_domains, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/pattern_question_matches_one_character",
+     test_pattern_question_matches_one_character, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/pattern_tilde_expands_home", test_pattern_tilde_expands_home, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

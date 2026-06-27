@@ -5,6 +5,46 @@ local tokens = require("agent.tokens")
 
 local M = {}
 
+local function unquote_shell_token(token)
+    if type(token) ~= "string" then return "" end
+    if #token >= 2 then
+        local first = token:sub(1, 1)
+        local last = token:sub(-1)
+        if (first == "'" and last == "'") or (first == '"' and last == '"') then
+            return token:sub(2, -2)
+        end
+    end
+    return token
+end
+
+local function summarize_shell_command(command)
+    if type(command) ~= "string" or command == "" then return "shell" end
+    local first = unquote_shell_token(command:match("^%s*([^%s]+)") or "")
+    if first:match("/?curl$") or first == "curl" then
+        for token in command:gmatch("%S+") do
+            local clean_token = unquote_shell_token(token)
+            if clean_token:match("^https?://") then
+                return "curl " .. clean_token
+            end
+        end
+        return "curl"
+    end
+    return "shell"
+end
+
+local function loggable_tool_arguments(name, raw_arguments)
+    if name ~= "shell" then return raw_arguments end
+    local ok, decoded = pcall(json.decode, raw_arguments or "{}")
+    if ok and type(decoded) == "table" then
+        local copy = {}
+        for k, v in pairs(decoded) do copy[k] = v end
+        copy.command = summarize_shell_command(decoded.command)
+        local encoded_ok, encoded = pcall(json.encode, copy)
+        if encoded_ok then return encoded end
+    end
+    return "{\"command\":\"shell\"}"
+end
+
 -- Parses one raw SSE event line into a typed chunk: text, reasoning, tool_calls, or usage.
 function M.parse_sse_event(raw_event)
     local data = raw_event:match("^data: (.*)")
@@ -42,7 +82,7 @@ end
 -- callback argument to http.post_stream. Accumulates text, reasoning, and
 -- tool_call fragments across partial SSE chunks, calls on_result for each
 -- text delta and a final result with collected tool_calls on stream end.
-function M.stream(provider, on_result, initial_prompt_tokens)
+function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local buf = ""
     local accumulated_text = ""
     local accumulated_reasoning = ""
@@ -143,7 +183,9 @@ function M.stream(provider, on_result, initial_prompt_tokens)
             if body and body ~= "" then
                 msg = err .. "\n" .. body
             end
-            popup.error("API Error", msg)
+            if not provider.suppress_agent_state then
+                popup.error("API Error", msg)
+            end
             on_result({ok = false, error = msg, text = ""}, true)
             return
         end
@@ -160,6 +202,7 @@ function M.stream(provider, on_result, initial_prompt_tokens)
                         provider = provider,
                         raw_event = buf,
                         chunk = chunk,
+                        run = run_opts or {},
                     })
                     chunk = ctx.chunk
                 end
@@ -175,7 +218,7 @@ function M.stream(provider, on_result, initial_prompt_tokens)
                         "tool_final id=%s name=%s args=%s",
                         logging.compact(tc.id, 80),
                         logging.compact(tc.name, 80),
-                        logging.compact(tc.arguments, 260)
+                        logging.compact(loggable_tool_arguments(tc.name, tc.arguments), 260)
                     ))
                 else
                     logging.runtime_log("stream", string.format(
@@ -229,10 +272,11 @@ function M.stream(provider, on_result, initial_prompt_tokens)
             local chunk = parse_sse_event(event)
             if chunk and has_chunk_hooks then
                 local ctx = hooks.run("on_stream_chunk", {
-                    provider = provider,
-                    raw_event = event,
-                    chunk = chunk,
-                })
+                        provider = provider,
+                        raw_event = event,
+                        chunk = chunk,
+                        run = run_opts or {},
+                    })
                 chunk = ctx.chunk
             end
             if chunk then process_chunk(chunk) end

@@ -34,7 +34,6 @@ local function subagents_tool()
                             properties = {
                                 id = {type = "string"},
                                 task = {type = "string"},
-                                provider = {type = "string"},
                                 model = {type = "string"},
                                 max_turns = {type = "integer"},
                                 tools = {
@@ -134,6 +133,20 @@ local function subagent_max_tasks()
     return math.max(1, math.floor(subagent_config_number("max_tasks", 8)))
 end
 
+local function subagent_max_attempts()
+    return math.max(1, math.floor(subagent_config_number("max_attempts", 3)))
+end
+
+local function subagent_retryable_error(message)
+    local text = tostring(message or "")
+    local status = text:match("HTTP%s+(%d+)")
+    if status then
+        local code = tonumber(status)
+        return code == 408 or code == 429 or code == 500 or code == 502 or code == 503 or code == 504
+    end
+    return text:match("^Connection error:") ~= nil
+end
+
 local function now_ms()
     if _G.capstan and type(_G.capstan.now_ms) == "function" then
         return _G.capstan.now_ms()
@@ -186,6 +199,37 @@ local function make_subagent_result(task, index, started_at)
     }
 end
 
+local function provider_model_set(run_ctx, provider_name)
+    local runtime = run_ctx and run_ctx.runtime
+    if not runtime or type(runtime.list_models) ~= "function" then
+        logging.runtime_log("subagents", "models unavailable: runtime has no list_models")
+        return nil
+    end
+    local models, err = runtime.list_models(provider_name)
+    if not models then
+        logging.runtime_log("subagents", "models unavailable provider=" .. tostring(provider_name) .. " error=" .. tostring(err))
+        return nil
+    end
+    local set = {}
+    for _, model in ipairs(models) do
+        if type(model) == "table" and type(model.id) == "string" and model.id ~= "" then
+            set[model.id] = true
+        end
+    end
+    return set
+end
+
+local function subagent_model(task, model_set, default_model)
+    local requested = type(task.model) == "string" and task.model or ""
+    if requested ~= "" and model_set and model_set[requested] then
+        return requested
+    end
+    if requested ~= "" then
+        logging.runtime_log("subagents", "ignored unavailable model=" .. requested)
+    end
+    return default_model
+end
+
 local function run_subagents(args, run_ctx)
     if type(args.tasks) ~= "table" or #args.tasks == 0 then
         return "Subagents failed: missing tasks", false
@@ -204,6 +248,10 @@ local function run_subagents(args, run_ctx)
     end
 
     local max_concurrent = math.min(subagent_max_concurrent(args), #args.tasks)
+    local provider_name = (run_ctx and run_ctx.provider_name) or nil
+    local active_provider = run_ctx and run_ctx.provider or nil
+    local default_model = active_provider and active_provider.model or nil
+    local model_set = provider_model_set(run_ctx, provider_name)
     local parent_scope = run_ctx and run_ctx.permission_scope or nil
     local permission_scope = {
         allowed_tools = {},
@@ -215,6 +263,7 @@ local function run_subagents(args, run_ctx)
     local active = 0
     local next_index = 1
     local completed = 0
+    local max_attempts = subagent_max_attempts()
 
     agent.append(string.format("\n⚙ subagents: running %d/%d\n", max_concurrent, #args.tasks), "agent")
     for _, task in ipairs(args.tasks) do
@@ -222,11 +271,13 @@ local function run_subagents(args, run_ctx)
     end
     agent.append("\n", "agent")
 
-    local function start_one(index)
+    local function start_one(index, attempt)
+        attempt = attempt or 1
         local task = args.tasks[index]
         local started_at = now_ms()
         local state = {
             index = index,
+            attempt = attempt,
             task = task,
             done = false,
             text_chunks = {},
@@ -234,12 +285,46 @@ local function run_subagents(args, run_ctx)
         }
         states[index] = state
         results[index] = state.result
+        state.result.attempts = attempt
         active = active + 1
+        local selected_model = subagent_model(task, model_set, default_model)
+
+        logging.runtime_log("subagents", string.format(
+            "start index=%d id=%s attempt=%d/%d provider=%s model=%s prompt=%s",
+            index,
+            state.result.id,
+            attempt,
+            max_attempts,
+            tostring(provider_name or ""),
+            tostring(selected_model or ""),
+            logging.compact(task.task, 300)
+        ))
+
+        local function retry_if_allowed(error_message)
+            if attempt >= max_attempts or not subagent_retryable_error(error_message) then
+                return false
+            end
+            logging.runtime_log("subagents", string.format(
+                "retry index=%d id=%s next_attempt=%d/%d error=%s",
+                index,
+                state.result.id,
+                attempt + 1,
+                max_attempts,
+                logging.compact(error_message or "", 240)
+            ))
+            agent.append(string.format("  %s - retry %d/%d after %s\n",
+                state.result.id,
+                attempt + 1,
+                max_attempts,
+                tostring(error_message or "error")), "agent")
+            start_one(index, attempt + 1)
+            return true
+        end
 
         local ok, err = _G.capstan.agent.run({
             messages = {{role = "user", content = task.task}},
-            provider = task.provider,
-            model = task.model,
+            provider = provider_name,
+            model = selected_model,
             max_turns = subagent_max_turns(task),
             depth = depth + 1,
             tools = filter_tools(run_ctx and run_ctx.tools, task.tools),
@@ -255,13 +340,18 @@ local function run_subagents(args, run_ctx)
                 state.result.error = tostring(message or "")
             end,
             on_done = function(result)
-                state.done = true
                 active = active - 1
-                completed = completed + 1
                 local finished_at = now_ms()
-                state.result.ok = result and result.ok ~= false
+                local result_ok = result and result.ok ~= false
+                local error_message = result and result.error or state.result.error or ""
+                if not result_ok and retry_if_allowed(error_message) then
+                    return
+                end
+                state.done = true
+                completed = completed + 1
+                state.result.ok = result_ok
                 state.result.text = result and result.text or table.concat(state.text_chunks)
-                state.result.error = result and result.error or state.result.error or ""
+                state.result.error = error_message
                 state.result.turns = result and result.turns or 0
                 state.result.started_at = result and result.started_at or started_at
                 state.result.finished_at = result and result.finished_at or finished_at
@@ -269,9 +359,12 @@ local function run_subagents(args, run_ctx)
             end,
         })
         if not ok then
+            active = active - 1
+            if retry_if_allowed(err) then
+                return
+            end
             if not state.done then
                 state.done = true
-                active = active - 1
                 completed = completed + 1
             end
             state.result.ok = false
@@ -286,15 +379,29 @@ local function run_subagents(args, run_ctx)
         next_index = next_index + 1
     end
 
+    if agent and type(agent.set_activity) == "function" then
+        agent.set_activity("Delegating")
+    end
+
     while completed < #args.tasks do
         if not http or type(http.poll) ~= "function" then
+            if agent and type(agent.set_activity) == "function" then
+                agent.set_activity(nil)
+            end
             return "Subagents failed: http.poll is not available", false
         end
         http.poll()
+        if type(http.wait_frame) == "function" then
+            http.wait_frame()
+        end
         while next_index <= #args.tasks and active < max_concurrent do
             start_one(next_index)
             next_index = next_index + 1
         end
+    end
+
+    if agent and type(agent.set_activity) == "function" then
+        agent.set_activity(nil)
     end
 
     local done_count = 0
@@ -328,6 +435,7 @@ local function run_subagents(args, run_ctx)
         args = args,
         ok = output.ok,
         result = output,
+        run = run_ctx or {},
     })
     output = hook_ctx.result or output
 
@@ -475,18 +583,136 @@ local function collapse_home_path(path)
     return path
 end
 
+local sensitive_headers = {
+    authorization = true,
+    ["proxy-authorization"] = true,
+    cookie = true,
+    ["set-cookie"] = true,
+    ["x-api-key"] = true,
+    ["api-key"] = true,
+    ["openai-api-key"] = true,
+    ["anthropic-api-key"] = true,
+    ["x-goog-api-key"] = true,
+    ["x-subscription-key"] = true,
+    ["subscription-key"] = true,
+}
+
+local sensitive_keys = {
+    "api_key", "api-key", "apikey",
+    "access_token", "access-token",
+    "refresh_token", "refresh-token",
+    "id_token", "id-token",
+    "auth_token", "auth-token",
+    "bearer_token", "bearer-token",
+    "token", "secret", "password", "passwd",
+}
+
+local function redact_sensitive_key_values(text)
+    local result = tostring(text or "")
+    for _, key in ipairs(sensitive_keys) do
+        result = result:gsub("([\"']?%f[%w]" .. key .. "%f[^%w][\"']?%s*[:=]%s*[\"']?)[^\"'%s,;}]+", "%1[REDACTED]")
+        result = result:gsub("([\"']?%f[%w]" .. key:upper() .. "%f[^%w][\"']?%s*[:=]%s*[\"']?)[^\"'%s,;}]+", "%1[REDACTED]")
+    end
+    return result
+end
+
+local function redact_sensitive_header_line(line)
+    local curl_prefix, name = line:match("^(%s*[<>]%s*)([%w%-]+)%s*:")
+    if curl_prefix and name then
+        return curl_prefix .. name .. ": [REDACTED]"
+    end
+    name = line:match("^%s*([%w%-]+)%s*:")
+    if name and sensitive_headers[name:lower()] then
+        return line:gsub("(:%s*).*$", "%1[REDACTED]")
+    end
+    return line
+end
+
+local function redact_sensitive_text(text)
+    if type(text) ~= "string" or text == "" then return text end
+    local result = text
+    result = result:gsub("([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]%s*:%s*[Bb][Ee][Aa][Rr][Ee][Rr]%s+)[^%s\"']+", "%1[REDACTED]")
+    result = result:gsub("([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]%s*:%s*)[^\r\n\"']+", "%1[REDACTED]")
+    result = redact_sensitive_key_values(result)
+
+    local lines = {}
+    local had_line = false
+    for line, newline in result:gmatch("([^\r\n]*)(\r?\n?)") do
+        if line == "" and newline == "" then break end
+        had_line = true
+        table.insert(lines, redact_sensitive_header_line(line) .. newline)
+    end
+    if had_line then result = table.concat(lines) end
+    return result
+end
+
+local function unquote_shell_token(token)
+    if type(token) ~= "string" then return "" end
+    if #token >= 2 then
+        local first = token:sub(1, 1)
+        local last = token:sub(-1)
+        if (first == "'" and last == "'") or (first == '"' and last == '"') then
+            return token:sub(2, -2)
+        end
+    end
+    return token
+end
+
+local function summarize_shell_command(command, fallback)
+    if type(command) ~= "string" or command == "" then
+        return fallback or "shell"
+    end
+
+    local first = command:match("^%s*([^%s]+)")
+    first = unquote_shell_token(first or "")
+    if first:match("/?curl$") or first == "curl" then
+        local url = nil
+        for token in command:gmatch("%S+") do
+            local clean_token = unquote_shell_token(token)
+            if clean_token:match("^https?://") then
+                url = clean_token
+                break
+            end
+        end
+        return url and ("curl " .. url) or "curl"
+    end
+
+    return fallback
+end
+
+local function redacted_tool_arguments(tool_name, raw_arguments)
+    if tool_name ~= "shell" then return raw_arguments end
+    local ok, decoded = pcall(json.decode, raw_arguments or "{}")
+    if ok and type(decoded) == "table" then
+        local copy = {}
+        for k, v in pairs(decoded) do copy[k] = v end
+        copy.command = summarize_shell_command(decoded.command, "shell")
+        local encoded_ok, encoded = pcall(json.encode, copy)
+        if encoded_ok then return encoded end
+    end
+    return redact_sensitive_text(raw_arguments or "")
+end
+
+local function call_plugin_tool_redacted(tool_name, args, run_ctx)
+    local result, ok = call_plugin_tool(tool_name, args, run_ctx)
+    if tool_name == "shell" then
+        result = redact_sensitive_text(result)
+    end
+    return result, ok
+end
+
 local function tool_display_target(tool_name, args, target)
     if tool_name == "shell" then
+        local command = args and args.command
+        local summary = summarize_shell_command(command, nil)
+        if summary then return summary end
         return collapse_home_path(target)
     end
     return target
 end
 
 local function tool_display_command(tool_name, args)
-    if tool_name ~= "shell" then return nil end
-    local command = args and args.command
-    if type(command) ~= "string" or command == "" then return nil end
-    return command
+    return nil
 end
 
 local function tool_status_suffix(status, display_command)
@@ -544,7 +770,10 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         table.insert(openai_tool_calls, {
             id = tc.id,
             type = "function",
-            ["function"] = {name = tc.name, arguments = tc.arguments}
+            ["function"] = {
+                name = tc.name,
+                arguments = redacted_tool_arguments(tc.name, tc.arguments),
+            }
         })
     end
 
@@ -572,6 +801,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 permission_tool = permission_tool,
                 raw_arguments = tc.arguments,
                 tool_call = tc,
+                run = run_ctx or {},
             })
             local tool_name = call_ctx.name or tc.name
             args = call_ctx.args or args
@@ -586,10 +816,12 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
             local display_target = tool_display_target(tool_name, args, target)
             local display_command = tool_display_command(tool_name, args)
             local show_generic_status = tool_name ~= "subagents"
-            if display_command then
-                logging.runtime_log("tool", string.format("call name=%s target=%s display=%s command=%s args=%s", tool_name, target, display_target, logging.compact(display_command, 240), tc.arguments or ""))
+            if tool_name == "shell" then
+                logging.runtime_log("tool", string.format("call name=%s target=%s display=%s args=%s", tool_name, target, display_target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
+            elseif display_command then
+                logging.runtime_log("tool", string.format("call name=%s target=%s display=%s command=%s args=%s", tool_name, target, display_target, logging.compact(redact_sensitive_text(display_command), 240), redacted_tool_arguments(tool_name, tc.arguments) or ""))
             else
-                logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, tc.arguments or ""))
+                logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
             end
             local permission_scope = run_ctx and run_ctx.permission_scope or nil
             local perm = "allow"
@@ -623,7 +855,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                         if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
                     else
                         local tool_ok
-                        result_content, tool_ok = call_plugin_tool(tool_name, args, run_ctx)
+                        result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx)
                         if tool_ok then
                             logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
                             if show_generic_status then append_status(tool_status_suffix("— done", display_command)) end
@@ -635,7 +867,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 end
             else
                 local tool_ok
-                result_content, tool_ok = call_plugin_tool(tool_name, args, run_ctx)
+                result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx)
                 if tool_ok then
                     logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
                     if show_generic_status then append_status(tool_status_suffix("— done", display_command)) end
@@ -651,6 +883,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 permission_tool = permission_tool,
                 result = result_content,
                 tool_call = tc,
+                run = run_ctx or {},
             })
             result_content = result_ctx.result
         end

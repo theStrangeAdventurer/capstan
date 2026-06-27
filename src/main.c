@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -33,6 +34,15 @@ typedef struct {
 } HeadlessRun;
 
 static HeadlessRun g_headless_run = {0};
+
+#define ACTIVE_RENDER_INTERVAL_MS 16
+#define IDLE_RENDER_INTERVAL_MS 50
+
+static long long main_now_ms(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
+}
 
 static void print_help(void) {
   printf("Usage:\n");
@@ -308,7 +318,7 @@ static int run_embedded_self_test(void) {
   load_embedded_plugins();
 
   const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
-                            "/logs", "/skills", "/models"};
+                            "/logs", "/skills", "/models", "/info"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);
@@ -429,14 +439,22 @@ int main(int argc, char *argv[]) {
   input_init();
   scroll_reset();
   render_all();
+  long long last_idle_render_ms = main_now_ms();
 
   while (1) {
     int ch = getch();
     if (ch == ERR) {
-      http_poll(L);
+      int had_http_events = http_poll(L);
       plugins_watch_poll();
       napms(10);
-      render_all();
+      long long now = main_now_ms();
+      int active = http_is_loading() || agent_is_thinking() || had_http_events;
+      long long interval =
+          active ? ACTIVE_RENDER_INTERVAL_MS : IDLE_RENDER_INTERVAL_MS;
+      if (now - last_idle_render_ms >= interval) {
+        render_all();
+        last_idle_render_ms = now;
+      }
       continue;
     }
 
@@ -579,12 +597,6 @@ int main(int argc, char *argv[]) {
     }
 
     if (ch == '\n' || ch == '\r') {
-      int next = getch();
-      if (next != ERR) {
-        ungetch(next);
-        render_all();
-        continue;
-      }
       dispatch_submit();
       render_all();
       continue;
