@@ -259,6 +259,7 @@ Feature specs:
 - [Agent control](specs/agent-control.md)
 - [Agent loop](specs/agent-loop.md)
 - [CLI run mode](specs/cli-run.md)
+- [Compact command](specs/compact-command.md)
 - [Config](specs/config.md)
 - [Embedded runtime assets](specs/embedded-runtime-assets.md)
 - [Focus modes](specs/focus-modes.md)
