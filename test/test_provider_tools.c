@@ -442,6 +442,35 @@ static void set_config_hook(lua_State *L, const char *hook_lua) {
   munit_assert_int(rc, ==, LUA_OK);
 }
 
+static void set_agent_config_number(lua_State *L, const char *field,
+                                    int value) {
+  char script[512];
+  snprintf(script, sizeof(script),
+           "capstan.config = capstan.config or {} "
+           "capstan.config.agent = capstan.config.agent or {} "
+           "capstan.config.agent.%s = %d",
+           field, value);
+  int rc = luaL_dostring(L, script);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void install_mock_now_ms(lua_State *L, int value) {
+  char script[256];
+  snprintf(script, sizeof(script),
+           "MOCK_NOW_MS = %d "
+           "capstan.now_ms = function() return MOCK_NOW_MS end",
+           value);
+  int rc = luaL_dostring(L, script);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void set_mock_now_ms(lua_State *L, int value) {
+  char script[64];
+  snprintf(script, sizeof(script), "MOCK_NOW_MS = %d", value);
+  int rc = luaL_dostring(L, script);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
 static void load_real_file_edit_plugin(lua_State *L) {
   int rc = luaL_dofile(L, "plugins/file_edit.lua");
   munit_assert_int(rc, ==, LUA_OK);
@@ -1771,6 +1800,264 @@ static void send_text_done(lua_State *L, const char *text) {
   munit_assert_int(rc, ==, LUA_OK);
 }
 
+static MunitResult test_tool_guard_stops_repeated_shell_command(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_agent_config_number(L, "max_same_shell_command", 2);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_shell_guard_1", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+  send_tool_call(L, "call_shell_guard_2", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+  int permit_calls_before_stop = permit_check_calls;
+  send_tool_call(L, "call_shell_guard_3", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, permit_calls_before_stop);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "[stopped: repeated shell command") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[tool_guard] repeated shell command") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_guard_allows_repeated_shell_by_default(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_shell_default_1", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+  send_tool_call(L, "call_shell_default_2", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+  send_tool_call(L, "call_shell_default_3", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 3);
+  munit_assert_true(strstr(captured_agent_appends, "[stopped:") == NULL);
+  munit_assert_true(strstr(captured_logs, "[tool_guard]") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_guard_shell_repeat_resets_after_other_tool(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_agent_config_number(L, "max_same_shell_command", 1);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_shell_reset_1", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+  send_tool_call(L, "call_fetch_reset", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+  send_tool_call(L, "call_shell_reset_2", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 3);
+  munit_assert_true(strstr(captured_agent_appends, "[stopped:") == NULL);
+  munit_assert_true(strstr(captured_logs, "[tool_guard]") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_guard_generic_repeat_resets_after_shell_tool(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_agent_config_number(L, "max_same_tool_call", 1);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_fetch_generic_reset_1", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+  send_tool_call(L, "call_shell_generic_reset", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+  send_tool_call(L, "call_fetch_generic_reset_2", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 3);
+  munit_assert_true(strstr(captured_agent_appends, "[stopped:") == NULL);
+  munit_assert_true(strstr(captured_logs, "[tool_guard]") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_guard_stops_repeated_tool_call(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_agent_config_number(L, "max_same_tool_call", 1);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_fetch_guard_1", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+  int permit_calls_before_stop = permit_check_calls;
+  send_tool_call(L, "call_fetch_guard_2", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, permit_calls_before_stop);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "[stopped: repeated tool call fetch") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[tool_guard] repeated tool call fetch") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_guard_stops_total_tool_call_budget(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_agent_config_number(L, "max_tool_calls", 1);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_fetch_budget_1", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+  int permit_calls_before_stop = permit_check_calls;
+  send_tool_call(L, "call_file_budget_2", "file_read",
+                 "{\\\"path\\\":\\\"README\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, permit_calls_before_stop);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "[stopped: too many tool calls") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[tool_guard] too many tool calls") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_guard_stops_duration_before_tool_execution(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_agent_config_number(L, "max_duration_sec", 1);
+  install_mock_now_ms(L, 0);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  set_mock_now_ms(L, 2000);
+  send_tool_call(L, "call_fetch_duration", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 0);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "[stopped: agent run exceeded 1s") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[tool_guard] agent run exceeded 1s") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_guard_stops_max_turns_before_continuation_request(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_agent_config_number(L, "max_turns", 1);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_fetch_max_turns", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "[stopped: max agent turns exceeded: 1") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[tool_guard] max agent turns exceeded: 1") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_shell_always_allow_uses_workspace_target(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -1824,6 +2111,8 @@ static MunitResult test_shell_tool_redacts_command_before_continuation(
   reset_captures(L);
   set_permit_decision("allow");
   set_capstan_workdir(L, "/repo/project");
+  set_capstan_provider_config(L);
+  set_capstan_state_model(L, "openrouter", "minimax/minimax-m3");
 
   int rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
@@ -1839,6 +2128,99 @@ static MunitResult test_shell_tool_redacts_command_before_continuation(
   munit_assert_true(strstr(captured_body, "secret-token") == NULL);
   munit_assert_true(strstr(captured_body, "curl") != NULL);
   munit_assert_true(strstr(captured_body, "https://example.test") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_arguments_strip_minimax_markup(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, "/repo/project");
+  set_capstan_provider_config(L);
+  set_capstan_state_model(L, "openrouter", "minimax/minimax-m3");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_minimax_markup", "shell",
+                 "{\\\"command\\\":\\\"pwd ]<]minimax[>[</command>]\\\"}]<]minimax[>[</tool_call>");
+
+  munit_assert_string_equal(captured_permit_tool, "shell");
+  munit_assert_string_equal(captured_permit_target, "/repo/project");
+  munit_assert_true(strstr(captured_body, "shell llm: pwd") != NULL);
+  munit_assert_true(strstr(captured_body, "]<]minimax") == NULL);
+  munit_assert_true(strstr(captured_body, "</command>") == NULL);
+  munit_assert_true(strstr(captured_body, "</tool_call>") == NULL);
+  munit_assert_true(strstr(captured_agent_appends, "]<]minimax") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_minimax_text_tool_call_fallback_runs_shell(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, "/repo/project");
+  set_capstan_provider_config(L);
+  set_capstan_state_model(L, "openrouter", "minimax/minimax-m3");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_text_done(L, "$ echo ok ]<]minimax[>[</command>]<]minimax[>[</tool_call>");
+
+  munit_assert_string_equal(captured_permit_tool, "shell");
+  munit_assert_string_equal(captured_permit_target, "/repo/project");
+  munit_assert_true(strstr(captured_body, "shell llm: echo ok") != NULL);
+  munit_assert_true(strstr(captured_logs, "minimax_text_tool_call_fallback") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_arguments_keep_markup_for_non_minimax_model(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, "/repo/project");
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_non_minimax_markup", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}]<]minimax[>[</tool_call>");
+
+  munit_assert_string_equal(captured_permit_tool, "");
+  munit_assert_true(strstr(captured_agent_appends, "invalid arguments") != NULL);
+  munit_assert_true(strstr(captured_body, "Invalid JSON arguments") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -2437,11 +2819,44 @@ static MunitTest tests[] = {
     {"/tool_handler_error_returns_tool_result",
      test_tool_handler_error_returns_tool_result, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_stops_repeated_shell_command",
+     test_tool_guard_stops_repeated_shell_command, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_allows_repeated_shell_by_default",
+     test_tool_guard_allows_repeated_shell_by_default, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_shell_repeat_resets_after_other_tool",
+     test_tool_guard_shell_repeat_resets_after_other_tool, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_generic_repeat_resets_after_shell_tool",
+     test_tool_guard_generic_repeat_resets_after_shell_tool, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_stops_repeated_tool_call",
+     test_tool_guard_stops_repeated_tool_call, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_stops_total_tool_call_budget",
+     test_tool_guard_stops_total_tool_call_budget, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_stops_duration_before_tool_execution",
+     test_tool_guard_stops_duration_before_tool_execution, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_stops_max_turns_before_continuation_request",
+     test_tool_guard_stops_max_turns_before_continuation_request, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_always_allow_uses_workspace_target",
      test_shell_always_allow_uses_workspace_target, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_tool_redacts_command_before_continuation",
      test_shell_tool_redacts_command_before_continuation, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_arguments_strip_minimax_markup",
+     test_tool_arguments_strip_minimax_markup, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/minimax_text_tool_call_fallback_runs_shell",
+     test_minimax_text_tool_call_fallback_runs_shell, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_arguments_keep_markup_for_non_minimax_model",
+     test_tool_arguments_keep_markup_for_non_minimax_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_run_permission_skips_later_same_tool_prompts",
      test_tool_run_permission_skips_later_same_tool_prompts, NULL, NULL,

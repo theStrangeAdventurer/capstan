@@ -23,6 +23,13 @@ return {
   capabilities = {
     self_improvement = false,
   },
+  agent = {
+    max_turns = 80,
+    max_duration_sec = 900,
+    max_tool_calls = 80,
+    max_same_tool_call = 3,
+    max_same_shell_command = 0,
+  },
   subagents = {
     max_concurrent = 3,
     max_tasks = 8,
@@ -60,6 +67,11 @@ return {
   [self-improvement skill](self-improvement.md). It is disabled by default.
 - `capabilities.subagents = false` hides the model tool described in
   [Subagents](subagents.md). It is enabled by default when the field is omitted.
+- `agent.max_turns`, `max_duration_sec`, `max_tool_calls`,
+  `max_same_tool_call`, and `max_same_shell_command` limit runaway agent/tool
+  loops. Missing values fall back to the built-in defaults.
+  `max_same_shell_command = 0` disables the shell-specific repeated-command
+  guard.
 - `subagents.max_concurrent`, `max_tasks`, `max_turns`, and `max_turns_cap`
   limit delegated internal runs.
 

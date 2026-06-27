@@ -483,15 +483,37 @@ void render_all(void) {
       wattroff(stdscr, COLOR_PAIR(6));
 
     const char *activity = agent_activity();
-    const char *label = activity && activity[0] ? activity
-                       : thinking          ? "Thinking"
-                                           : "Answering";
+    const char *label = NULL;
     int label_attr = A_ITALIC | A_DIM;
-    if (thinking)
-      label_attr |= COLOR_PAIR(6);
-    wattrset(stdscr, label_attr);
-    mvaddstr(rows - 1, MARGIN + 1 + 5, label);
-    wattrset(stdscr, A_NORMAL);
+
+    if (activity && activity[0])
+      label = activity;
+    else if (thinking)
+      label = "Thinking";
+    else {
+      /* No explicit activity label. If no user prompt has been submitted yet
+         (empty history), don't say "Answering" — we're likely in startup
+         (e.g. MCP init). Show a neutral label or nothing. */
+      Messages *msgs = get_messages();
+      int has_user = 0;
+      for (size_t i = 0; i < msgs->size; i++) {
+        if (msgs->items[i]->role == MSG_USER &&
+            msgs->items[i]->text && msgs->items[i]->text[0]) {
+          has_user = 1;
+          break;
+        }
+      }
+      if (has_user)
+        label = "Answering";
+    }
+
+    if (label) {
+      if (thinking)
+        label_attr |= COLOR_PAIR(6);
+      wattrset(stdscr, label_attr);
+      mvaddstr(rows - 1, MARGIN + 1 + 5, label);
+      wattrset(stdscr, A_NORMAL);
+    }
   }
 
   spinner_tick++;

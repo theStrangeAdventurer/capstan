@@ -54,6 +54,8 @@ logs/2026-06-27.2.log
 - [Permission](permissions.md) checks and prompt decisions
 - Tool completion and result size
 - Tool handler failures, including compact diagnostic text
+- Tool guard stops under the `tool_guard` category when the runtime aborts a
+  runaway loop before the next tool execution
 - Plugin load/reload failures from `~/.config/capstan/plugins/*.lua`
 - Continuation after tool results
 - [Hook](hooks.md) errors with stage and source

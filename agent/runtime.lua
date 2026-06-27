@@ -80,6 +80,49 @@ local function prepare_provider(opts)
     return active, provider_name
 end
 
+local function config_table(name)
+    if not _G.capstan or type(_G.capstan.config) ~= "table" then return nil end
+    local value = _G.capstan.config[name]
+    return type(value) == "table" and value or nil
+end
+
+local function agent_config_number(field, default)
+    local configured = config_table("agent")
+    local value = configured and tonumber(configured[field]) or nil
+    if not value or value <= 0 then return default end
+    return value
+end
+
+local function now_ms()
+    if _G.capstan and type(_G.capstan.now_ms) == "function" then
+        return _G.capstan.now_ms()
+    end
+    return os.clock() * 1000
+end
+
+local function make_guard(started_at)
+    return {
+        started_at = started_at,
+        max_duration_ms = agent_config_number("max_duration_sec", 900) * 1000,
+        max_tool_calls = agent_config_number("max_tool_calls", 80),
+        max_same_tool_call = agent_config_number("max_same_tool_call", 3),
+        max_same_shell_command = agent_config_number("max_same_shell_command", 0),
+        total_tool_calls = 0,
+        signatures = {},
+        last_tool_signature = nil,
+        same_tool_count = 0,
+        last_shell_signature = nil,
+        same_shell_count = 0,
+    }
+end
+
+local function guard_duration_error(guard)
+    if guard.max_duration_ms > 0 and now_ms() - guard.started_at > guard.max_duration_ms then
+        return string.format("agent run exceeded %ds", math.floor(guard.max_duration_ms / 1000))
+    end
+    return nil
+end
+
 -- Full agent run: build messages, stream LLM response, handle tool_calls recursively.
 function M.run(opts, callbacks)
     opts = opts or {}
@@ -137,10 +180,11 @@ function M.run(opts, callbacks)
         ))
     end
 
-    local max_turns = tonumber(opts.max_turns) or 200
-    if max_turns <= 0 then max_turns = 200 end
+    local max_turns = tonumber(opts.max_turns) or agent_config_number("max_turns", 80)
+    if max_turns <= 0 then max_turns = agent_config_number("max_turns", 80) end
     local turns = 0
-    local started_at = capstan and capstan.now_ms and capstan.now_ms() or (os.clock() * 1000)
+    local started_at = now_ms()
+    local guard = make_guard(started_at)
     local permission_scope = opts.permission_scope or {allowed_tools = {}, full_control = false}
     if type(permission_scope.allowed_tools) ~= "table" then
         permission_scope.allowed_tools = {}
@@ -151,20 +195,36 @@ function M.run(opts, callbacks)
         if result.ok == nil then result.ok = true end
         result.turns = result.turns or turns
         result.started_at = result.started_at or started_at
-        result.finished_at = result.finished_at or (capstan and capstan.now_ms and capstan.now_ms() or (os.clock() * 1000))
+        result.finished_at = result.finished_at or now_ms()
         result.duration_ms = result.duration_ms or math.max(0, math.floor(result.finished_at - started_at))
         if callbacks.on_done then callbacks.on_done(result) end
+    end
+
+    local finished = false
+
+    local function stop_run(message, current_msgs)
+        if finished then return end
+        finished = true
+        logging.runtime_log("tool_guard", logging.compact(message, 500))
+        if agent and type(agent.append) == "function" and opts.silent_tools ~= true then
+            agent.append("\n[stopped: " .. message .. "]\n", "agent")
+        end
+        if callbacks.on_error then callbacks.on_error(message) end
+        finish({ok = false, error = message, text = "", messages = current_msgs or {}, turns = turns})
     end
 
     -- One turn of the agent cycle: sends the request, streams the response,
     -- and either finishes or recurses into handle_tool_calls.
     local function continue_agent_cycle(current_msgs, tools)
+        if finished then return end
         turns = turns + 1
         if turns > max_turns then
-            local message = "Max agent turns exceeded: " .. tostring(max_turns)
-            logging.runtime_log("agent", message)
-            if callbacks.on_error then callbacks.on_error(message) end
-            finish({ok = false, error = message, text = ""})
+            stop_run("max agent turns exceeded: " .. tostring(max_turns), current_msgs)
+            return
+        end
+        local duration_error = guard_duration_error(guard)
+        if duration_error then
+            stop_run(duration_error, current_msgs)
             return
         end
 
@@ -184,6 +244,7 @@ function M.run(opts, callbacks)
                 local message = result.error or "agent stream failed"
                 logging.runtime_log("agent", "stream failed error=" .. logging.compact(message, 500))
                 if callbacks.on_error then callbacks.on_error(message) end
+                finished = true
                 finish({ok = false, error = message, text = result.text or ""})
                 return
             end
@@ -199,6 +260,8 @@ function M.run(opts, callbacks)
                     silent_tools = opts.silent_tools,
                     permission_scope = permission_scope,
                     callbacks = callbacks,
+                    guard = guard,
+                    stop_run = stop_run,
                 })
             else
                 logging.runtime_log("agent", "stream done without tool calls text=" .. logging.compact(result.text, 500))
@@ -211,6 +274,7 @@ function M.run(opts, callbacks)
                     text = result.text or "",
                     run = opts,
                 })
+                finished = true
                 finish({
                     ok = true,
                     text = result.text or "",
@@ -367,7 +431,6 @@ end
 _G.agent_entry = function(messages)
     M.run({
         messages = messages,
-        max_turns = 200,
         update_status = true,
         update_usage = true,
     }, {
