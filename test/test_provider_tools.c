@@ -1796,8 +1796,8 @@ static MunitResult test_shell_always_allow_uses_workspace_target(
   munit_assert_string_equal(granted_pattern, "/repo/project");
   munit_assert_int(grant_allow, ==, 1);
   munit_assert_int(permit_prompt_calls, ==, 1);
-  munit_assert_true(strstr(captured_agent_appends, "shell: /repo/project") != NULL);
-  munit_assert_true(strstr(captured_agent_appends, "  $ pwd") == NULL);
+  munit_assert_true(strstr(captured_agent_appends, "⚙ shell") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "  $ pwd") != NULL);
 
   call_agent_entry(L);
   munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
@@ -1948,7 +1948,7 @@ static MunitResult test_subagents_share_child_permission_scope(
   return MUNIT_OK;
 }
 
-static MunitResult test_shell_tool_display_collapses_home_and_hides_command(
+static MunitResult test_shell_tool_display_shows_redacted_command(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -1976,12 +1976,10 @@ static MunitResult test_shell_tool_display_collapses_home_and_hides_command(
   munit_assert_string_equal(captured_permit_tool, "shell");
   munit_assert_string_equal(captured_permit_target,
                             "/Users/tester/narnia/tui-agent");
+  munit_assert_true(strstr(captured_agent_appends, "⚙ shell") != NULL);
   munit_assert_true(strstr(captured_agent_appends,
-                           "shell: ~/narnia/tui-agent") != NULL);
-  munit_assert_true(strstr(captured_agent_appends,
-                           "  $ make test") == NULL);
-  munit_assert_true(strstr(captured_logs,
-                           "display=~/narnia/tui-agent") != NULL);
+                           "  $ make test") != NULL);
+  munit_assert_true(strstr(captured_logs, "display=shell") != NULL);
   munit_assert_true(strstr(captured_logs,
                            "args={\"command\":\"shell\"}") != NULL);
 
@@ -2454,8 +2452,8 @@ static MunitTest tests[] = {
     {"/subagents_share_child_permission_scope",
      test_subagents_share_child_permission_scope, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/shell_tool_display_collapses_home_and_hides_command",
-     test_shell_tool_display_collapses_home_and_hides_command, NULL, NULL,
+    {"/shell_tool_display_shows_redacted_command",
+     test_shell_tool_display_shows_redacted_command, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/after_agent_turn_hook_runs_on_final_text",
      test_after_agent_turn_hook_runs_on_final_text, NULL, NULL,

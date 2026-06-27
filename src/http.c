@@ -116,6 +116,45 @@ static struct curl_slist *parse_headers(lua_State *L, int index) {
   return headers;
 }
 
+static void push_headers_table(lua_State *L, const char *raw_headers) {
+  lua_newtable(L);
+  if (!raw_headers)
+    return;
+
+  const char *line = raw_headers;
+  while (*line) {
+    const char *end = strstr(line, "\r\n");
+    size_t len = end ? (size_t)(end - line) : strlen(line);
+    if (len > 0) {
+      const char *colon = memchr(line, ':', len);
+      if (colon && colon > line) {
+        size_t key_len = (size_t)(colon - line);
+        size_t val_start = key_len + 1;
+        while (val_start < len &&
+               (line[val_start] == ' ' || line[val_start] == '\t')) {
+          val_start++;
+        }
+
+        char key[256];
+        size_t copy_key = key_len < sizeof(key) - 1 ? key_len : sizeof(key) - 1;
+        for (size_t i = 0; i < copy_key; i++) {
+          char c = line[i];
+          if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+          key[i] = c;
+        }
+        key[copy_key] = '\0';
+
+        lua_pushlstring(L, line + val_start, len - val_start);
+        lua_setfield(L, -2, key);
+      }
+    }
+    if (!end)
+      break;
+    line = end + 2;
+  }
+}
+
 static void configure_http_handle(CURL *easy, const char *url) {
   curl_easy_setopt(easy, CURLOPT_URL, url);
   curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
@@ -313,6 +352,75 @@ static int l_http_post(lua_State *L) {
   return 2;
 }
 
+static int l_http_post_response(lua_State *L) {
+  const char *url = luaL_checkstring(L, 1);
+  const char *body = NULL;
+  size_t body_len = 0;
+
+  if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
+    body = luaL_checklstring(L, 2, &body_len);
+  }
+
+  struct curl_slist *headers = parse_headers(L, 3);
+  lua_Integer timeout_ms = luaL_optinteger(L, 4, 30000);
+
+  CURL *easy = curl_easy_init();
+  configure_http_handle(easy, url);
+  curl_easy_setopt(easy, CURLOPT_POST, 1L);
+  if (timeout_ms > 0)
+    curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
+
+  if (body) {
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)body_len);
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, body);
+  }
+
+  if (headers) {
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+  }
+
+  RespBuf response = {0};
+  RespBuf response_headers = {0};
+  curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
+  curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
+  curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
+  curl_easy_setopt(easy, CURLOPT_HEADERDATA, &response_headers);
+
+  g_sync_active = 1;
+  curl_multi_add_handle(multi_handle, easy);
+
+  int still_running = 1;
+  while (still_running) {
+    curl_multi_perform(multi_handle, &still_running);
+    if (still_running)
+      http_wait_frame();
+  }
+
+  http_poll(L);
+  curl_multi_remove_handle(multi_handle, easy);
+  g_sync_active = 0;
+
+  long status = 0;
+  curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
+
+  lua_newtable(L);
+
+  lua_pushinteger(L, status);
+  lua_setfield(L, -2, "status");
+
+  lua_pushstring(L, response.data ? response.data : "");
+  lua_setfield(L, -2, "body");
+
+  push_headers_table(L, response_headers.data);
+  lua_setfield(L, -2, "headers");
+
+  free(response.data);
+  free(response_headers.data);
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(easy);
+  return 1;
+}
+
 static int l_http_get(lua_State *L) {
   const char *url = luaL_checkstring(L, 1);
   struct curl_slist *headers = parse_headers(L, 2);
@@ -508,6 +616,9 @@ void http_init(lua_State *L) {
 
   lua_pushcfunction(L, l_http_post);
   lua_setfield(L, -2, "post");
+
+  lua_pushcfunction(L, l_http_post_response);
+  lua_setfield(L, -2, "post_response");
 
   lua_pushcfunction(L, l_http_post_stream);
   lua_setfield(L, -2, "post_stream");

@@ -15,6 +15,7 @@ local M = {}
 -- Server registry: name → { handle, tools, status, config }
 local servers = {}
 local exposed_tool_names = {}
+local protocol_version = "2025-06-18"
 
 -- JSON-RPC request ID counter
 local next_id = 1
@@ -135,6 +136,39 @@ local function resolve_exposed_tool(tool_name)
   return nil
 end
 
+local function server_transport(cfg)
+  local transport = cfg and cfg.transport
+  if transport == nil or transport == "" then
+    if cfg and cfg.url then return "http" end
+    return "stdio"
+  end
+  if transport == "streamable_http" then return "http" end
+  return transport
+end
+
+local function build_rpc_request(id, method, params)
+  local request = {
+    jsonrpc = "2.0",
+    id = id,
+    method = method,
+  }
+  if params then
+    request.params = params
+  end
+  return request
+end
+
+local function build_rpc_notification(method, params)
+  local notification = {
+    jsonrpc = "2.0",
+    method = method,
+  }
+  if params then
+    notification.params = params
+  end
+  return notification
+end
+
 --- Check if MCP is globally enabled in config
 local function mcp_enabled()
   if not _G.capstan or type(_G.capstan.config) ~= "table" then
@@ -157,9 +191,139 @@ local function servers_config()
   return servers_list
 end
 
---- Send a JSON-RPC request and wait for the response (blocking).
---- Returns: result table | nil, error_string
-local function rpc_call(server, method, params, timeout_ms)
+local function parse_sse_messages(body)
+  local messages = {}
+  if type(body) ~= "string" or body == "" then
+    return messages
+  end
+
+  body = body:gsub("\r\n", "\n")
+  for block in (body .. "\n"):gmatch("(.-)\n\n") do
+    local data = {}
+    for line in block:gmatch("([^\n]*)\n?") do
+      if line:sub(1, 5) == "data:" then
+        local value = line:sub(6)
+        if value:sub(1, 1) == " " then
+          value = value:sub(2)
+        end
+        table.insert(data, value)
+      end
+    end
+    if #data > 0 then
+      local ok, msg = pcall(json.decode, table.concat(data, "\n"))
+      if ok then
+        table.insert(messages, msg)
+      else
+        log("ignoring unparseable SSE data: " .. logging.compact(table.concat(data, "\n"), 200))
+      end
+    end
+  end
+  return messages
+end
+
+local function response_message_for_id(messages, id)
+  for _, msg in ipairs(messages) do
+    if msg.id == nil then
+      log("notification from HTTP MCP server: " .. tostring(msg.method))
+    elseif msg.id == id then
+      return msg
+    else
+      log("ignoring response with mismatched id=" .. tostring(msg.id) .. " (expected " .. tostring(id) .. ")")
+    end
+  end
+  return nil
+end
+
+local function apply_http_session(server, response)
+  local headers = response and response.headers
+  if type(headers) ~= "table" then return end
+  local session_id = headers["mcp-session-id"]
+  if type(session_id) == "string" and session_id ~= "" then
+    server.session_id = session_id
+  end
+end
+
+local function http_headers(server)
+  local headers = {}
+  if type(server.config.headers) == "table" then
+    for k, v in pairs(server.config.headers) do
+      headers[k] = v
+    end
+  end
+  headers["Content-Type"] = headers["Content-Type"] or "application/json"
+  headers["Accept"] = headers["Accept"] or "application/json, text/event-stream"
+  headers["MCP-Protocol-Version"] = headers["MCP-Protocol-Version"] or protocol_version
+  if server.session_id and server.session_id ~= "" then
+    headers["Mcp-Session-Id"] = server.session_id
+  end
+  return headers
+end
+
+local function decode_http_rpc_response(server, method, id, response)
+  if type(response) ~= "table" then
+    return nil, "invalid HTTP response"
+  end
+  apply_http_session(server, response)
+
+  local status = tonumber(response.status or 0) or 0
+  local body = response.body or ""
+  if status < 200 or status >= 300 then
+    return nil, "HTTP " .. tostring(status) .. ": " .. logging.compact(body, 500)
+  end
+  if body == "" then
+    return nil, "empty HTTP response to " .. method
+  end
+
+  local headers = response.headers or {}
+  local content_type = tostring(headers["content-type"] or "")
+  local msg = nil
+  if content_type:find("text/event%-stream") then
+    msg = response_message_for_id(parse_sse_messages(body), id)
+    if not msg then
+      return nil, "SSE response did not contain id " .. tostring(id)
+    end
+  else
+    local ok_parse, parsed = pcall(json.decode, body)
+    if not ok_parse then
+      return nil, "invalid JSON response: " .. tostring(parsed)
+    end
+    if type(parsed) == "table" and parsed[1] ~= nil then
+      msg = response_message_for_id(parsed, id)
+      if not msg then
+        return nil, "batched response did not contain id " .. tostring(id)
+      end
+    else
+      msg = parsed
+    end
+  end
+
+  if msg.error then
+    return nil, "JSON-RPC error: " .. tostring(msg.error.message or "unknown")
+  end
+  return msg.result, nil
+end
+
+local function http_rpc_call(server, method, params, timeout_ms)
+  if not server or server.status ~= "connected" and server.status ~= "connecting" then
+    return nil, "server not connected"
+  end
+  if not http or type(http.post_response) ~= "function" then
+    return nil, "http.post_response is not available"
+  end
+
+  local id = next_id
+  next_id = next_id + 1
+  local payload = json.encode(build_rpc_request(id, method, params))
+  log("send " .. method .. " id=" .. tostring(id) .. " to " .. server.name .. " over HTTP")
+
+  local ok, response = pcall(http.post_response, server.url, payload, http_headers(server), timeout_ms or server.timeout or 30000)
+  if not ok then
+    return nil, "HTTP request failed: " .. tostring(response)
+  end
+  return decode_http_rpc_response(server, method, id, response)
+end
+
+local function stdio_rpc_call(server, method, params, timeout_ms)
   if not server or not server.handle
      or (server.status ~= "connected" and server.status ~= "connecting") then
     return nil, "server not connected"
@@ -168,16 +332,7 @@ local function rpc_call(server, method, params, timeout_ms)
   local id = next_id
   next_id = next_id + 1
 
-  local request = {
-    jsonrpc = "2.0",
-    id = id,
-    method = method,
-  }
-  if params then
-    request.params = params
-  end
-
-  local payload = json.encode(request)
+  local payload = json.encode(build_rpc_request(id, method, params))
   log("send " .. method .. " id=" .. tostring(id) .. " to " .. server.name)
 
   local ok, err = mcp.send(server.handle, payload)
@@ -230,21 +385,38 @@ local function rpc_call(server, method, params, timeout_ms)
   end
 end
 
+--- Send a JSON-RPC request and wait for the response (blocking).
+--- Returns: result table | nil, error_string
+local function rpc_call(server, method, params, timeout_ms)
+  if server and server.transport == "http" then
+    return http_rpc_call(server, method, params, timeout_ms)
+  end
+  return stdio_rpc_call(server, method, params, timeout_ms)
+end
+
 --- Send a notification (no response expected)
 local function rpc_notify(server, method, params)
-  if not server or not server.handle or server.status ~= "connected" then
+  if not server or (server.status ~= "connected" and server.status ~= "connecting") then
     return false, "server not connected"
   end
 
-  local notification = {
-    jsonrpc = "2.0",
-    method = method,
-  }
-  if params then
-    notification.params = params
+  local payload = json.encode(build_rpc_notification(method, params))
+  if server.transport == "http" then
+    if not http or type(http.post_response) ~= "function" then
+      return false, "http.post_response is not available"
+    end
+    local ok, response = pcall(http.post_response, server.url, payload, http_headers(server), server.timeout or 30000)
+    if not ok then
+      return false, tostring(response)
+    end
+    apply_http_session(server, response)
+    local status = tonumber(response and response.status or 0) or 0
+    if status < 200 or status >= 300 then
+      return false, "HTTP " .. tostring(status)
+    end
+    return true
   end
 
-  local payload = json.encode(notification)
   return mcp.send(server.handle, payload)
 end
 
@@ -262,27 +434,47 @@ local function init_server(cfg)
     tools = {},
     status = "connecting",
     timeout = cfg.timeout or 30000,
+    transport = server_transport(cfg),
+    url = cfg.url,
+    session_id = nil,
   }
 
-  -- Spawn the subprocess
-  local args = cfg.args or {}
-  local env = cfg.env or {}
-  log("spawning server " .. cfg.name .. ": " .. cfg.command .. " " .. json.encode(args))
+  if server.transport == "stdio" then
+    -- Spawn the subprocess
+    local args = cfg.args or {}
+    local env = cfg.env or {}
+    log("spawning server " .. cfg.name .. ": " .. cfg.command .. " " .. json.encode(args))
 
-  local handle, spawn_err = mcp.spawn(cfg.command, args, env)
-  if not handle then
+    local handle, spawn_err = mcp.spawn(cfg.command, args, env)
+    if not handle then
+      server.status = "failed"
+      server.error = "spawn failed: " .. tostring(spawn_err)
+      log(server.error)
+      servers[cfg.name] = server
+      return
+    end
+
+    server.handle = handle
+  elseif server.transport == "http" then
+    if type(server.url) ~= "string" or server.url == "" then
+      server.status = "failed"
+      server.error = "HTTP MCP server missing url"
+      log(server.error)
+      servers[cfg.name] = server
+      return
+    end
+    log("connecting HTTP server " .. cfg.name .. ": " .. server.url)
+  else
     server.status = "failed"
-    server.error = "spawn failed: " .. tostring(spawn_err)
+    server.error = "unsupported MCP transport: " .. tostring(server.transport)
     log(server.error)
     servers[cfg.name] = server
     return
   end
 
-  server.handle = handle
-
   -- Initialize handshake
   local init_params = {
-    protocolVersion = "2025-06-18",
+    protocolVersion = protocol_version,
     capabilities = {},
     clientInfo = {
       name = "capstan",
@@ -295,8 +487,10 @@ local function init_server(cfg)
     server.status = "failed"
     server.error = "initialize failed: " .. tostring(err)
     log(server.error)
-    mcp.kill(handle)
-    server.handle = nil
+    if server.handle then
+      mcp.kill(server.handle)
+      server.handle = nil
+    end
     servers[cfg.name] = server
     return
   end
@@ -312,8 +506,10 @@ local function init_server(cfg)
     server.status = "failed"
     server.error = "tools/list failed: " .. tostring(terr)
     log(server.error)
-    mcp.kill(handle)
-    server.handle = nil
+    if server.handle then
+      mcp.kill(server.handle)
+      server.handle = nil
+    end
     servers[cfg.name] = server
     return
   end
@@ -342,7 +538,7 @@ function M.init()
 
   local configs = servers_config()
   for _, cfg in ipairs(configs) do
-    if type(cfg) == "table" and cfg.name and cfg.command then
+    if type(cfg) == "table" and cfg.name and (cfg.command or cfg.url) then
       init_server(cfg)
     end
   end
@@ -460,6 +656,7 @@ function M.list_servers()
       name = name,
       status = server.status,
       error = server.error,
+      transport = server.transport,
       tools_count = #server.tools,
       tools = tool_names,
     })
