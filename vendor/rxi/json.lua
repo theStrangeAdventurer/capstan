@@ -66,7 +66,7 @@ local function encode_table(val, stack)
 
 	stack[val] = true
 
-	if rawget(val, 1) ~= nil or next(val) == nil then
+	if rawget(val, 1) ~= nil then
 		-- Treat as array -- check keys are valid and it is not sparse
 		local n = 0
 		for k in pairs(val) do
@@ -85,7 +85,7 @@ local function encode_table(val, stack)
 		stack[val] = nil
 		return "[" .. table.concat(res, ",") .. "]"
 	else
-		-- Treat as an object
+		-- Treat as an object (includes empty tables → {})
 		for k, v in pairs(val) do
 			if type(k) ~= "string" then
 				error("invalid table: mixed or invalid key types")

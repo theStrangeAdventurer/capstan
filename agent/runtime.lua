@@ -2,6 +2,7 @@ local json = require("vendor.rxi.json")
 local hooks = require("agent.hooks")
 local logging = require("agent.logging")
 local models = require("agent.models")
+local mcp_client = require("agent.mcp")
 local provider_config = require("agent.provider_config")
 local stream = require("agent.stream")
 local tokens = require("agent.tokens")
@@ -12,6 +13,9 @@ local M = provider_config.build()
 M.parse_sse_event = stream.parse_sse_event
 hooks.install_config((_G.capstan and _G.capstan.config) or {})
 hooks.install_existing_plugins(_G.plugins)
+
+-- Initialize MCP servers (no-op if not configured)
+mcp_client.init()
 
 function M.list_models(provider_name)
     return models.list(M, provider_name or M.provider)

@@ -16,6 +16,7 @@
 #include <string.h>
 
 BufferedPluginResults g_buffered_results = {0};
+static int g_tool_status_color_pair = 0;
 
 void buffer_plugin_result(const char *label, char *ui_result, char *raw_result) {
   if (g_buffered_results.size >= g_buffered_results.capacity) {
@@ -52,6 +53,10 @@ void init_tui(void) {
     init_pair(4, COLOR_BLACK, COLOR_YELLOW);
     init_pair(5, -1, COLOR_BLACK);
     init_pair(6, COLOR_RED, COLOR_BLACK);
+    if (COLORS > 8) {
+      init_pair(7, 8, -1);
+      g_tool_status_color_pair = 7;
+    }
   }
   curs_set(1);
 }
@@ -246,9 +251,14 @@ void render_all(void) {
       }
 
       if (global_line >= top_line && win_row < msg_h) {
-        int is_tool_status = !is_user && strncmp(p, "⚙", strlen("⚙")) == 0;
+        int is_tool_status =
+            !is_user && (strncmp(p, "⚙", strlen("⚙")) == 0 ||
+                         strncmp(p, "  $ ", 4) == 0);
+        int tool_status_attrs = A_DIM | A_ITALIC;
+        if (g_tool_status_color_pair)
+          tool_status_attrs |= COLOR_PAIR(g_tool_status_color_pair);
         if (is_tool_status) {
-          wattron(msg_win, A_DIM | A_ITALIC);
+          wattron(msg_win, tool_status_attrs);
         }
 
         if (is_user)
@@ -256,7 +266,7 @@ void render_all(void) {
         mvwaddnstr(msg_win, win_row, MSG_PAD_H, p, line_end - p);
 
         if (is_tool_status) {
-          wattroff(msg_win, A_DIM | A_ITALIC);
+          wattroff(msg_win, tool_status_attrs);
         }
 
         if (visual_is_active() && global_line >= sel_sl &&

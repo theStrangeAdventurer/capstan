@@ -45,6 +45,21 @@ local function loggable_tool_arguments(name, raw_arguments)
     return "{\"command\":\"shell\"}"
 end
 
+local think_tags = {"<think>", "</think>"}
+
+local function longest_tag_prefix_suffix(text, tags)
+    local best = 0
+    for _, tag in ipairs(tags) do
+        local max_len = math.min(#tag - 1, #text)
+        for len = 1, max_len do
+            if text:sub(#text - len + 1) == tag:sub(1, len) and len > best then
+                best = len
+            end
+        end
+    end
+    return best
+end
+
 -- Parses one raw SSE event line into a typed chunk: text, reasoning, tool_calls, or usage.
 function M.parse_sse_event(raw_event)
     local data = raw_event:match("^data: (.*)")
@@ -87,6 +102,8 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local accumulated_text = ""
     local accumulated_reasoning = ""
     local reasoning_active = false
+    local leaked_think_pending = ""
+    local leaked_think_active = false
     local tool_calls_accum = {}
     local parse_sse_event = provider.parse_sse_event or M.parse_sse_event
     local prompt_estimate = initial_prompt_tokens or 0
@@ -100,6 +117,65 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local reasoning_token_estimate = 0
     local has_chunk_hooks = hooks.has("on_stream_chunk")
     local finished = false
+
+    local function filter_leaked_think(delta, final)
+        local s = leaked_think_pending .. (delta or "")
+        leaked_think_pending = ""
+
+        local out = {}
+        local i = 1
+        while i <= #s do
+            if leaked_think_active then
+                local close_start, close_end = s:find("</think>", i, true)
+                if close_start then
+                    leaked_think_active = false
+                    i = close_end + 1
+                else
+                    if not final then
+                        local rest = s:sub(i)
+                        local hold = longest_tag_prefix_suffix(rest, {"</think>"})
+                        if hold > 0 then
+                            leaked_think_pending = rest:sub(#rest - hold + 1)
+                        end
+                    end
+                    break
+                end
+            else
+                local open_start, open_end = s:find("<think>", i, true)
+                local close_start, close_end = s:find("</think>", i, true)
+                local tag_start, tag_end, starts_hidden
+                if open_start and (not close_start or open_start < close_start) then
+                    tag_start, tag_end, starts_hidden = open_start, open_end, true
+                elseif close_start then
+                    tag_start, tag_end, starts_hidden = close_start, close_end, false
+                end
+
+                if tag_start then
+                    if tag_start > i then
+                        table.insert(out, s:sub(i, tag_start - 1))
+                    end
+                    leaked_think_active = starts_hidden
+                    i = tag_end + 1
+                else
+                    local rest = s:sub(i)
+                    if final then
+                        table.insert(out, rest)
+                    else
+                        local hold = longest_tag_prefix_suffix(rest, think_tags)
+                        if hold > 0 then
+                            table.insert(out, rest:sub(1, #rest - hold))
+                            leaked_think_pending = rest:sub(#rest - hold + 1)
+                        else
+                            table.insert(out, rest)
+                        end
+                    end
+                    break
+                end
+            end
+        end
+
+        return table.concat(out)
+    end
 
     local function process_chunk(chunk)
         if chunk.type == "reasoning" then
@@ -121,12 +197,16 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             end
         elseif chunk.type == "text" and chunk.content then
             text_chunks = text_chunks + 1
+            local content = filter_leaked_think(chunk.content, false)
+            if content == "" then
+                return
+            end
             if reasoning_active then
                 reasoning_active = false
                 if not provider.suppress_agent_state then agent.set_thinking(false) end
             end
-            accumulated_text = accumulated_text .. chunk.content
-            text_token_estimate = text_token_estimate + tokens.estimate_text_tokens(chunk.content)
+            accumulated_text = accumulated_text .. content
+            text_token_estimate = text_token_estimate + tokens.estimate_text_tokens(content)
             if not provider.suppress_agent_state and provider.context_limit and provider.context_limit > 0 then
                 local completion_estimate = text_token_estimate + reasoning_token_estimate
                 agent.set_usage(
@@ -136,7 +216,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                     provider.context_limit
                 )
             end
-            on_result({type = "text", content = chunk.content}, false)
+            on_result({type = "text", content = content}, false)
         elseif chunk.type == "tool_calls" then
             tool_delta_chunks = tool_delta_chunks + 1
             for _, tc in ipairs(chunk.tool_calls) do
@@ -207,6 +287,12 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                     chunk = ctx.chunk
                 end
                 if chunk then process_chunk(chunk) end
+            end
+            local remaining_text = filter_leaked_think("", true)
+            if remaining_text ~= "" then
+                accumulated_text = accumulated_text .. remaining_text
+                text_token_estimate = text_token_estimate + tokens.estimate_text_tokens(remaining_text)
+                on_result({type = "text", content = remaining_text}, false)
             end
 
             local final_calls = {}

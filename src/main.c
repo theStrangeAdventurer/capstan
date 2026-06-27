@@ -318,7 +318,7 @@ static int run_embedded_self_test(void) {
   load_embedded_plugins();
 
   const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
-                            "/logs", "/skills", "/models", "/info"};
+                            "/logs", "/skills", "/models", "/info", "/mcp"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);

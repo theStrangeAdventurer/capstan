@@ -1,3 +1,4 @@
+#include "mcp.h"
 #include "plugins.h"
 #include "agent.h"
 #include "app_config.h"
@@ -139,6 +140,7 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.hooks", "agent/hooks.lua");
   preload_embedded_asset(L, "agent.state", "agent/state.lua");
   preload_embedded_asset(L, "agent.shell_safe", "agent/shell_safe.lua");
+  preload_embedded_asset(L, "agent.mcp", "agent/mcp.lua");
   lua_pop(L, 2);
 }
 
@@ -505,6 +507,7 @@ void plugins_init(void) {
   http_init(L);
   agent_init(L);
   tools_init(L);
+  mcp_init(L);
   register_capstan_runtime();
   load_capstan_config();
   load_capstan_state();
@@ -1314,5 +1317,6 @@ void plugins_cleanup(void) {
     lua_close(L);
     L = NULL;
   }
+  mcp_cleanup();
   http_cleanup();
 }

@@ -39,3 +39,4 @@ specs/.obsidian/
 # Stale tooling
 compile_commands.json
 .cache
+.playwright-mcp
