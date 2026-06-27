@@ -14,6 +14,9 @@ and uses the same path behavior.
   missing.
 - Manual directory paths are listed with one entry per line and directories
   suffixed with `/`.
+- Directory paths must return a directory listing even on platforms where
+  `io.open(path, "r")` succeeds for directories but reading from the handle
+  returns no file content.
 - Directory listing shell arguments are single-quote escaped and passed after
   `--` so path text cannot become additional shell commands or options.
 
@@ -41,5 +44,5 @@ internally, reads workspace-root `.gitignore` by default, and also applies
 
 `make test` covers finder matching, ignore rules, filterable popup input, and
 selection behavior. `make test-http-lua` covers README fallback,
-workspace-relative file reads, model-tool `ctx.tool_args.path` handling, and
-shell-quoting regression for directory listing.
+workspace-relative file reads, model-tool `ctx.tool_args.path` handling,
+directory path listing, and shell-quoting regression for directory listing.

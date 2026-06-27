@@ -50,33 +50,24 @@ local function minimax_model(provider)
     return model:find("minimax", 1, true) ~= nil
 end
 
-local function strip_minimax_sentinel(text)
-    if type(text) ~= "string" then return "" end
-    local result = text:gsub("%]%<%]minimax%[%>%[</?[%w_%-]+>%]?", "")
-    for _, tag in ipairs({"tool_call", "invoke", "command"}) do
-        result = result:gsub("</?" .. tag .. ">", "")
-    end
-    return result
-end
-
-local function minimax_text_tool_calls(provider, text)
+local function minimax_text_tool_protocol_error(provider, text)
     if not minimax_model(provider) or type(text) ~= "string" then return nil end
-    if not text:find("]%<%]minimax%[%>%[</command>") then return nil end
 
-    local command = text:match("⚙%s*shell%s*%$%s*(.-)%s*%]%<%]minimax%[%>%[</command>")
-    if not command or command == "" then
-        command = text:match("%$%s*(.-)%s*%]%<%]minimax%[%>%[</command>")
+    local has_sentinel = text:find("]%<%]minimax%[%>%[", 1, false) ~= nil
+        or text:find("</tool_call>", 1, true) ~= nil
+        or text:find("</invoke>", 1, true) ~= nil
+    local tool_name = text:match("^%s*⚙%s*([%w_%-]+)")
+        or text:match("\n%s*⚙%s*([%w_%-]+)")
+    local has_tool_fields = text:find("\n%s*path:%s*", 1, false) ~= nil
+        or text:find("\n%s*old_text:%s*", 1, false) ~= nil
+        or text:find("\n%s*new_text:%s*", 1, false) ~= nil
+        or text:find("\n%s*command:%s*", 1, false) ~= nil
+
+    if has_sentinel or (tool_name and has_tool_fields) then
+        return "model emitted a textual tool call instead of structured tool_calls; " ..
+            "switch models/providers or retry with a model that supports reliable tool calling"
     end
-    if not command or command == "" then return nil end
-
-    command = strip_minimax_sentinel(command):gsub("^%s+", ""):gsub("%s+$", "")
-    if command == "" or command == "shell" then return nil end
-
-    return {{
-        id = "minimax_text_shell_1",
-        name = "shell",
-        arguments = json.encode({command = command}),
-    }}
+    return nil
 end
 
 local think_tags = {"<think>", "</think>"}
@@ -150,6 +141,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local text_token_estimate = 0
     local reasoning_token_estimate = 0
     local has_chunk_hooks = hooks.has("on_stream_chunk")
+    local buffer_text_until_done = minimax_model(provider)
     local finished = false
 
     local function filter_leaked_think(delta, final)
@@ -250,6 +242,9 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                     provider.context_limit
                 )
             end
+            if buffer_text_until_done then
+                return
+            end
             on_result({type = "text", content = content}, false)
         elseif chunk.type == "tool_calls" then
             tool_delta_chunks = tool_delta_chunks + 1
@@ -326,7 +321,9 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             if remaining_text ~= "" then
                 accumulated_text = accumulated_text .. remaining_text
                 text_token_estimate = text_token_estimate + tokens.estimate_text_tokens(remaining_text)
-                on_result({type = "text", content = remaining_text}, false)
+                if not buffer_text_until_done then
+                    on_result({type = "text", content = remaining_text}, false)
+                end
             end
 
             local final_calls = {}
@@ -353,13 +350,13 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             if tool_delta_chunks > 0 and #final_calls == 0 then
                 logging.runtime_log("stream", "tool_deltas_without_final_calls")
             end
-            if #final_calls == 0 then
-                local fallback_calls = minimax_text_tool_calls(provider, accumulated_text)
-                if fallback_calls then
-                    final_calls = fallback_calls
-                    accumulated_text = ""
-                    logging.runtime_log("stream", "minimax_text_tool_call_fallback count=" .. tostring(#final_calls))
-                end
+            local protocol_error = minimax_text_tool_protocol_error(provider, accumulated_text)
+            if #final_calls == 0 and protocol_error then
+                logging.runtime_log("stream", "minimax_text_tool_call_protocol_error text=" ..
+                    logging.compact(accumulated_text, 500))
+                on_result({type = "text", content = "\n[provider error: " .. protocol_error .. "]\n"}, false)
+                on_result({ok = false, error = protocol_error, text = ""}, true)
+                return
             end
 
             logging.runtime_log("stream", string.format(
@@ -375,6 +372,9 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                 #final_calls
             ))
 
+            if buffer_text_until_done and #final_calls == 0 and accumulated_text ~= "" then
+                on_result({type = "text", content = accumulated_text}, false)
+            end
             on_result({
                 text = accumulated_text,
                 tool_calls = #final_calls > 0 and final_calls or nil

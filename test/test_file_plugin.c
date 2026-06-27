@@ -143,6 +143,41 @@ static MunitResult test_directory_listing_shell_quotes_path(
   return MUNIT_OK;
 }
 
+static MunitResult test_directory_path_returns_listing(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char dir[4096];
+  snprintf(dir, sizeof(dir), "/tmp/capstan-file-dir-%ld", (long)getpid());
+  rmdir(dir);
+  munit_assert_int(mkdir(dir, 0700), ==, 0);
+
+  char child[4096];
+  snprintf(child, sizeof(child), "%s/child.txt", dir);
+  FILE *f = fopen(child, "w");
+  munit_assert_not_null(f);
+  fputs("child", f);
+  fclose(f);
+
+  lua_State *L = new_state();
+  load_file_plugin(L);
+  call_handler(L, dir);
+
+  const char *ui = lua_tostring(L, -2);
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(ui);
+  munit_assert_not_null(llm);
+  munit_assert_true(strstr(ui, "📁") != NULL);
+  munit_assert_true(strstr(llm, "child.txt") != NULL);
+  munit_assert_true(strstr(llm, "nil") == NULL);
+
+  lua_close(L);
+  unlink(child);
+  rmdir(dir);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/readme_fallback_reads_readme_md", test_readme_fallback_reads_readme_md,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -152,6 +187,8 @@ static MunitTest tests[] = {
     {"/directory_listing_shell_quotes_path",
      test_directory_listing_shell_quotes_path, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/directory_path_returns_listing", test_directory_path_returns_listing,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite file_plugin_suite = {"/file_plugin", tests, NULL, 1,
