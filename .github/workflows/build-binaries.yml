@@ -1,0 +1,86 @@
+name: Build binaries
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            os: macos-14
+            binary: capstan-macos-arm64
+          - target: linux-x86_64
+            os: ubuntu-24.04
+            binary: capstan-linux-x86_64
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            binary: capstan-linux-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcurl4-openssl-dev ncurses-bin file
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Smoke test standalone binary
+        run: make test-build
+
+      - name: Stage artifact
+        run: |
+          mkdir -p dist
+          cp build/capstan "dist/${{ matrix.binary }}"
+          chmod +x "dist/${{ matrix.binary }}"
+          file "dist/${{ matrix.binary }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: dist/${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release assets
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Show release files
+        run: |
+          ls -lh dist
+          file dist/capstan-*
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes ""
+          gh release upload "${GITHUB_REF_NAME}" dist/capstan-* --clobber

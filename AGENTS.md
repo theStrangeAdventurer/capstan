@@ -43,7 +43,8 @@ make clean && make
 
 **Cross-platform** — `build.sh` auto-detects OS at runtime.
 - macOS: `sysctl -n hw.ncpu`, Xcode CLT, libcurl via SDK `.tbd` stubs.
-- Linux: `nproc`, `build-essential`/`libcurl-dev` via `apt`/`dnf`.
+- Linux: `nproc`, `build-essential`/`libcurl-dev` plus `infocmp`
+  (`ncurses-bin` on Debian/Ubuntu) via `apt`/`dnf`.
 - ncurses and Lua auto-detect the platform in their own `configure`/`Makefile`.
 
 ### Makefile breakdown
@@ -267,6 +268,7 @@ Feature specs:
 - [Agent profiles](specs/agent-profiles.md)
 - [Agent loop](specs/agent-loop.md)
 - [CLI run mode](specs/cli-run.md)
+- [CI binaries](specs/ci-binaries.md)
 - [Compact command](specs/compact-command.md)
 - [Config](specs/config.md)
 - [Embedded runtime assets](specs/embedded-runtime-assets.md)
