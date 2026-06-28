@@ -1,4 +1,5 @@
 #include "tui.h"
+#include "utils.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <lauxlib.h>
@@ -105,7 +106,7 @@ static int l_mcp_spawn(lua_State *L) {
   if (!argv)
     return luaL_error(L, "mcp.spawn: out of memory");
 
-  argv[0] = strdup(command);
+  argv[0] = my_strdup(command);
   if (!argv[0]) {
     free(argv);
     return luaL_error(L, "mcp.spawn: out of memory");
@@ -114,7 +115,7 @@ static int l_mcp_spawn(lua_State *L) {
   for (lua_Integer i = 1; i <= nargs; i++) {
     lua_rawgeti(L, 2, (int)i);
     const char *s = lua_tostring(L, -1);
-    argv[(int)i] = s ? strdup(s) : strdup("");
+    argv[(int)i] = my_strdup(s ? s : "");
     lua_pop(L, 1);
     if (!argv[(int)i]) {
       free_string_array(argv);

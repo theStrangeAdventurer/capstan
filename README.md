@@ -46,13 +46,13 @@ xcode-select --install
 Linux, Debian/Ubuntu:
 
 ```sh
-sudo apt install build-essential libcurl4-openssl-dev
+sudo apt install build-essential libcurl4-openssl-dev ncurses-bin
 ```
 
 Linux, Fedora:
 
 ```sh
-sudo dnf install gcc make libcurl-devel
+sudo dnf install gcc make libcurl-devel ncurses
 ```
 
 `libcurl` is the only dynamic runtime dependency. ncurses and Lua are linked

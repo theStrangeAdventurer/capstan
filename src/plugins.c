@@ -11,6 +11,7 @@
 #include "utils.h"
 #include <dirent.h>
 #include <lauxlib.h>
+#include <limits.h>
 #include <lua.h>
 #include <lualib.h>
 #include <stdio.h>
@@ -24,6 +25,10 @@
 
 #define PLUGIN_RESPONSE_MAX_SIZE 4096
 #define PLUGIN_CAPACITY_INCREMENT 10
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 lua_State *L = NULL;
 
@@ -1301,8 +1306,11 @@ void plugins_watch_poll(void) {
   while ((entry = readdir(dir)) != NULL) {
     if (!is_lua_file(entry->d_name))
       continue;
-    char path[512];
-    snprintf(path, sizeof(path), "%s/%s", g_watch_dir, entry->d_name);
+    char path[PATH_MAX];
+    int written =
+        snprintf(path, sizeof(path), "%s/%s", g_watch_dir, entry->d_name);
+    if (written < 0 || (size_t)written >= sizeof(path))
+      continue;
     struct stat st;
     if (stat(path, &st) != 0)
       continue;

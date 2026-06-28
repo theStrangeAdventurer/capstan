@@ -3,7 +3,7 @@ NCURSES_DIR = vendor/ncurses-install
 LUA_DIR = vendor/lua-5.5.0
 MUNIT_DIR = vendor/munit
 
-CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -DPOPUP_NCURSES
+CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -DPOPUP_NCURSES
 # -L - флаг для динамических библиотек, в нашем случае нужна статика
 # LDFLAGS = -L$(NCURSES_DIR)/lib -lncursesw 
 # А НАМ НУЖНО СТАТИЧЕСКИ
@@ -12,7 +12,7 @@ CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/in
 # -lm математическая библиотека - lua на нее ссылается
 LDFLAGS = $(LUA_DIR)/src/liblua.a $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DIR)/lib/libtinfow.a -lm  -lcurl
 
-TEST_CFLAGS = -Iinclude -I$(MUNIT_DIR) -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
+TEST_CFLAGS = -Iinclude -I$(MUNIT_DIR) -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE
 TEST_SRCS = src/app_config.c src/cli_args.c src/dispatch_logic.c src/finder.c src/input.c src/linemap.c src/mode.c src/permit_logic.c src/permit_prompt.c src/popup_logic.c src/scroll.c src/skills.c src/usage.c src/utils.c src/visual.c test/test_main.c test/test_app_config.c test/test_cli_args.c test/test_dispatch.c test/test_finder.c test/test_input.c test/test_linemap.c test/test_mode.c test/test_permit_logic.c test/test_permit_prompt.c test/test_popup.c test/test_scroll.c test/test_skills.c test/test_usage.c test/test_utils.c test/test_visual.c vendor/munit/munit.c
 
 CORE_PLUGIN_ASSETS = plugins/file.lua plugins/file_write.lua plugins/file_edit.lua plugins/shell.lua plugins/fetch.lua plugins/logs.lua plugins/skills.lua plugins/models.lua plugins/info.lua plugins/mcp.lua plugins/plan.lua plugins/implement.lua plugins/fast.lua
@@ -46,7 +46,7 @@ $(TEST_TARGET): $(TEST_SRCS)
 clean:
 	rm -rf build
 
-HTTP_LUA_FLAGS = -Iinclude -I$(LUA_DIR)/src -I$(MUNIT_DIR) -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L
+HTTP_LUA_FLAGS = -Iinclude -I$(LUA_DIR)/src -I$(MUNIT_DIR) -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE
 HTTP_LUA_SRCS = src/agent.c src/http.c src/utils.c test/test_agent.c test/test_http_stack.c test/test_fetch_plugin.c test/test_file_plugin.c test/test_file_write_plugin.c test/test_file_edit_plugin.c test/test_shell_plugin.c test/test_http_redirect.c test/test_logs_plugin.c test/test_models_plugin.c test/test_info_plugin.c test/test_provider_tools.c test/test_skills_plugin.c test/test_main_http_stack.c vendor/munit/munit.c
 HTTP_LUA_TARGET = build/test_http_stack
 
