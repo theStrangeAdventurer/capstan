@@ -92,6 +92,14 @@ CliOptions cli_parse(int argc, char **argv) {
       }
     } else if (is_flag(arg, "--json")) {
       opts.json = 1;
+    } else if (is_flag(arg, "--no-mcp")) {
+      opts.no_mcp = 1;
+    } else if (is_flag(arg, "--full-control")) {
+      opts.full_control = 1;
+    } else if (is_flag(arg, "--benchmark")) {
+      opts.benchmark = 1;
+      opts.no_mcp = 1;
+      opts.full_control = 1;
     } else if (is_flag(arg, "-h") || is_flag(arg, "--help")) {
       opts.mode = CLI_MODE_HELP;
     } else {

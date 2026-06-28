@@ -9,6 +9,7 @@ as the TUI.
 ```sh
 capstan run --prompt "Inspect the build failure"
 capstan run --prompt-file task.md --provider openrouter --model anthropic/claude-sonnet-4
+capstan run --benchmark --prompt-file task.md --workdir /tmp/capstan-eval
 echo "Summarize this repo" | capstan run --json
 ```
 
@@ -18,6 +19,9 @@ echo "Summarize this repo" | capstan run --json
 - `--provider`, `--model`, and `--workdir` override only this process run.
   They do not update runtime state.
 - `--max-turns` caps model-tool continuation rounds; the default is `200`.
+- `--no-mcp` skips configured MCP server startup for this process run.
+- `--full-control` grants workspace-scoped tool permissions for this run.
+- `--benchmark` is shorthand for `--no-mcp --full-control`.
 - Plain output writes the final assistant text to stdout.
 - `--json` writes `{ ok, text, error }` to stdout.
 

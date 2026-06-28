@@ -18,6 +18,9 @@ typedef struct {
   const char *workdir;
   int max_turns;
   int json;
+  int no_mcp;
+  int full_control;
+  int benchmark;
   const char *error;
 } CliOptions;
 

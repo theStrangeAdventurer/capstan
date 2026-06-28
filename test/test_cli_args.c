@@ -28,6 +28,33 @@ static MunitResult test_run_options(const MunitParameter params[], void *data) {
   return MUNIT_OK;
 }
 
+static MunitResult test_benchmark_sets_presets(const MunitParameter params[],
+                                               void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "run", "--prompt", "hello", "--benchmark"};
+  CliOptions opts = cli_parse(5, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
+  munit_assert_int(opts.benchmark, ==, 1);
+  munit_assert_int(opts.no_mcp, ==, 1);
+  munit_assert_int(opts.full_control, ==, 1);
+  return MUNIT_OK;
+}
+
+static MunitResult test_explicit_headless_controls(const MunitParameter params[],
+                                                   void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "run", "--prompt", "hello", "--no-mcp",
+                  "--full-control"};
+  CliOptions opts = cli_parse(6, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
+  munit_assert_int(opts.no_mcp, ==, 1);
+  munit_assert_int(opts.full_control, ==, 1);
+  munit_assert_int(opts.benchmark, ==, 0);
+  return MUNIT_OK;
+}
+
 static MunitResult test_prompt_conflict(const MunitParameter params[],
                                         void *data) {
   (void)params;
@@ -65,6 +92,10 @@ static MunitTest tests[] = {
      NULL},
     {"/run_options", test_run_options, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/benchmark_sets_presets", test_benchmark_sets_presets, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/explicit_headless_controls", test_explicit_headless_controls, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/prompt_conflict", test_prompt_conflict, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/self_test_mode", test_self_test_mode, NULL, NULL,
