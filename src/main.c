@@ -53,6 +53,9 @@ static void print_help(void) {
   printf("  --model ID          Override model for this run\n");
   printf("  --workdir PATH      Override workspace directory\n");
   printf("  --max-turns N       Limit agent continuation rounds (default: 200)\n");
+  printf("  --no-mcp           Do not start configured MCP servers for this run\n");
+  printf("  --full-control     Allow workspace-scoped tools for this run\n");
+  printf("  --benchmark        Alias for --no-mcp --full-control\n");
   printf("  --json              Print structured JSON result\n");
 }
 
@@ -221,7 +224,8 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
 
   setlocale(LC_ALL, "");
   http_set_headless(1);
-  plugins_init();
+  PluginsInitOptions plugin_options = {.disable_mcp = opts->no_mcp};
+  plugins_init_with_options(&plugin_options);
   load_embedded_plugins();
 
   lua_getglobal(L, "capstan");
@@ -247,6 +251,16 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   }
   lua_pushinteger(L, opts->max_turns);
   lua_setfield(L, -2, "max_turns");
+  if (opts->full_control) {
+    lua_newtable(L);
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, "full_control");
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, "workdir_only");
+    lua_setfield(L, -2, "permission_scope");
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, "silent_tools");
+  }
 
   lua_newtable(L);
   lua_pushcfunction(L, l_headless_on_text);

@@ -391,7 +391,7 @@ static int l_capstan_now_ms(lua_State *l) {
   return 1;
 }
 
-static void register_capstan_runtime(void) {
+static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_getglobal(L, "capstan");
   if (!lua_istable(L, -1)) {
     lua_pop(L, 1);
@@ -418,6 +418,11 @@ static void register_capstan_runtime(void) {
 
   lua_pushcfunction(L, l_capstan_now_ms);
   lua_setfield(L, -2, "now_ms");
+
+  lua_newtable(L);
+  lua_pushboolean(L, options && options->disable_mcp);
+  lua_setfield(L, -2, "disable_mcp");
+  lua_setfield(L, -2, "runtime_options");
 
   lua_setglobal(L, "capstan");
 }
@@ -482,7 +487,7 @@ static void load_capstan_state(void) {
   lua_pop(L, 1);
 }
 
-void plugins_init(void) {
+void plugins_init_with_options(const PluginsInitOptions *options) {
   L = luaL_newstate();
   luaL_openlibs(L);
 
@@ -508,7 +513,7 @@ void plugins_init(void) {
   agent_init(L);
   tools_init(L);
   mcp_init(L);
-  register_capstan_runtime();
+  register_capstan_runtime(options);
   load_capstan_config();
   load_capstan_state();
   permit_init(L);
@@ -528,6 +533,8 @@ void plugins_init(void) {
     lua_pop(L, 1);
   }
 }
+
+void plugins_init(void) { plugins_init_with_options(NULL); }
 
 static PluginRegistry plugins_registry = {
     .plugins = NULL, .count = 0, .capacity = 0};

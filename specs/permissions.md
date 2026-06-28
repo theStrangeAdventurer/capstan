@@ -83,6 +83,11 @@ agent run. A `subagents` tool call creates one shared child permission scope for
 all subagent tasks in that batch, so approving `Tool run` or `Full run` once
 applies across the sibling subagents without writing persistent rules.
 
+Headless `capstan run --full-control` creates a non-persisted run scope without
+showing prompts. It is workdir-only: `shell` is allowed in the active workspace,
+and `file_read` / `file_write` are allowed only for normalized paths inside the
+active workspace. `--benchmark` enables this mode and also skips MCP startup.
+
 ## Default Policy
 
 If no configured or persisted rule matches:

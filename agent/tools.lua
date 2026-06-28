@@ -911,8 +911,34 @@ end
 
 local function scope_allows(scope, permission_tool)
     if not scope or not permission_tool then return false end
-    if scope.full_control then return true end
+    if scope.full_control and not scope.workdir_only then return true end
+    if scope.full_control and scope.workdir_only then
+        return permission_tool == "shell" or permission_tool == "file_read" or permission_tool == "file_write"
+    end
     return type(scope.allowed_tools) == "table" and scope.allowed_tools[permission_tool] == true
+end
+
+local function path_is_within_workdir(path)
+    local workdir = configured_workdir()
+    if type(path) ~= "string" or path == "" or type(workdir) ~= "string" or workdir == "" then
+        return false
+    end
+    local normalized_path = normalize_path(path):gsub("/+$", "")
+    local normalized_workdir = normalize_path(workdir):gsub("/+$", "")
+    return normalized_path == normalized_workdir or normalized_path:sub(1, #normalized_workdir + 1) == normalized_workdir .. "/"
+end
+
+local function scope_allows_target(scope, permission_tool, target)
+    if not scope_allows(scope, permission_tool) then return false end
+    if not scope or not scope.workdir_only then return true end
+    if permission_tool == "shell" then
+        local workdir = configured_workdir()
+        return type(workdir) == "string" and workdir ~= "" and target == workdir
+    end
+    if permission_tool == "file_read" or permission_tool == "file_write" then
+        return path_is_within_workdir(target)
+    end
+    return false
 end
 
 local function apply_prompt_decision(decision, scope, permission_tool)
@@ -1008,7 +1034,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
             end
             local permission_scope = run_ctx and run_ctx.permission_scope or nil
             local perm = "allow"
-            if scope_allows(permission_scope, permission_tool) then
+            if scope_allows_target(permission_scope, permission_tool, target) then
                 logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
             elseif permission_tool then
                 perm = permit.check(permission_tool, target)

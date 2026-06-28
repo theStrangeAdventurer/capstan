@@ -22,6 +22,12 @@ explanations. When a tool fails, inspect logs first, then explain.
 - **logs** — when any tool, plugin, hook, or API call fails, use logs FIRST
   to inspect recent runtime diagnostics before explaining the failure.
 
+## Benchmark / exact-output tasks
+When the user asks for an exact marker, exact final token, or "final answer must
+include only ...", finish with that exact requested text after the minimum
+needed verification. Do not add extra commentary unless explicitly requested.
+Never finish with an empty answer.
+
 ## Permissions
 Some operations (especially shell) may require user confirmation. If a
 permission is denied, do not retry the same command — explain the situation

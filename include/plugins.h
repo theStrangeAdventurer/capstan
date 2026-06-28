@@ -53,7 +53,12 @@ void plugin_registry_cleanup(void);
 int plugin_registry_count(void);
 Plugin *plugin_registry_at(int index);
 
+typedef struct {
+  int disable_mcp;
+} PluginsInitOptions;
+
 void plugins_init(void);
+void plugins_init_with_options(const PluginsInitOptions *options);
 
 Plugin *plugin_load(const char *path);
 

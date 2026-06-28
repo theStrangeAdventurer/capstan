@@ -14,8 +14,12 @@ M.parse_sse_event = stream.parse_sse_event
 hooks.install_config((_G.capstan and _G.capstan.config) or {})
 hooks.install_existing_plugins(_G.plugins)
 
+local runtime_options = (_G.capstan and _G.capstan.runtime_options) or {}
+
 -- Initialize MCP servers (no-op if not configured)
-mcp_client.init()
+if not runtime_options.disable_mcp then
+    mcp_client.init()
+end
 
 function M.list_models(provider_name)
     return models.list(M, provider_name or M.provider)
