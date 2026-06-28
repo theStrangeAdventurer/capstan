@@ -1,4 +1,4 @@
-# Capstan
+## Capstan
 
 Capstan is a small terminal coding agent built in C with an embedded Lua agent
 runtime. It is designed to be local, inspectable, and easy to extend with plain
