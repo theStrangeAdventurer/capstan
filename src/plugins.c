@@ -945,6 +945,22 @@ static int l_ctx_replace(lua_State *l) {
   return 2;
 }
 
+static char *dup_lua_result(lua_State *l, int index, const char *fallback) {
+  if (lua_isnoneornil(l, index))
+    return my_strdup(fallback ? fallback : "");
+
+  const char *s = lua_tostring(l, index);
+  if (s)
+    return my_strdup(s);
+
+  int abs_index = lua_absindex(l, index);
+  luaL_tolstring(l, abs_index, NULL);
+  s = lua_tostring(l, -1);
+  char *copy = my_strdup(s ? s : (fallback ? fallback : ""));
+  lua_pop(l, 1);
+  return copy;
+}
+
 PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
                              char **pre_args, int pre_arg_count) {
   if (!plugin || plugin->handler_ref == LUA_NOREF) {
@@ -1023,20 +1039,21 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
     return NULL;
   }
 
-  const char *ui_result = lua_tostring(L, -2);
-  const char *raw_result = NULL;
-
-  if (!lua_isnil(L, -1)) {
-    raw_result = lua_tostring(L, -1);
-  }
-
-  if (!raw_result) {
-    raw_result = ui_result;
-  }
-
   PluginResult *r = malloc(sizeof(PluginResult));
-  r->ui_result = my_strdup(ui_result);
-  r->raw_result = my_strdup(raw_result ? raw_result : ui_result);
+  if (!r) {
+    lua_pop(L, 3);
+    return NULL;
+  }
+
+  r->ui_result = dup_lua_result(L, -2, "");
+  r->raw_result = dup_lua_result(L, -1, r->ui_result ? r->ui_result : "");
+  if (!r->ui_result || !r->raw_result) {
+    free(r->ui_result);
+    free(r->raw_result);
+    free(r);
+    lua_pop(L, 3);
+    return NULL;
+  }
   lua_pop(L, 3);
 
   return r;

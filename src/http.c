@@ -206,10 +206,10 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
       fprintf(stderr, "capstan stream error: %s\n", lua_tostring(ctx->L, -1));
     else
       popup_show_message("Stream Error", lua_tostring(ctx->L, -1), 1);
-    lua_settop(ctx->L, lua_gettop(ctx->L) - 2);
+    lua_settop(ctx->L, msgh - 1);
     return 0;
   }
-  lua_settop(ctx->L, lua_gettop(ctx->L) - 1);
+  lua_settop(ctx->L, msgh - 1);
   return total;
 }
 

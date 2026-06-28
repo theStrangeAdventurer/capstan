@@ -3,7 +3,7 @@
 
 int usage_has_values(UsageStats usage) {
   return usage.prompt_tokens > 0 || usage.completion_tokens > 0 ||
-         usage.total_tokens > 0;
+         usage.total_tokens > 0 || usage.context_limit > 0;
 }
 
 static void format_count(int value, char *buf, size_t buf_size) {

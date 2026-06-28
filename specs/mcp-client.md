@@ -13,7 +13,8 @@ built-in plugin tools.
 - Communication uses **newline-delimited JSON (NDJSON)**: each line on
   stdin/stdout is one complete JSON-RPC 2.0 message (no `Content-Length`
   framing).
-- stderr from the server is captured for logging but not parsed.
+- stderr from the server is redirected to `/dev/null`; it is not captured or
+  parsed.
 
 ### Transport: Streamable HTTP
 
@@ -154,9 +155,11 @@ mcp.alive(handle)              → boolean
 mcp.kill(handle)               → void
 ```
 
-Implementation: `fork()` + `pipe()` for stdin/stdout, `execvp()` in child.
-`recv()` uses `select()` with timeout, reads line-by-line. UI is pumped via
-`tui_pump_blocking()` during blocking reads.
+Implementation: `fork()` + `pipe()` for stdin/stdout, `execvp()`/`execve()` in
+the child, plus a close-on-exec error pipe so failed `exec` calls are reported
+to the parent during spawn. `recv()` uses `select()` with timeout, reads
+line-by-line, and closes/reaps dead subprocesses before returning errors. UI is
+pumped via `tui_pump_blocking()` during blocking reads and graceful shutdown.
 
 `src/http.c` also exposes:
 

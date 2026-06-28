@@ -83,26 +83,29 @@ static Message *find_last_message_by_role(MessageRole role) {
   return NULL;
 }
 
-// FIXME: пока тут код такой из предположения что text и raw_text одинаковые для
-// сообщения с ролью агента, но в целом точно будут кейсы когда оно разное
 void append_to_last_message(const char *text, MessageRole role) {
+  if (!text)
+    return;
 
   Message *m = find_last_message_by_role(role);
 
   if (!m) {
     size_t len = strlen(text);
     char *copy = malloc(len + 1);
+    if (!copy)
+      return;
     memcpy(copy, text, len + 1);
     add_message(copy, copy, role);
     return;
   }
 
-  int old_len = strlen(m->raw_text);
-  int add_len = strlen(text);
+  size_t old_len = m->raw_text ? strlen(m->raw_text) : 0;
+  size_t add_len = strlen(text);
 
-  int new_size = old_len + add_len + 1;
+  if (add_len > ((size_t)-1) - old_len - 1)
+    return;
 
-  char *new_ptr = realloc(m->raw_text, new_size);
+  char *new_ptr = realloc(m->raw_text, old_len + add_len + 1);
 
   if (!new_ptr)
     return;
@@ -116,6 +119,12 @@ void append_to_last_message(const char *text, MessageRole role) {
 void add_message(char *text, char *raw_text, MessageRole role) {
 
   Message *message = malloc(sizeof(Message));
+  if (!message) {
+    free(text);
+    if (raw_text && raw_text != text)
+      free(raw_text);
+    return;
+  }
 
   message->text = text;
   message->raw_text = raw_text;

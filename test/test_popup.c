@@ -373,6 +373,31 @@ static MunitResult test_drill_down_replaces(const MunitParameter p[], void *d) {
   return MUNIT_OK;
 }
 
+static MunitResult test_drill_down_clears_filterable_state(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  PopupItem items[2] = {
+    {my_strdup("alpha"), my_strdup("alpha")},
+    {my_strdup("beta"), my_strdup("beta")},
+  };
+  popup_open_filterable_with_plugin(items, 2, "Find", 5, 0, NULL, 0);
+  popup_handle_key('b');
+
+  PopupItem next[1] = {{my_strdup("next"), my_strdup("next")}};
+  popup_drill_down(next, 1, "Next");
+
+  munit_assert_int(g_popup.filterable, ==, 0);
+  munit_assert_int(g_popup.query_len, ==, 0);
+  munit_assert_string_equal(g_popup.query, "");
+  munit_assert_ptr_null(g_popup.all_items);
+  munit_assert_int(g_popup.all_item_count, ==, 0);
+
+  for (int i = 0; i < 2; i++) { free(items[i].text); free(items[i].value); }
+  free(next[0].text);
+  free(next[0].value);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
 static MunitResult test_enter_multi_no_selection(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(3, 1);
@@ -552,6 +577,7 @@ static MunitTest tests[] = {
   {"/esc_cancels", test_esc_cancels, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/get_selected_values", test_get_selected_values, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/drill_down_replaces", test_drill_down_replaces, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/drill_down_clears_filterable_state", test_drill_down_clears_filterable_state, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/filterable_typing_filters_items", test_filterable_typing_filters_items, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/filterable_backspace_refilters", test_filterable_backspace_refilters, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/filterable_enter_selects_current", test_filterable_enter_selects_current, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

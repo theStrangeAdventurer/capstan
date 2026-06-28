@@ -387,7 +387,7 @@ local function run_subagents(args, run_ctx)
     local completed = 0
     local max_attempts = subagent_max_attempts()
 
-    agent.append(string.format("\n⚙ subagents: running %d/%d\n", max_concurrent, #args.tasks), "agent")
+    agent.append(string.format("\n⚙ subagents: running %d concurrent, %d total\n", max_concurrent, #args.tasks), "agent")
     for _, task in ipairs(args.tasks) do
         agent.append("  " .. task_label(task) .. "\n", "agent")
     end

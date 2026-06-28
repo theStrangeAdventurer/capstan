@@ -108,7 +108,7 @@ completion are parallel and may occur in a different order.
 The parent message shows a compact status block:
 
 ```text
-⚙ subagents: running 3/3
+⚙ subagents: running 3 concurrent, 3 total
   docs - Study documentation and summarize relevant constraints
   build - Check build scripts and likely failure points
 

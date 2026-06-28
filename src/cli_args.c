@@ -1,4 +1,5 @@
 #include "cli_args.h"
+#include <limits.h>
 #include <string.h>
 
 CliOptions cli_options_default(void) {
@@ -76,6 +77,10 @@ CliOptions cli_parse(int argc, char **argv) {
         for (const char *p = value; *p; p++) {
           if (*p < '0' || *p > '9') {
             opts.error = "--max-turns must be a positive integer";
+            break;
+          }
+          if (parsed > (INT_MAX - (*p - '0')) / 10) {
+            opts.error = "--max-turns is too large";
             break;
           }
           parsed = parsed * 10 + (*p - '0');
