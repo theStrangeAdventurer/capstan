@@ -24,6 +24,8 @@ return {
     self_improvement = false,
   },
   agent = {
+    profile = "implement",
+    reasoning_effort = "medium",
     max_turns = 80,
     max_duration_sec = 900,
     max_tool_calls = 80,
@@ -72,6 +74,20 @@ return {
   loops. Missing values fall back to the built-in defaults.
   `max_same_shell_command = 0` disables the shell-specific repeated-command
   guard.
+- `agent.profile` sets the default workflow profile. Accepted values are
+  `fast`, `implement`, and `plan`. Profiles may append system instructions,
+  set a default reasoning effort, and restrict model tools. Slash commands
+  `/fast`, `/implement`, and `/plan` change the profile for the current TUI
+  session; `capstan run --profile ...` overrides it for one headless run.
+- `agent.reasoning_effort` sets the default effort policy for agent runs.
+  Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
+  `max`. Run options such as `capstan run --reasoning-effort low` override this
+  for one process. Explicit reasoning effort takes precedence over profile
+  defaults.
+- Provider entries may set `reasoning = { ... }`, `reasoning_effort`,
+  `reasoning_max_tokens`, or `reasoning_exclude`; these are copied into the
+  OpenAI-compatible request body as a `reasoning` object. The run-level effort
+  override takes precedence over provider defaults.
 - `subagents.max_concurrent`, `max_tasks`, `max_turns`, and `max_turns_cap`
   limit delegated internal runs.
 

@@ -38,6 +38,10 @@ headers. Capstan redacts common sensitive headers and key/value pairs from:
 - runtime tool logs;
 - assistant tool-call arguments replayed in continuation requests.
 
+Continuation requests preserve non-sensitive shell command text so the model can
+reason about what it already ran. Redaction must remove credentials without
+collapsing ordinary commands to placeholders.
+
 Manual slash commands bypass model-tool permission prompts because the user
 directly chose the command. Model-initiated shell tool calls still go through
 normal shell permissions.

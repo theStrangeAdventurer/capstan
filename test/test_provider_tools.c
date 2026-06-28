@@ -3,6 +3,7 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -523,9 +524,17 @@ static void install_broken_tool_plugin(lua_State *L) {
 }
 
 static void make_tmp_dir(char *buf, size_t buf_size, const char *name) {
-  snprintf(buf, buf_size, "/tmp/capstan-%s-%ld", name, (long)getpid());
-  rmdir(buf);
-  munit_assert_int(mkdir(buf, 0700), ==, 0);
+  for (int i = 0; i < 1000; i++) {
+    snprintf(buf, buf_size, "/tmp/capstan-%s-%ld-%d", name, (long)getpid(),
+             i);
+    if (mkdir(buf, 0700) == 0) {
+      return;
+    }
+    if (errno != EEXIST) {
+      break;
+    }
+  }
+  munit_error("failed to create temp dir");
 }
 
 static void write_file(const char *path, const char *content) {
@@ -555,6 +564,53 @@ static void call_agent_entry(lua_State *L) {
   lua_rawseti(L, -2, 1);
   int rc = lua_pcall(L, 1, 0, 0);
   munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void call_agent_run_with_reasoning_effort(lua_State *L,
+                                                 const char *effort) {
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "agent");
+  lua_getfield(L, -1, "run");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "user");
+  lua_setfield(L, -2, "role");
+  lua_pushstring(L, "Fetch https://example.com");
+  lua_setfield(L, -2, "content");
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "messages");
+  lua_pushstring(L, effort);
+  lua_setfield(L, -2, "reasoning_effort");
+
+  lua_newtable(L);
+  int rc = lua_pcall(L, 2, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 4);
+}
+
+static void call_agent_run_with_profile(lua_State *L, const char *profile) {
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "agent");
+  lua_getfield(L, -1, "run");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "user");
+  lua_setfield(L, -2, "role");
+  lua_pushstring(L, "Inspect the project");
+  lua_setfield(L, -2, "content");
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "messages");
+  lua_pushstring(L, profile);
+  lua_setfield(L, -2, "profile");
+
+  lua_newtable(L);
+  int rc = lua_pcall(L, 2, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 4);
 }
 
 static void send_tool_call(lua_State *L, const char *call_id,
@@ -587,6 +643,117 @@ static MunitResult test_request_enables_auto_tool_choice(
   munit_assert_true(strstr(captured_logs, "[agent] tools=fetch,file_read,shell,subagents") != NULL);
   munit_assert_true(strstr(captured_logs, "[agent] last_message role=user") != NULL);
   munit_assert_true(strstr(captured_logs, "[api] post_stream") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_request_applies_reasoning_effort(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
+
+  call_agent_run_with_reasoning_effort(L, "low");
+
+  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"low\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "Reasoning effort: low") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_config_applies_reasoning_effort(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dostring(
+      L,
+      "capstan = capstan or {}\n"
+      "capstan.config = {agent = {reasoning_effort = 'minimal'}}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
+
+  call_agent_entry(L);
+
+  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"minimal\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "Reasoning effort: minimal") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_plan_profile_filters_tools_and_prompt(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
+
+  call_agent_run_with_profile(L, "plan");
+
+  munit_assert_true(strstr(captured_body, "Active Profile: Plan") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"high\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "\"name\":\"fetch\"") != NULL);
+  munit_assert_true(strstr(captured_body, "\"name\":\"file_read\"") != NULL);
+  munit_assert_true(strstr(captured_body, "\"name\":\"shell\"") == NULL);
+  munit_assert_true(strstr(captured_body, "\"name\":\"subagents\"") == NULL);
+  munit_assert_true(strstr(captured_logs, "[agent] tools=fetch,file_read") != NULL);
+  munit_assert_true(strstr(captured_logs, "[agent] profile=plan") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_fast_profile_applies_reasoning_and_prompt(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
+
+  call_agent_run_with_profile(L, "fast");
+
+  munit_assert_true(strstr(captured_body, "Active Profile: Fast") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"low\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "\"name\":\"shell\"") != NULL);
+  munit_assert_true(strstr(captured_body, "\"name\":\"subagents\"") != NULL);
+  munit_assert_true(strstr(captured_logs, "[agent] profile=fast") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -2403,7 +2570,9 @@ static MunitResult test_shell_tool_display_shows_redacted_command(
                            "  $ make test") != NULL);
   munit_assert_true(strstr(captured_logs, "display=shell") != NULL);
   munit_assert_true(strstr(captured_logs,
-                           "args={\"command\":\"shell\"}") != NULL);
+                           "args={\"command\":\"make test\"}") != NULL);
+  munit_assert_true(strstr(captured_body,
+                           "{\\\"command\\\":\\\"make test\\\"}") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -2771,6 +2940,16 @@ static MunitResult test_hook_error_logs_and_keeps_request(
 static MunitTest tests[] = {
     {"/request_enables_auto_tool_choice", test_request_enables_auto_tool_choice,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/request_applies_reasoning_effort", test_request_applies_reasoning_effort,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/config_applies_reasoning_effort", test_config_applies_reasoning_effort,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/plan_profile_filters_tools_and_prompt",
+     test_plan_profile_filters_tools_and_prompt, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/fast_profile_applies_reasoning_and_prompt",
+     test_fast_profile_applies_reasoning_and_prompt, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/subagents_tool_enabled_by_default", test_subagents_tool_enabled_by_default,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/subagents_tool_disabled_by_capability",

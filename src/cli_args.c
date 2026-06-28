@@ -20,6 +20,20 @@ static const char *next_value(int argc, char **argv, int *i) {
   return argv[*i];
 }
 
+static int is_reasoning_effort(const char *value) {
+  return value &&
+         (strcmp(value, "none") == 0 || strcmp(value, "minimal") == 0 ||
+          strcmp(value, "low") == 0 || strcmp(value, "medium") == 0 ||
+          strcmp(value, "high") == 0 || strcmp(value, "xhigh") == 0 ||
+          strcmp(value, "max") == 0);
+}
+
+static int is_profile(const char *value) {
+  return value && (strcmp(value, "fast") == 0 ||
+                   strcmp(value, "implement") == 0 ||
+                   strcmp(value, "plan") == 0);
+}
+
 CliOptions cli_parse(int argc, char **argv) {
   CliOptions opts = cli_options_default();
 
@@ -64,6 +78,19 @@ CliOptions cli_parse(int argc, char **argv) {
       opts.model = next_value(argc, argv, &i);
       if (!opts.model)
         opts.error = "--model requires a value";
+    } else if (is_flag(arg, "--profile")) {
+      opts.profile = next_value(argc, argv, &i);
+      if (!opts.profile)
+        opts.error = "--profile requires a value";
+      else if (!is_profile(opts.profile))
+        opts.error = "--profile must be one of fast, implement, plan";
+    } else if (is_flag(arg, "--reasoning-effort") ||
+               is_flag(arg, "--effort")) {
+      opts.reasoning_effort = next_value(argc, argv, &i);
+      if (!opts.reasoning_effort)
+        opts.error = "--reasoning-effort requires a value";
+      else if (!is_reasoning_effort(opts.reasoning_effort))
+        opts.error = "--reasoning-effort must be one of none, minimal, low, medium, high, xhigh, max";
     } else if (is_flag(arg, "--workdir")) {
       opts.workdir = next_value(argc, argv, &i);
       if (!opts.workdir)

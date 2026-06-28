@@ -851,14 +851,6 @@ end
 
 local function redacted_tool_arguments(tool_name, raw_arguments)
     if tool_name ~= "shell" then return raw_arguments end
-    local ok, decoded = pcall(json.decode, raw_arguments or "{}")
-    if ok and type(decoded) == "table" then
-        local copy = {}
-        for k, v in pairs(decoded) do copy[k] = v end
-        copy.command = summarize_shell_command(decoded.command, "shell")
-        local encoded_ok, encoded = pcall(json.encode, copy)
-        if encoded_ok then return encoded end
-    end
     return redact_sensitive_text(raw_arguments or "")
 end
 

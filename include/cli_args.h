@@ -15,6 +15,8 @@ typedef struct {
   const char *prompt_file;
   const char *provider;
   const char *model;
+  const char *profile;
+  const char *reasoning_effort;
   const char *workdir;
   int max_turns;
   int json;

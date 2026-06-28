@@ -14,17 +14,52 @@ static MunitResult test_default_tui(const MunitParameter params[], void *data) {
 static MunitResult test_run_options(const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
-  char *argv[] = {"capstan", "run", "--prompt", "hello", "--provider", "p",
-                  "--model", "m", "--workdir", "/tmp", "--max-turns", "7",
-                  "--json"};
-  CliOptions opts = cli_parse(13, argv);
+  char *argv[] = {"capstan",   "run",     "--prompt", "hello", "--provider",
+                  "p",         "--model", "m",        "--reasoning-effort",
+                  "high",      "--workdir", "/tmp",   "--max-turns",
+                  "7",         "--profile", "implement", "--json"};
+  CliOptions opts = cli_parse(17, argv);
   munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
   munit_assert_string_equal(opts.prompt, "hello");
   munit_assert_string_equal(opts.provider, "p");
   munit_assert_string_equal(opts.model, "m");
+  munit_assert_string_equal(opts.profile, "implement");
+  munit_assert_string_equal(opts.reasoning_effort, "high");
   munit_assert_string_equal(opts.workdir, "/tmp");
   munit_assert_int(opts.max_turns, ==, 7);
   munit_assert_int(opts.json, ==, 1);
+  return MUNIT_OK;
+}
+
+static MunitResult test_effort_alias(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "run", "--prompt", "hello", "--effort", "low"};
+  CliOptions opts = cli_parse(6, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
+  munit_assert_string_equal(opts.reasoning_effort, "low");
+  return MUNIT_OK;
+}
+
+static MunitResult test_profile_rejects_unknown(const MunitParameter params[],
+                                                void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "run", "--profile", "architect"};
+  CliOptions opts = cli_parse(4, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_ERROR);
+  munit_assert_not_null(opts.error);
+  return MUNIT_OK;
+}
+
+static MunitResult test_reasoning_effort_rejects_unknown(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "run", "--reasoning-effort", "architect"};
+  CliOptions opts = cli_parse(4, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_ERROR);
+  munit_assert_not_null(opts.error);
   return MUNIT_OK;
 }
 
@@ -92,6 +127,13 @@ static MunitTest tests[] = {
      NULL},
     {"/run_options", test_run_options, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/effort_alias", test_effort_alias, NULL, NULL, MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/reasoning_effort_rejects_unknown",
+     test_reasoning_effort_rejects_unknown, NULL, NULL, MUNIT_TEST_OPTION_NONE,
+     NULL},
+    {"/profile_rejects_unknown", test_profile_rejects_unknown, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/benchmark_sets_presets", test_benchmark_sets_presets, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/explicit_headless_controls", test_explicit_headless_controls, NULL,

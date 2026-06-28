@@ -4,6 +4,7 @@ local logging = require("agent.logging")
 local models = require("agent.models")
 local mcp_client = require("agent.mcp")
 local provider_config = require("agent.provider_config")
+local profiles = require("agent.profiles")
 local stream = require("agent.stream")
 local tokens = require("agent.tokens")
 local tools_runtime = require("agent.tools")
@@ -49,16 +50,93 @@ end
 
 models.install_runtime_api(M)
 
+local function config_table(name)
+    if not _G.capstan or type(_G.capstan.config) ~= "table" then return nil end
+    local value = _G.capstan.config[name]
+    return type(value) == "table" and value or nil
+end
+
+local active_profile_name = nil
+
+local function configured_profile()
+    local configured = config_table("agent")
+    local from_agent = configured and profiles.normalize(configured.profile)
+    if from_agent then return from_agent end
+    return profiles.normalize(_G.capstan and _G.capstan.config and _G.capstan.config.profile)
+end
+
+local function effective_profile(opts)
+    local name = profiles.normalize(opts and opts.profile) or active_profile_name or configured_profile()
+    return profiles.get(name)
+end
+
 -- Assembles the message list: prepends system_prompt, then copies all messages.
-local function build_messages(messages)
+local function build_messages(messages, profile)
     local msgs = {}
-    if _G.system_prompt and _G.system_prompt ~= "" then
-        table.insert(msgs, {role = "system", content = _G.system_prompt})
+    local system = _G.system_prompt or ""
+    if profile and profile.prompt then
+        system = system .. "\n\n" .. profile.prompt
+    end
+    if system ~= "" then
+        table.insert(msgs, {role = "system", content = system})
     end
     for _, m in ipairs(messages or {}) do
         table.insert(msgs, {role = m.role, content = m.content})
     end
     return msgs
+end
+
+local reasoning_efforts = {
+    none = true,
+    minimal = true,
+    low = true,
+    medium = true,
+    high = true,
+    xhigh = true,
+    max = true,
+}
+
+local function normalize_reasoning_effort(value)
+    if type(value) ~= "string" then return nil end
+    local normalized = value:lower():gsub("^%s+", ""):gsub("%s+$", "")
+    if normalized == "" then return nil end
+    if reasoning_efforts[normalized] then return normalized end
+    return nil
+end
+
+local function configured_reasoning_effort()
+    local configured = config_table("agent")
+    local from_agent = configured and normalize_reasoning_effort(configured.reasoning_effort)
+    if from_agent then return from_agent end
+    return normalize_reasoning_effort(_G.capstan and _G.capstan.config and _G.capstan.config.reasoning_effort)
+end
+
+local function effective_reasoning_effort(provider, opts, profile)
+    return normalize_reasoning_effort(opts and opts.reasoning_effort) or
+        normalize_reasoning_effort(profile and profile.reasoning_effort) or
+        normalize_reasoning_effort(provider and provider.reasoning_effort) or
+        configured_reasoning_effort()
+end
+
+local function copy_table(value)
+    if type(value) ~= "table" then return nil end
+    local out = {}
+    for k, v in pairs(value) do out[k] = v end
+    return out
+end
+
+local function request_reasoning(provider, effort)
+    local reasoning = copy_table(provider and provider.reasoning) or {}
+    local provider_effort = normalize_reasoning_effort(provider and provider.reasoning_effort)
+    if provider_effort then reasoning.effort = provider_effort end
+    if effort then reasoning.effort = effort end
+    if provider and provider.reasoning_max_tokens then
+        reasoning.max_tokens = provider.reasoning_max_tokens
+    end
+    if provider and provider.reasoning_exclude ~= nil then
+        reasoning.exclude = provider.reasoning_exclude and true or false
+    end
+    return next(reasoning) and reasoning or nil
 end
 
 -- Resolves and clones provider config for a request (model override, suppress flags).
@@ -82,12 +160,6 @@ local function prepare_provider(opts)
         active = copy
     end
     return active, provider_name
-end
-
-local function config_table(name)
-    if not _G.capstan or type(_G.capstan.config) ~= "table" then return nil end
-    local value = _G.capstan.config[name]
-    return type(value) == "table" and value or nil
 end
 
 local function agent_config_number(field, default)
@@ -148,7 +220,9 @@ function M.run(opts, callbacks)
         agent.set_usage(0, 0, 0, active.context_limit or 0)
     end
 
-    local msgs = build_messages(opts.messages or {})
+    local profile = effective_profile(opts)
+    local effort = effective_reasoning_effort(active, opts, profile)
+    local msgs = build_messages(opts.messages or {}, profile)
     local messages_ctx = hooks.run("before_messages", {
         runtime = M,
         provider = active,
@@ -170,6 +244,7 @@ function M.run(opts, callbacks)
         run = opts,
     })
     combined_tools = tools_ctx.tools or combined_tools
+    combined_tools = profiles.filter_tools(combined_tools, profile)
     logging.runtime_log("agent", string.format("request provider=%s model=%s messages=%d tools=%d",
         provider_name,
         active.model or "",
@@ -177,6 +252,9 @@ function M.run(opts, callbacks)
         #combined_tools
     ))
     logging.runtime_log("agent", "tools=" .. tools_runtime.names(combined_tools))
+    if profile then
+        logging.runtime_log("agent", "profile=" .. profile.name)
+    end
     if #msgs > 0 then
         logging.runtime_log("agent", string.format("last_message role=%s content=%s",
             tostring(msgs[#msgs].role),
@@ -308,6 +386,10 @@ function M.run(opts, callbacks)
             stream = true,
             stream_options = {include_usage = true}
         }
+        local reasoning = request_reasoning(active, effort)
+        if reasoning then
+            request.reasoning = reasoning
+        end
 
         local headers = {
             ["Content-Type"] = "application/json",
@@ -350,6 +432,21 @@ if not _G.capstan then _G.capstan = {} end
 _G.capstan.agent = {
     run = function(opts, callbacks)
         return M.run(opts, callbacks)
+    end,
+    set_profile = function(name)
+        local normalized = profiles.normalize(name)
+        if not normalized then return nil, "unknown profile" end
+        active_profile_name = normalized
+        return normalized
+    end,
+    get_profile = function()
+        return active_profile_name or configured_profile()
+    end,
+    clear_profile = function()
+        active_profile_name = nil
+    end,
+    profiles = function()
+        return profiles.names()
     end,
 }
 
