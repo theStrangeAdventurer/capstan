@@ -36,6 +36,51 @@ typedef struct {
 static McpProc g_procs[MCP_MAX_PROCS];
 static int g_proc_count = 0;
 
+static void free_string_array(char **items) {
+  if (!items)
+    return;
+  for (int i = 0; items[i]; i++)
+    free(items[i]);
+  free(items);
+}
+
+static void close_proc_slot(int handle) {
+  if (handle < 0 || handle >= MCP_MAX_PROCS)
+    return;
+  if (g_procs[handle].stdin_fd >= 0) {
+    close(g_procs[handle].stdin_fd);
+    g_procs[handle].stdin_fd = -1;
+  }
+  if (g_procs[handle].stdout_fd >= 0) {
+    close(g_procs[handle].stdout_fd);
+    g_procs[handle].stdout_fd = -1;
+  }
+  if (g_procs[handle].alive) {
+    g_procs[handle].alive = 0;
+    if (g_proc_count > 0)
+      g_proc_count--;
+  }
+  g_procs[handle].pid = 0;
+}
+
+static int write_all(int fd, const char *data, size_t len) {
+  size_t written = 0;
+  while (written < len) {
+    ssize_t n = write(fd, data + written, len - written);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      return -1;
+    }
+    if (n == 0) {
+      errno = EPIPE;
+      return -1;
+    }
+    written += (size_t)n;
+  }
+  return 0;
+}
+
 static int find_free_slot(void) {
   for (int i = 0; i < MCP_MAX_PROCS; i++) {
     if (!g_procs[i].alive)
@@ -71,6 +116,10 @@ static int l_mcp_spawn(lua_State *L) {
     const char *s = lua_tostring(L, -1);
     argv[(int)i] = s ? strdup(s) : strdup("");
     lua_pop(L, 1);
+    if (!argv[(int)i]) {
+      free_string_array(argv);
+      return luaL_error(L, "mcp.spawn: out of memory");
+    }
   }
   argv[(int)nargs + 1] = NULL;
 
@@ -108,6 +157,11 @@ static int l_mcp_spawn(lua_State *L) {
       int idx = 0;
       for (char **e = environ; *e; e++) {
         envp[idx++] = strdup(*e);
+        if (!envp[idx - 1]) {
+          free_string_array(argv);
+          free_string_array(envp);
+          return luaL_error(L, "mcp.spawn: out of memory");
+        }
       }
 
       /* Apply overrides: format "KEY=VALUE" */
@@ -119,8 +173,13 @@ static int l_mcp_spawn(lua_State *L) {
           if (key && val) {
             size_t len = strlen(key) + 1 + strlen(val) + 1;
             char *entry = malloc(len);
-            if (entry)
-              snprintf(entry, len, "%s=%s", key, val);
+            if (!entry) {
+              lua_pop(L, 1);
+              free_string_array(argv);
+              free_string_array(envp);
+              return luaL_error(L, "mcp.spawn: out of memory");
+            }
+            snprintf(entry, len, "%s=%s", key, val);
             envp[idx++] = entry;
           }
         }
@@ -132,42 +191,38 @@ static int l_mcp_spawn(lua_State *L) {
 
   int slot = find_free_slot();
   if (slot < 0) {
-    for (int i = 0; i < argv_count - 1; i++)
-      free(argv[i]);
-    free(argv);
-    if (envp) {
-      for (int i = 0; envp[i]; i++)
-        free(envp[i]);
-      free(envp);
-    }
+    free_string_array(argv);
+    free_string_array(envp);
     return luaL_error(L, "mcp.spawn: too many processes (max %d)", MCP_MAX_PROCS);
   }
 
   int in_pipe[2], out_pipe[2];
   if (pipe(in_pipe) < 0) {
-    for (int i = 0; i < argv_count - 1; i++)
-      free(argv[i]);
-    free(argv);
-    if (envp) {
-      for (int i = 0; envp[i]; i++)
-        free(envp[i]);
-      free(envp);
-    }
+    free_string_array(argv);
+    free_string_array(envp);
     return luaL_error(L, "mcp.spawn: pipe() failed: %s", strerror(errno));
   }
   if (pipe(out_pipe) < 0) {
     close(in_pipe[0]);
     close(in_pipe[1]);
-    for (int i = 0; i < argv_count - 1; i++)
-      free(argv[i]);
-    free(argv);
-    if (envp) {
-      for (int i = 0; envp[i]; i++)
-        free(envp[i]);
-      free(envp);
-    }
+    free_string_array(argv);
+    free_string_array(envp);
     return luaL_error(L, "mcp.spawn: pipe() failed: %s", strerror(errno));
   }
+
+  int exec_pipe[2];
+  if (pipe(exec_pipe) < 0) {
+    close(in_pipe[0]);
+    close(in_pipe[1]);
+    close(out_pipe[0]);
+    close(out_pipe[1]);
+    free_string_array(argv);
+    free_string_array(envp);
+    return luaL_error(L, "mcp.spawn: pipe() failed: %s", strerror(errno));
+  }
+  int exec_flags = fcntl(exec_pipe[1], F_GETFD, 0);
+  if (exec_flags >= 0)
+    fcntl(exec_pipe[1], F_SETFD, exec_flags | FD_CLOEXEC);
 
   pid_t pid = fork();
   if (pid < 0) {
@@ -175,14 +230,10 @@ static int l_mcp_spawn(lua_State *L) {
     close(in_pipe[1]);
     close(out_pipe[0]);
     close(out_pipe[1]);
-    for (int i = 0; i < argv_count - 1; i++)
-      free(argv[i]);
-    free(argv);
-    if (envp) {
-      for (int i = 0; envp[i]; i++)
-        free(envp[i]);
-      free(envp);
-    }
+    close(exec_pipe[0]);
+    close(exec_pipe[1]);
+    free_string_array(argv);
+    free_string_array(envp);
     return luaL_error(L, "mcp.spawn: fork() failed: %s", strerror(errno));
   }
 
@@ -203,6 +254,7 @@ static int l_mcp_spawn(lua_State *L) {
     close(in_pipe[1]);
     close(out_pipe[0]);
     close(out_pipe[1]);
+    close(exec_pipe[0]);
 
     if (envp)
       execve(command, argv, envp);
@@ -210,12 +262,46 @@ static int l_mcp_spawn(lua_State *L) {
       execvp(command, argv);
 
     /* exec failed */
+    int err = errno;
+    (void)write(exec_pipe[1], &err, sizeof(err));
     _exit(127);
   }
 
   /* Parent */
   close(in_pipe[0]);
   close(out_pipe[1]);
+  close(exec_pipe[1]);
+
+  int exec_err = 0;
+  fd_set efds;
+  FD_ZERO(&efds);
+  FD_SET(exec_pipe[0], &efds);
+  struct timeval exec_tv = {.tv_sec = 0, .tv_usec = 50000};
+  int exec_ready = select(exec_pipe[0] + 1, &efds, NULL, NULL, &exec_tv);
+  if (exec_ready > 0 && FD_ISSET(exec_pipe[0], &efds)) {
+    ssize_t n = read(exec_pipe[0], &exec_err, sizeof(exec_err));
+    if (n == (ssize_t)sizeof(exec_err) && exec_err != 0) {
+      close(exec_pipe[0]);
+      close(in_pipe[1]);
+      close(out_pipe[0]);
+      int status;
+      waitpid(pid, &status, 0);
+      free_string_array(argv);
+      free_string_array(envp);
+      return luaL_error(L, "mcp.spawn: exec failed: %s", strerror(exec_err));
+    }
+  }
+  close(exec_pipe[0]);
+
+  int child_status;
+  pid_t child_done = waitpid(pid, &child_status, WNOHANG);
+  if (child_done == pid) {
+    close(in_pipe[1]);
+    close(out_pipe[0]);
+    free_string_array(argv);
+    free_string_array(envp);
+    return luaL_error(L, "mcp.spawn: process exited during startup");
+  }
 
   /* Set stdout read end to non-blocking for select() */
   int flags = fcntl(out_pipe[0], F_GETFL, 0);
@@ -228,14 +314,8 @@ static int l_mcp_spawn(lua_State *L) {
   g_proc_count++;
 
   /* Cleanup argv/envp (child has its own copies after fork) */
-  for (int i = 0; i < argv_count - 1; i++)
-    free(argv[i]);
-  free(argv);
-  if (envp) {
-    for (int i = 0; envp[i]; i++)
-      free(envp[i]);
-    free(envp);
-  }
+  free_string_array(argv);
+  free_string_array(envp);
 
   lua_pushinteger(L, slot);
   return 1;
@@ -252,13 +332,10 @@ static int l_mcp_send(lua_State *L) {
     return 2;
   }
 
-  /* Write message + newline */
-  ssize_t w1 = write(g_procs[handle].stdin_fd, msg, msg_len);
-  ssize_t w2 = write(g_procs[handle].stdin_fd, "\n", 1);
-
-  if (w1 < 0 || w2 < 0) {
+  if (write_all(g_procs[handle].stdin_fd, msg, msg_len) != 0 ||
+      write_all(g_procs[handle].stdin_fd, "\n", 1) != 0) {
     lua_pushnil(L);
-    lua_pushstring(L, "mcp.send: write failed");
+    lua_pushfstring(L, "mcp.send: write failed: %s", strerror(errno));
     return 2;
   }
 
@@ -304,8 +381,7 @@ static int l_mcp_recv(lua_State *L) {
     int status;
     pid_t r = waitpid(g_procs[handle].pid, &status, WNOHANG);
     if (r == g_procs[handle].pid) {
-      g_procs[handle].alive = 0;
-      g_proc_count--;
+      close_proc_slot(handle);
       free(buf);
       lua_pushnil(L);
       lua_pushstring(L, "process exited");
@@ -393,8 +469,7 @@ static int l_mcp_recv(lua_State *L) {
         return 1;
       }
       free(buf);
-      g_procs[handle].alive = 0;
-      g_proc_count--;
+      close_proc_slot(handle);
       lua_pushnil(L);
       lua_pushstring(L, "process closed stdout");
       return 2;
@@ -416,8 +491,7 @@ static int l_mcp_alive(lua_State *L) {
   int status;
   pid_t r = waitpid(g_procs[handle].pid, &status, WNOHANG);
   if (r == g_procs[handle].pid) {
-    g_procs[handle].alive = 0;
-    g_proc_count--;
+    close_proc_slot(handle);
     lua_pushboolean(L, 0);
     return 1;
   }
@@ -448,7 +522,7 @@ static int l_mcp_kill(lua_State *L) {
     if (r == g_procs[handle].pid) {
       break;
     }
-    usleep(100000); /* 100ms */
+    tui_pump_blocking();
   }
 
   /* SIGKILL if still alive */
@@ -459,14 +533,7 @@ static int l_mcp_kill(lua_State *L) {
     waitpid(g_procs[handle].pid, &status, 0);
   }
 
-  /* Close stdout */
-  if (g_procs[handle].stdout_fd >= 0) {
-    close(g_procs[handle].stdout_fd);
-    g_procs[handle].stdout_fd = -1;
-  }
-
-  g_procs[handle].alive = 0;
-  g_proc_count--;
+  close_proc_slot(handle);
 
   lua_pushboolean(L, 1);
   return 1;
@@ -497,7 +564,7 @@ void mcp_cleanup(void) {
         close(g_procs[i].stdout_fd);
         g_procs[i].stdout_fd = -1;
       }
-      g_procs[i].alive = 0;
+      close_proc_slot(i);
     }
   }
   g_proc_count = 0;

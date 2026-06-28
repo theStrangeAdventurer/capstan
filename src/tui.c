@@ -82,7 +82,6 @@ static int count_message_lines(const char *text, int width) {
 }
 
 static int spinner_tick = 0;
-static int prev_loading = 0;
 
 static const char *mode_label(void) {
   if (mode_get() == FOCUS_MESSAGES) {
@@ -516,7 +515,7 @@ void render_all(void) {
     }
   }
 
-  spinner_tick++;
+  spinner_tick = (spinner_tick + 1) % 64;
 
   if (loading)
     curs_set(0);
@@ -524,9 +523,6 @@ void render_all(void) {
     curs_set(0);
   else
     curs_set(1);
-
-  if (loading != prev_loading)
-    prev_loading = loading;
 
   const char *prov = agent_provider_name();
   const char *model = agent_provider_model();

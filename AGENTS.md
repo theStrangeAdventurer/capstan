@@ -86,19 +86,26 @@ build/capstan              # final binary (gitignored)
 
 `plugins_init()` in `src/plugins.c`:
 1. `luaL_newstate` → `luaL_openlibs`
-2. `http_init(L)` — registers global `http = {get, post, post_stream}`
-3. `agent_init(L)` — registers global `agent = {append}`
-4. `luaL_dofile(L, "agent/runtime.lua")` — side-effect: sets `_G.agent_entry`
+2. Embedded Lua modules are registered in `package.preload`
+3. `http_init(L)` — registers global `http = {get, post, post_stream, ...}`
+4. `agent_init(L)` — registers global `agent = {append, set_info, ...}`
+5. `tools_init(L)` — registers built-in tool helpers
+6. `mcp_init(L)` — registers global `mcp = {spawn, send, recv, alive, kill}`
+7. `capstan` runtime paths are registered
+8. User config and persisted runtime state are loaded into `capstan`
+9. `permit`, `log`, and `popup` globals are registered
+10. The embedded system prompt plus project instructions/skills are loaded
+11. `agent/runtime.lua` is loaded — side-effect: sets `_G.agent_entry`
 
-Plugins are loaded AFTER this — they can use `http` and `agent` globals.
+Plugins are loaded AFTER this — they can use the registered globals.
 
 ### Message flow (the tricky part)
 
 After ANY Enter (command or plain text):
 ```
-add_message(text, MSG_USER)       // user/plugin text
-add_message("", MSG_AGENT)        // empty green placeholder FIRST
-agent_emit(L)                     // THEN emit — builds history, calls _G.agent_entry
+add_message(ui_text, raw_text, MSG_USER)  // user/plugin text
+add_message(empty, empty, MSG_AGENT)      // empty green placeholder FIRST
+agent_emit(L)                            // THEN emit — builds history, calls _G.agent_entry
 ```
 
 Why this order: `agent_emit` filters empty messages (`text[0] == '\0'`) so the empty AGENT doesn't go to the LLM. But the AGENT message exists in the array — so `agent.append(chunk, "agent")` from Lua callbacks finds and fills it.
@@ -190,7 +197,7 @@ cd /tmp/capstan-build-smoke.XXXXXX/run && HOME=/tmp/capstan-build-smoke.XXXXXX/h
 | Module | Tests | File |
 |--------|-------|------|
 | `input.c` | 12 tests (ASCII insert, UTF-8 nav, backspace, clear) | `test/test_input.c` |
-| `scroll.c` | 9 tests (up/down, clamp, reset, set) | `test/test_scroll.c` |
+| `scroll.c` | 12 tests (up/down, clamp, reset, set, follow-tail) | `test/test_scroll.c` |
 | `utils.c` | 5 tests (my_strdup, replace_with) | `test/test_utils.c` |
 
 ### Adding new tests

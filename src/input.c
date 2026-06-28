@@ -15,6 +15,8 @@ const char *input_get_text(void) { return g_input_buf; }
 int input_get_cursor(void) { return g_cursor; }
 
 void input_insert(int ch) {
+  if (g_cursor >= INPUT_BUFFER_SIZE - 1)
+    return;
   g_input_buf[g_cursor++] = ch;
   g_input_buf[g_cursor] = '\0';
 }

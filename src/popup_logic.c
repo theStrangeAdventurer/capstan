@@ -209,11 +209,17 @@ void popup_drill_down(PopupItem *items, int count, const char *title) {
   free(g_popup.items);
   free(g_popup.selected);
   free(g_popup.title);
+  popup_items_free(g_popup.all_items, g_popup.all_item_count);
 
   g_popup.active = 1;
   g_popup.cancelled = 0;
   g_popup.cursor = 0;
   g_popup.scroll = 0;
+  g_popup.filterable = 0;
+  g_popup.query[0] = '\0';
+  g_popup.query_len = 0;
+  g_popup.all_items = NULL;
+  g_popup.all_item_count = 0;
   g_popup.item_count = count;
   g_popup.items = malloc(count * sizeof(PopupItem));
   g_popup.selected = malloc(count * sizeof(int));

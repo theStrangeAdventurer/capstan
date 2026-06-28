@@ -709,7 +709,7 @@ static MunitResult test_subagents_tool_returns_structured_results(
 
   munit_assert_string_equal(captured_permit_tool, "");
   munit_assert_string_equal(captured_permit_target, "");
-  munit_assert_true(strstr(captured_agent_appends, "subagents: running 2/2") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "subagents: running 2 concurrent, 2 total") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "subagents: done 2/2") != NULL);
 
   reset_captures(L);

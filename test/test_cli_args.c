@@ -49,6 +49,17 @@ static MunitResult test_self_test_mode(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_max_turns_rejects_overflow(const MunitParameter params[],
+                                                   void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "run", "--max-turns", "999999999999999999999"};
+  CliOptions opts = cli_parse(4, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_ERROR);
+  munit_assert_not_null(opts.error);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/default_tui", test_default_tui, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
@@ -58,6 +69,8 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/self_test_mode", test_self_test_mode, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/max_turns_rejects_overflow", test_max_turns_rejects_overflow, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite cli_args_suite = {"/cli_args", tests, NULL, 1,

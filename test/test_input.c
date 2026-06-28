@@ -1,5 +1,6 @@
 #include "munit.h"
 #include "input.h"
+#include <string.h>
 
 static MunitResult test_init(const MunitParameter params[], void *data) {
   (void)params;
@@ -149,6 +150,17 @@ static MunitResult test_utf8_backspace(const MunitParameter params[], void *data
   return MUNIT_OK;
 }
 
+static MunitResult test_insert_clamps_at_buffer_end(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  input_init();
+  for (int i = 0; i < INPUT_BUFFER_SIZE + 10; i++)
+    input_insert('x');
+  munit_assert_int(input_get_cursor(), ==, INPUT_BUFFER_SIZE - 1);
+  munit_assert_int((int)strlen(input_get_text()), ==, INPUT_BUFFER_SIZE - 1);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
   {"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/insert_ascii", test_insert_ascii, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -162,6 +174,7 @@ static MunitTest tests[] = {
   {"/utf8_insert", test_utf8_insert, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/utf8_move_left", test_utf8_move_left, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/utf8_backspace", test_utf8_backspace, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/insert_clamps_at_buffer_end", test_insert_clamps_at_buffer_end, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}
 };
 
