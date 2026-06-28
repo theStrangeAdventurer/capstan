@@ -130,6 +130,30 @@ Headless `capstan run` builds the same message shape and calls
 `capstan.agent.run` directly, with callbacks that buffer final stdout instead of
 appending to the TUI message list.
 
+The embedded system prompt treats coding runs as implementation-first work:
+read the relevant source/tests, stay inside the requested scope, make the
+smallest correct edit, validate once with the project-appropriate command, and
+finish with a compact summary. It also requires product-level verification for
+specified output files, exact formats, numerical thresholds, and suspiciously
+empty command output. This is agent policy, not benchmark-mode behavior;
+`--benchmark` must not change model instructions beyond the normal run-mode
+permissions/runtime options.
+
+Reasoning effort is an explicit run/config policy. `agent.reasoning_effort` and
+`capstan run --reasoning-effort` accept the common provider vocabulary
+`none|minimal|low|medium|high|xhigh|max`. This is a model/request control, not
+an agent workflow mode: the runtime sends `request.reasoning.effort` when set
+and does not add extra system prompt text for it. Provider configs can also
+define `reasoning`, `reasoning_effort`, `reasoning_max_tokens`, and
+`reasoning_exclude` for gateway-specific controls.
+
+Profiles are workflow policy. `agent.profile`, `capstan run --profile`, and the
+TUI slash commands `/fast`, `/implement`, and `/plan` select named profiles.
+Profiles can append system prompt guidance, choose a default reasoning effort,
+and filter model tools. `plan` is read-only for model-initiated tools: it keeps
+inspection tools such as `file_read`, `fetch`, and `logs`, and removes write,
+shell, and subagent tools.
+
 The loop is recursive through a continuation function: every tool round produces
 a new HTTP request with the expanded message history. Space cancellation can stop
 active curl streams, but it cannot interrupt synchronous Lua work inside tool

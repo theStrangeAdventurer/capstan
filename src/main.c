@@ -51,6 +51,9 @@ static void print_help(void) {
   printf("Options:\n");
   printf("  --provider NAME     Override provider for this run\n");
   printf("  --model ID          Override model for this run\n");
+  printf("  --profile NAME      Agent profile: fast, implement, plan\n");
+  printf("  --reasoning-effort LEVEL\n");
+  printf("                      Reasoning effort: none, minimal, low, medium, high, xhigh, max\n");
   printf("  --workdir PATH      Override workspace directory\n");
   printf("  --max-turns N       Limit agent continuation rounds (default: 200)\n");
   printf("  --no-mcp           Do not start configured MCP servers for this run\n");
@@ -249,6 +252,14 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
     lua_pushstring(L, opts->model);
     lua_setfield(L, -2, "model");
   }
+  if (opts->profile) {
+    lua_pushstring(L, opts->profile);
+    lua_setfield(L, -2, "profile");
+  }
+  if (opts->reasoning_effort) {
+    lua_pushstring(L, opts->reasoning_effort);
+    lua_setfield(L, -2, "reasoning_effort");
+  }
   lua_pushinteger(L, opts->max_turns);
   lua_setfield(L, -2, "max_turns");
   if (opts->full_control) {
@@ -332,7 +343,8 @@ static int run_embedded_self_test(void) {
   load_embedded_plugins();
 
   const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
-                            "/logs", "/skills", "/models", "/info", "/mcp"};
+                            "/logs", "/skills", "/models", "/info", "/mcp",
+                            "/plan", "/implement", "/fast"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);
@@ -359,6 +371,34 @@ static int run_embedded_self_test(void) {
 
   lua_getglobal(L, "capstan");
   if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "agent");
+    if (!lua_istable(L, -1)) {
+      printf("missing capstan.agent\n");
+      ok = 0;
+    } else {
+      lua_getfield(L, -1, "run");
+      if (!lua_isfunction(L, -1)) {
+        printf("missing capstan.agent.run\n");
+        ok = 0;
+      }
+      lua_pop(L, 1);
+
+      lua_getfield(L, -1, "set_profile");
+      if (!lua_isfunction(L, -1)) {
+        printf("missing capstan.agent.set_profile\n");
+        ok = 0;
+      }
+      lua_pop(L, 1);
+
+      lua_getfield(L, -1, "profiles");
+      if (!lua_isfunction(L, -1)) {
+        printf("missing capstan.agent.profiles\n");
+        ok = 0;
+      }
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
     lua_getfield(L, -1, "skills_summary");
     if (lua_isstring(L, -1))
       printf("skills_summary:\n%s\n", lua_tostring(L, -1));

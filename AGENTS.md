@@ -264,6 +264,7 @@ ncurses/Lua/curl APIs, and put them in separate source files.
 Feature specs:
 
 - [Agent control](specs/agent-control.md)
+- [Agent profiles](specs/agent-profiles.md)
 - [Agent loop](specs/agent-loop.md)
 - [CLI run mode](specs/cli-run.md)
 - [Compact command](specs/compact-command.md)
