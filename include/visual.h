@@ -19,6 +19,8 @@ void visual_set_texts(const char **texts, int count);
 void visual_yank(const char **msgs_texts, int msgs_count);
 void visual_get_cursor(int *line, int *col);
 void visual_set_cursor_line(int line);
+void visual_set_cursor(int line, int col);
+void visual_enter_selection_at(int line, int col);
 void visual_selection_range(int *sl, int *sc, int *el, int *ec);
 
 #endif

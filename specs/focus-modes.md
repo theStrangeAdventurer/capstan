@@ -21,6 +21,8 @@ status bar always shows the current mode.
 | `Ctrl-F` | Toggle focus: INPUT ↔ MESSAGES |
 | `Shift+Tab` | Cycle active profile: fast -> implement -> plan |
 | Scroll wheel | Scroll message history |
+| Click in messages | Focus MESSAGES and place the message cursor |
+| Drag in messages | Select message text from press point to release point |
 | `PgUp`/`PgDn` | Page scroll (5 lines) |
 
 Manual scroll disables tail-follow while output is streaming. When the user
@@ -76,12 +78,18 @@ MESSAGES ──Esc──▸ INPUT (only without active selection)
 MESSAGES ──v──▸ VISUAL (selection starts)
 VISUAL ──y──▸ MESSAGES (yank, selection cleared)
 VISUAL ──Esc──▸ MESSAGES (selection cancelled)
+INPUT ──click messages──▸ MESSAGES (cursor at clicked text)
+MESSAGES ──drag messages──▸ VISUAL (selection remains after release)
 ```
 
 ## Clipboard
 
 - macOS: `pbcopy`
 - Linux: `xclip -selection clipboard`, fallback `xsel --clipboard`
+
+Mouse selection uses the same visual selection state as keyboard selection.
+Releasing the mouse ends drag tracking but keeps the selection active; `y` yanks
+the selected text through the normal clipboard path.
 
 ## Architecture
 

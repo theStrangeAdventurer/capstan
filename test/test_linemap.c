@@ -149,6 +149,44 @@ static MunitResult test_wrap_with_newline(const MunitParameter params[], void *d
     return MUNIT_OK;
 }
 
+static MunitResult test_trailing_newline_keeps_empty_line(const MunitParameter params[], void *data) {
+    (void)params;
+    (void)data;
+    const char *texts[] = {"hello\n"};
+    int roles[] = {0};
+    linemap_build(NULL, roles, 1, texts, 80);
+    munit_assert_int(linemap_count(), ==, 4);
+    munit_assert_int(linemap_get(0)->role, ==, LINE_PADDING);
+    munit_assert_int(linemap_get(1)->byte_start, ==, 0);
+    munit_assert_int(linemap_get(1)->byte_end, ==, 5);
+    munit_assert_int(linemap_get(1)->char_count, ==, 5);
+    munit_assert_int(linemap_get(2)->byte_start, ==, 6);
+    munit_assert_int(linemap_get(2)->byte_end, ==, 6);
+    munit_assert_int(linemap_get(2)->char_count, ==, 0);
+    munit_assert_int(linemap_get(3)->role, ==, LINE_PADDING);
+    linemap_free();
+    return MUNIT_OK;
+}
+
+static MunitResult test_multiple_trailing_newlines_keep_empty_lines(const MunitParameter params[], void *data) {
+    (void)params;
+    (void)data;
+    const char *texts[] = {"hello\n\n"};
+    int roles[] = {0};
+    linemap_build(NULL, roles, 1, texts, 80);
+    munit_assert_int(linemap_count(), ==, 5);
+    munit_assert_int(linemap_get(1)->char_count, ==, 5);
+    munit_assert_int(linemap_get(2)->byte_start, ==, 6);
+    munit_assert_int(linemap_get(2)->byte_end, ==, 6);
+    munit_assert_int(linemap_get(2)->char_count, ==, 0);
+    munit_assert_int(linemap_get(3)->byte_start, ==, 7);
+    munit_assert_int(linemap_get(3)->byte_end, ==, 7);
+    munit_assert_int(linemap_get(3)->char_count, ==, 0);
+    munit_assert_int(linemap_get(4)->role, ==, LINE_PADDING);
+    linemap_free();
+    return MUNIT_OK;
+}
+
 static MunitResult test_get_out_of_bounds(const MunitParameter params[], void *data) {
     (void)params;
     (void)data;
@@ -190,6 +228,8 @@ static MunitTest tests[] = {
     {"/multiple_mixed", test_multiple_mixed, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/utf8", test_utf8_chars, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/wrap_newline", test_wrap_with_newline, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/trailing_newline", test_trailing_newline_keeps_empty_line, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/multiple_trailing_newlines", test_multiple_trailing_newlines_keep_empty_lines, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/out_of_bounds", test_get_out_of_bounds, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/long_wrap", test_long_wrap, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}

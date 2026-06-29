@@ -4,6 +4,7 @@
 #include "dispatch.h"
 #include "http.h"
 #include "input.h"
+#include "linemap.h"
 #include "mode.h"
 #include "plugins.h"
 #include "popup.h"
@@ -34,6 +35,7 @@ typedef struct {
 } HeadlessRun;
 
 static HeadlessRun g_headless_run = {0};
+static int g_mouse_selecting_messages = 0;
 
 #define ACTIVE_RENDER_INTERVAL_MS 16
 #define IDLE_RENDER_INTERVAL_MS 50
@@ -42,6 +44,120 @@ static long long main_now_ms(void) {
   struct timeval tv;
   gettimeofday(&tv, NULL);
   return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
+}
+
+static void terminal_reset_mouse_modes(void) {
+  fputs("\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l",
+        stdout);
+  fflush(stdout);
+}
+
+static int message_pane_geometry(int *out_y, int *out_x, int *out_h,
+                                 int *out_w) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  int badge_h =
+      (g_buffered_results.size > 0 && !popup_is_active() &&
+       !popup_is_message_active())
+          ? 1
+          : 0;
+  int msg_h = rows - INPUT_WIN_HEIGHT - 2 * MARGIN - badge_h;
+  int inner_w = cols - 2 * MARGIN;
+  if (msg_h < 1 || inner_w < 1)
+    return 0;
+
+  if (out_y)
+    *out_y = MARGIN;
+  if (out_x)
+    *out_x = MARGIN;
+  if (out_h)
+    *out_h = msg_h;
+  if (out_w)
+    *out_w = inner_w;
+  return 1;
+}
+
+static int mouse_to_visual_position(const MEVENT *event, int *out_line,
+                                    int *out_col) {
+  int pane_y, pane_x, pane_h, pane_w;
+  if (!message_pane_geometry(&pane_y, &pane_x, &pane_h, &pane_w))
+    return 0;
+  if (event->y < pane_y || event->y >= pane_y + pane_h || event->x < pane_x ||
+      event->x >= pane_x + pane_w)
+    return 0;
+
+  int total_lines = linemap_count();
+  if (total_lines <= 0)
+    return 0;
+
+  int top_line = total_lines - pane_h - scroll_get();
+  if (top_line < 0)
+    top_line = 0;
+
+  int line = top_line + (event->y - pane_y);
+  if (line < 0)
+    line = 0;
+  if (line >= total_lines)
+    line = total_lines - 1;
+
+  int col = event->x - pane_x - MSG_PAD_H;
+  if (col < 0)
+    col = 0;
+
+  if (out_line)
+    *out_line = line;
+  if (out_col)
+    *out_col = col;
+  return 1;
+}
+
+static void focus_messages_at(int line, int col) {
+  mode_set(FOCUS_MESSAGES);
+  if (!visual_cursor_visible())
+    visual_enter();
+  visual_set_cursor(line, col);
+}
+
+static void handle_mouse_event(MEVENT *event) {
+  if (event->bstate & BUTTON4_PRESSED) {
+    scroll_up(3);
+    return;
+  }
+  if (event->bstate & BUTTON5_PRESSED) {
+    scroll_down(3);
+    return;
+  }
+
+  int line, col;
+  if (event->bstate & BUTTON1_CLICKED) {
+    if (mouse_to_visual_position(event, &line, &col)) {
+      g_mouse_selecting_messages = 0;
+      focus_messages_at(line, col);
+      visual_exit_selection();
+    }
+    return;
+  }
+
+  if (event->bstate & BUTTON1_PRESSED) {
+    if (mouse_to_visual_position(event, &line, &col)) {
+      g_mouse_selecting_messages = 1;
+      mode_set(FOCUS_MESSAGES);
+      if (!visual_cursor_visible())
+        visual_enter();
+      visual_enter_selection_at(line, col);
+    }
+    return;
+  }
+
+  if (event->bstate & BUTTON1_RELEASED) {
+    if (g_mouse_selecting_messages &&
+        mouse_to_visual_position(event, &line, &col)) {
+      visual_set_cursor(line, col);
+    }
+    g_mouse_selecting_messages = 0;
+    return;
+  }
 }
 
 static void print_help(void) {
@@ -546,6 +662,7 @@ int main(int argc, char *argv[]) {
   noecho();
   timeout(0);
   keypad(stdscr, TRUE);
+  terminal_reset_mouse_modes();
   mousemask(ALL_MOUSE_EVENTS, NULL);
   init_tui();
   popup_init();
@@ -607,12 +724,8 @@ int main(int argc, char *argv[]) {
 
     if (ch == KEY_MOUSE) {
       MEVENT event;
-      if (getmouse(&event) == OK) {
-        if (event.bstate & BUTTON4_PRESSED)
-          scroll_up(3);
-        else if (event.bstate & BUTTON5_PRESSED)
-          scroll_down(3);
-      }
+      if (getmouse(&event) == OK)
+        handle_mouse_event(&event);
       render_all();
       continue;
     }
@@ -749,6 +862,7 @@ int main(int argc, char *argv[]) {
 
     render_all();
   }
+  terminal_reset_mouse_modes();
   endwin();
   plugin_registry_cleanup();
   system("reset");
