@@ -1,3 +1,5 @@
+local workspace = require("agent.workspace")
+
 local plugin = {}
 
 plugin.id = "file"
@@ -6,43 +8,13 @@ plugin.description = "Read file contents"
 plugin.command = "/file"
 plugin.async = false
 
-local function is_absolute(path)
-	return path:sub(1, 1) == "/"
-end
-
-local function configured_workdir()
-	if _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir:sub(1, 1) == "/" then
-		return _G.capstan.workdir
-	end
-	local env = os.getenv("CAPSTAN_WORKDIR") or os.getenv("CAPSTAN_WORKSPACE")
-	if env and env:sub(1, 1) == "/" then
-		return env
-	end
-	local pwd = os.getenv("PWD")
-	if pwd and pwd:sub(1, 1) == "/" then
-		return pwd
-	end
-	return "."
-end
-
-local function resolve_path(path)
-	if is_absolute(path) then
-		return path
-	end
-	return configured_workdir():gsub("/+$", "") .. "/" .. path
-end
-
-local function shell_quote(value)
-	return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
-end
-
 local function list_dir(path)
-	return io.popen("ls -1p -- " .. shell_quote(path) .. " 2>/dev/null")
+	return io.popen("ls -1p -- " .. workspace.shell_quote(path) .. " 2>/dev/null")
 end
 
 plugin.autocomplete = {
   fetch = function(args)
-    local dir = resolve_path(args[1] or ".")
+    local dir = workspace.resolve_path(args[1] or ".")
     dir = dir:gsub("/+$", "")
     if dir == "" then dir = "." end
     local items = {}
@@ -79,19 +51,19 @@ function plugin.handler(ctx)
 	end
 
 	local function resolve_filename(filename)
-		local resolved = resolve_path(filename)
+		local resolved = workspace.resolve_path(filename)
 		local file, err = io.open(resolved, "r")
 		if file then
 			return resolved, file, nil
 		end
 
 		if filename:match("/?README$") then
-			local readme_base = resolve_path(filename)
+			local readme_base = workspace.resolve_path(filename)
 			local candidates = {
 				readme_base .. ".md",
 				readme_base .. ".txt",
 				readme_base .. ".markdown",
-				readme_base:match("^(.*)/README$") and readme_base:gsub("README$", "readme.md") or resolve_path("readme.md"),
+				readme_base:match("^(.*)/README$") and readme_base:gsub("README$", "readme.md") or workspace.resolve_path("readme.md"),
 			}
 			for _, candidate in ipairs(candidates) do
 				file = io.open(candidate, "r")
@@ -110,7 +82,7 @@ function plugin.handler(ctx)
 	for _i, filename in ipairs(filenames) do
 		local resolved_filename, file, err = resolve_filename(filename)
 		if not file then
-			local resolved = resolve_path(filename)
+			local resolved = workspace.resolve_path(filename)
 			local ls = list_dir(resolved)
 			if ls then
 				local contents = ls:read("*a")
@@ -123,7 +95,7 @@ function plugin.handler(ctx)
 					table.insert(llm_parts, "❌ Cannot open " .. resolved .. ": " .. err)
 				end
 			else
-				local resolved = resolve_path(filename)
+				local resolved = workspace.resolve_path(filename)
 				table.insert(ui_parts, "❌ " .. resolved .. " (" .. err .. ")")
 				table.insert(llm_parts, "❌ Cannot open " .. resolved .. ": " .. err)
 			end
