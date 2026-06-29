@@ -2,6 +2,7 @@ local json = require("vendor.rxi.json")
 local hooks = require("agent.hooks")
 local logging = require("agent.logging")
 local mcp_client = require("agent.mcp")
+local workspace = require("agent.workspace")
 
 local M = {}
 
@@ -678,54 +679,6 @@ local function decode_tool_arguments(raw, run_ctx)
     return sanitize_tool_value(decoded, run_ctx), nil
 end
 
-local function is_absolute_path(path)
-    return type(path) == "string" and path:sub(1, 1) == "/"
-end
-
-local function configured_workdir()
-    if _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir ~= "" then
-        return _G.capstan.workdir
-    end
-    return nil
-end
-
-local function expand_home_path(path)
-    if type(path) ~= "string" then return path end
-    if path ~= "~" and path:sub(1, 2) ~= "~/" then return path end
-    local home = os.getenv("HOME")
-    if not home or home == "" then return path end
-    return home .. path:sub(2)
-end
-
-local function normalize_path(path)
-    if type(path) ~= "string" or path == "" then
-        return path
-    end
-
-    path = expand_home_path(path)
-    if not is_absolute_path(path) then
-        local workdir = configured_workdir()
-        if not workdir or workdir == "" then
-            return path
-        end
-        path = workdir:gsub("/+$", "") .. "/" .. path
-    end
-
-    local parts = {}
-    for part in path:gmatch("[^/]+") do
-        if part == "." then
-        elseif part == ".." then
-            if #parts > 0 then
-                table.remove(parts)
-            end
-        else
-            table.insert(parts, part)
-        end
-    end
-
-    return "/" .. table.concat(parts, "/")
-end
-
 local function tool_call_target(tool_name, args)
     if tool_name == "shell" and _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir ~= "" then
         return _G.capstan.workdir
@@ -735,21 +688,9 @@ end
 
 local function normalize_permission_target(permission_tool, target)
     if permission_tool == "file_read" or permission_tool == "file_write" then
-        return normalize_path(target)
+        return workspace.normalize_path(target, workspace.runtime_workdir())
     end
     return target
-end
-
-local function collapse_home_path(path)
-    if type(path) ~= "string" or path == "" then return path end
-    local home = os.getenv("HOME")
-    if not home or home == "" then return path end
-    home = home:gsub("/+$", "")
-    if path == home then return "~" end
-    if path:sub(1, #home + 1) == home .. "/" then
-        return "~" .. path:sub(#home + 1)
-    end
-    return path
 end
 
 local sensitive_headers = {

@@ -8,8 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MESSAGES_CAPACITY_INCREMENT 10
-
 static Messages messages = {0};
 
 Messages *get_messages(void) { return &messages; }

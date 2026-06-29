@@ -13,6 +13,8 @@ typedef struct {
   char *value;
 } PopupItem;
 
+void popup_items_free(PopupItem *items, int count);
+
 void popup_open(PopupItem *items, int count, const char *title,
                 int max_visible, int multi);
 void popup_init(void);

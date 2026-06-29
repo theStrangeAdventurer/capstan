@@ -23,8 +23,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define PLUGIN_RESPONSE_MAX_SIZE 4096
-#define PLUGIN_CAPACITY_INCREMENT 10
+#define INITIAL_PLUGIN_CAPACITY 8
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -140,6 +139,7 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.models", "agent/models.lua");
   preload_embedded_asset(L, "agent.stream", "agent/stream.lua");
   preload_embedded_asset(L, "agent.tools", "agent/tools.lua");
+  preload_embedded_asset(L, "agent.workspace", "agent/workspace.lua");
   preload_embedded_asset(L, "agent.tokens", "agent/tokens.lua");
   preload_embedded_asset(L, "agent.logging", "agent/logging.lua");
   preload_embedded_asset(L, "agent.hooks", "agent/hooks.lua");
@@ -640,7 +640,9 @@ void plugin_registry_add(Plugin *plugin) {
   if (!plugin)
     return;
   if (plugins_registry.count >= plugins_registry.capacity) {
-    int new_capacity = plugins_registry.capacity + PLUGIN_CAPACITY_INCREMENT;
+    int new_capacity =
+        plugins_registry.capacity ? plugins_registry.capacity * 2
+                                  : INITIAL_PLUGIN_CAPACITY;
     Plugin **new_plugins =
         realloc(plugins_registry.plugins, new_capacity * sizeof(Plugin *));
     if (!new_plugins) {

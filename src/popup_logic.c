@@ -61,7 +61,7 @@ static void popup_sync_single_selection(void) {
     g_popup.selected[i] = (i == g_popup.cursor);
 }
 
-static void popup_items_free(PopupItem *items, int count) {
+void popup_items_free(PopupItem *items, int count) {
   for (int i = 0; i < count; i++) {
     free(items[i].text);
     free(items[i].value);

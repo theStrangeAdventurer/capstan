@@ -16,14 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void popup_items_free(PopupItem *items, int count) {
-  for (int i = 0; i < count; i++) {
-    free(items[i].text);
-    free(items[i].value);
-  }
-  free(items);
-}
-
 static void finder_add_lua_string_array(FinderIgnoreList *ignore,
                                         const char *field, int load_files) {
   lua_getglobal(L, "capstan");

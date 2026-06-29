@@ -1,3 +1,5 @@
+local workspace = require("agent.workspace")
+
 local plugin = {}
 
 plugin.id = "file_edit"
@@ -21,52 +23,6 @@ plugin.tool = {
 	},
 	permission = "file_write"
 }
-
-local UTF8_BOM = string.char(0xef, 0xbb, 0xbf)
-
-local function is_absolute(path)
-	return path:sub(1, 1) == "/"
-end
-
-local function configured_workdir()
-	if _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir:sub(1, 1) == "/" then
-		return _G.capstan.workdir
-	end
-	local env = os.getenv("CAPSTAN_WORKDIR") or os.getenv("CAPSTAN_WORKSPACE")
-	if env and env:sub(1, 1) == "/" then
-		return env
-	end
-	local pwd = os.getenv("PWD")
-	if pwd and pwd:sub(1, 1) == "/" then
-		return pwd
-	end
-	return "."
-end
-
-local function resolve_path(path)
-	if is_absolute(path) then
-		return path
-	end
-	return configured_workdir():gsub("/+$", "") .. "/" .. path
-end
-
-local function read_all(path)
-	local file, err = io.open(path, "rb")
-	if not file then
-		return nil, err
-	end
-	local content = file:read("*a") or ""
-	file:close()
-	return content, nil
-end
-
-local function split_bom(content)
-	content = content or ""
-	if content:sub(1, #UTF8_BOM) == UTF8_BOM then
-		return true, content:sub(#UTF8_BOM + 1)
-	end
-	return false, content
-end
 
 local function count_occurrences(haystack, needle)
 	if needle == "" then
@@ -124,13 +80,13 @@ function plugin.handler(ctx)
 		return ctx:replace("Cannot edit " .. path .. ": old_text is empty")
 	end
 
-	local resolved_path = resolve_path(path)
-	local raw_content, read_err = read_all(resolved_path)
+	local resolved_path = workspace.resolve_path(path)
+	local raw_content, read_err = workspace.read_all(resolved_path)
 	if not raw_content then
 		return ctx:replace("Cannot edit " .. resolved_path .. ": " .. tostring(read_err))
 	end
 
-	local has_bom, content = split_bom(raw_content)
+	local has_bom, content = workspace.split_utf8_bom(raw_content)
 	local matches = count_occurrences(content, old_text)
 	if matches == 0 then
 		return ctx:replace("Cannot edit " .. resolved_path .. ": old_text not found")
@@ -153,7 +109,7 @@ function plugin.handler(ctx)
 
 	local ok
 	if has_bom then
-		ok, write_err = file:write(UTF8_BOM, edited)
+		ok, write_err = file:write(workspace.utf8_bom(), edited)
 	else
 		ok, write_err = file:write(edited)
 	end
