@@ -5,12 +5,9 @@ LUA_DIR = vendor/lua-5.5.0
 MUNIT_DIR = vendor/munit
 
 CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -DPOPUP_NCURSES -DAPP_VERSION_VALUE=\"$(VERSION)\"
-# -L - флаг для динамических библиотек, в нашем случае нужна статика
-# LDFLAGS = -L$(NCURSES_DIR)/lib -lncursesw 
-# А НАМ НУЖНО СТАТИЧЕСКИ
-# Статическая библиотека - это файл с расширением .a (сокращенно от archive)
-# Дополнительно добавляем libtinfow.a - когда собираем с --with-termlib то всякие константы типа "_COLS" уходят туда 
-# -lm математическая библиотека - lua на нее ссылается
+# Link vendored ncurses and Lua statically via direct archive paths.
+# libtinfow.a is required because the ncurses build uses --with-termlib.
+# libm is needed by Lua; libcurl remains the only system-linked runtime dep.
 LDFLAGS = $(LUA_DIR)/src/liblua.a $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DIR)/lib/libtinfow.a -lm  -lcurl
 
 TEST_CFLAGS = -Iinclude -I$(MUNIT_DIR) -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE

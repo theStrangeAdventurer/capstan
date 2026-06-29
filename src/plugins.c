@@ -691,16 +691,12 @@ Plugin *plugin_registry_at(int index) {
 
 static char *lua_get_optional_string(lua_State *L, int idx, const char *field,
                                      const char *fallback) {
-  // Достаем из таблицы плагина поле id и после этого это
-  // поле будет наверху стека (-1) а таблица будет уже (-2)
-  // если бы искали поле в таблице с индексом -2 - значение полч потом все равно
-  // бы оказалось на вершине стека
   lua_getfield(L, idx, field);
 
-  const char *strval = lua_tostring(L, -1); // Теперь берем с вершины стека
+  const char *strval = lua_tostring(L, -1);
   char *result = strval ? my_strdup(strval)
                         : (fallback ? my_strdup(fallback) : NULL);
-  lua_pop(L, 1); // Снимаем  id со стека, теперь снова таблица на -1
+  lua_pop(L, 1);
   return result;
 }
 
@@ -782,15 +778,14 @@ static void record_plugin_error(const char *source, const char *message) {
 
 static Plugin *plugin_load_from_chunk(const char *name, const char *data,
                                       size_t size) {
-  if (lua_dobuffer_named(L, name, data, size) !=
-      LUA_OK) { // Выполняет lua файл и кладет результат выполнения на стек lua
+  if (lua_dobuffer_named(L, name, data, size) != LUA_OK) {
     const char *err = lua_tostring(L, -1);
     fprintf(stderr, "Error loading plugin: %s\n", err);
     record_plugin_error(name, err);
     lua_pop(L, 1);
     return NULL;
   }
-  if (!lua_istable(L, -1)) { // Проверяем самый верхний элемент на стеке
+  if (!lua_istable(L, -1)) {
     fprintf(stderr, "Plugin must return a table\n");
     record_plugin_error(name, "Plugin must return a table");
     lua_pop(L, 1);
@@ -826,11 +821,8 @@ static Plugin *plugin_load_from_chunk(const char *name, const char *data,
   p->command = lua_get_optional_string(L, -1, "command", NULL);
   lua_getfield(L, -1, "handler");
   if (lua_isfunction(L, -1)) {
-    // Автоматически снимает с вершины стека функцию handler и сохраняет ее в
-    // специальном реестре возвращая при этом ссылку (int) на нее
-    // позже мы получим функцию по этой ссылке числу с помощью lua_rawgeti
-    // LUA_REGISTRYINDEX - специальная таблица в которой можно безопасно хранить
-    // данные lua чтобы их не собрал сборщик мусора
+    /* Store the handler in the Lua registry so it survives GC and can be
+       retrieved later by integer reference. */
     p->handler_ref = luaL_ref(L, LUA_REGISTRYINDEX);
   } else {
     lua_pop(L, 1);
