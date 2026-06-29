@@ -87,20 +87,17 @@ static void http_wait_frame(void) {
   }
 }
 
-/**
- * Колбек с контрактом  CURLOPT_WRITEFUNCTION
- * libcurl может дёрнуть коллбек несколько раз за один запрос
- * на каждый пришедший TCP-пакет.
- * Должен вернуть точное число полученных байт иначе curl посчитает запрос
- * ошибочным и прервет его
+/*
+ * CURLOPT_WRITEFUNCTION callback.
+ * libcurl may invoke it multiple times per request, once per received chunk.
+ * It must return the exact number of consumed bytes or curl will fail the
+ * transfer.
  */
 static size_t
-write_cb(char *chunk_ptr,    // Только что полученный чанк данных
-         size_t size,        // Почти всегда равен 1
-         size_t count,       // Количество элементов (символов) в указателе
-         void *resp_data_ptr // указатель структуру в которой мы храним весь
-                             // респонс, курл просто передает его в колбек и
-                             // вообще не знает ничего про его тип
+write_cb(char *chunk_ptr,
+         size_t size,
+         size_t count,
+         void *resp_data_ptr
 ) {
   RespBuf *buf = resp_data_ptr;
   size_t total = size * count;
@@ -204,9 +201,7 @@ static void stream_ctx_free(StreamCtx *ctx) {
   free(ctx);
 }
 
-/**
- * Колбек для стриминга: получает сырые байты и сразу зовёт Lua callback
- */
+/* Streaming callback: forwards raw bytes to the Lua handler immediately. */
 static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
                               void *userdata) {
   StreamCtx *ctx = userdata;
@@ -245,10 +240,10 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
   return total;
 }
 
-/**
+/*
  * http.post_stream(url, body, headers, callback)
- * callback(raw_chunk, is_done) — вызывается для каждого TCP-чанка
- * Возвращает async_id
+ * callback(raw_chunk, is_done) is invoked for every received chunk.
+ * Returns async_id.
  */
 static int l_http_post_stream(lua_State *L) {
   const char *url = luaL_checkstring(L, 1);
@@ -601,10 +596,10 @@ static int l_http_is_loading(lua_State *L) {
   return 1;
 }
 
-/**
- * main loop дёргает http_poll на каждой итерации.
- * Двигает curl_multi, вызывает Lua-колбеки на новые чанки.
- * При завершении стрима — вызывает колбек с (nil, true), чистит ресурсы.
+/*
+ * Called from the main loop on each iteration.
+ * Advances curl_multi, delivers Lua callbacks for new chunks, and on stream
+ * completion invokes the callback with (nil, true) before releasing resources.
  */
 int http_poll_limited(lua_State *L, int max_callbacks) {
   if (!multi_handle)
