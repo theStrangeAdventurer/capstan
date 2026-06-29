@@ -180,14 +180,71 @@ void popup_render(void) {
 void popup_render_message(void) {
   if (!g_msgpopup.active)
     return;
-  if (g_msgpopup.auto_close_after_sec > 0 &&
-      time(NULL) - g_msgpopup.created_at >= g_msgpopup.auto_close_after_sec) {
+  if (g_msgpopup.auto_close_after_ms > 0 &&
+      popup_now_ms() - g_msgpopup.created_at_ms >=
+          g_msgpopup.auto_close_after_ms) {
     popup_close_message();
     return;
   }
 
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
+
+  if (g_msgpopup.compact) {
+    const char *title = g_msgpopup.title ? g_msgpopup.title : "";
+    const char *text = g_msgpopup.text ? g_msgpopup.text : "";
+    int title_len = (int)strlen(title);
+    int text_len = (int)strlen(text);
+    int content_w = title_len > text_len ? title_len : text_len;
+    int popup_w = content_w + 6;
+    if (popup_w < POPUP_MIN_WIDTH)
+      popup_w = POPUP_MIN_WIDTH;
+    if (popup_w > cols)
+      popup_w = cols;
+    int popup_h = 5;
+    if (popup_h > rows)
+      popup_h = rows;
+    int popup_x = (cols - popup_w) / 2;
+    int popup_y = rows - INPUT_WIN_HEIGHT - MARGIN - popup_h - 1;
+    if (popup_x < 0)
+      popup_x = 0;
+    if (popup_y < 0)
+      popup_y = (rows - popup_h) / 2;
+    if (popup_y < 0)
+      popup_y = 0;
+
+    if (!g_msgpopup.win || g_msgpopup.last_rows != rows ||
+        g_msgpopup.last_cols != cols) {
+      if (g_msgpopup.win)
+        delwin(g_msgpopup.win);
+      g_msgpopup.win = newwin(popup_h, popup_w, popup_y, popup_x);
+      g_msgpopup.last_rows = rows;
+      g_msgpopup.last_cols = cols;
+    }
+    if (!g_msgpopup.win)
+      return;
+
+    WINDOW *win = g_msgpopup.win;
+    werase(win);
+    wbkgd(win, COLOR_PAIR(5));
+    wresize(win, popup_h, popup_w);
+    mvwin(win, popup_y, popup_x);
+    box(win, 0, 0);
+    if (title_len > popup_w - 4)
+      title_len = popup_w - 4;
+    if (text_len > popup_w - 4)
+      text_len = popup_w - 4;
+    if (title_len > 0) {
+      wattron(win, A_BOLD);
+      mvwprintw(win, 1, 2, "%.*s", title_len, title);
+      wattroff(win, A_BOLD);
+    }
+    if (text_len > 0)
+      mvwprintw(win, 3, 2, "%.*s", text_len, text);
+    wnoutrefresh(win);
+    return;
+  }
+
   int margin = cols >= 40 && rows >= 12 ? MARGIN : 0;
   int max_popup_w = cols - 2 * margin;
   int max_popup_h = rows - 2 * margin;
