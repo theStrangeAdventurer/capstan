@@ -212,6 +212,56 @@ static MunitResult test_set_cursor_line_clamp(const MunitParameter params[], voi
     return MUNIT_OK;
 }
 
+static MunitResult test_set_cursor_clamps_column(const MunitParameter params[], void *data) {
+    (void)params;
+    (void)data;
+    setup(NULL, NULL);
+    visual_set_cursor(1, 999);
+    int line, col;
+    visual_get_cursor(&line, &col);
+    munit_assert_int(line, ==, 1);
+    munit_assert_int(col, ==, 11);
+    visual_set_cursor(1, -10);
+    visual_get_cursor(&line, &col);
+    munit_assert_int(line, ==, 1);
+    munit_assert_int(col, ==, 0);
+    teardown(NULL);
+    return MUNIT_OK;
+}
+
+static MunitResult test_set_cursor_padding_snaps_to_text(const MunitParameter params[], void *data) {
+    (void)params;
+    (void)data;
+    setup(NULL, NULL);
+    visual_set_cursor(0, 4);
+    int line, col;
+    visual_get_cursor(&line, &col);
+    munit_assert_int(line, ==, 1);
+    munit_assert_int(col, ==, 4);
+    visual_set_cursor(2, 99);
+    visual_get_cursor(&line, &col);
+    munit_assert_int(line, ==, 1);
+    munit_assert_int(col, ==, 11);
+    teardown(NULL);
+    return MUNIT_OK;
+}
+
+static MunitResult test_enter_selection_at_sets_anchor(const MunitParameter params[], void *data) {
+    (void)params;
+    (void)data;
+    setup(NULL, NULL);
+    visual_enter_selection_at(1, 2);
+    visual_set_cursor(4, 3);
+    int sl, sc, el, ec;
+    visual_selection_range(&sl, &sc, &el, &ec);
+    munit_assert_int(sl, ==, 1);
+    munit_assert_int(sc, ==, 2);
+    munit_assert_int(el, ==, 4);
+    munit_assert_int(ec, ==, 3);
+    teardown(NULL);
+    return MUNIT_OK;
+}
+
 static MunitResult test_get_cursor_null_col(const MunitParameter params[], void *data) {
     (void)params;
     (void)data;
@@ -391,6 +441,9 @@ static MunitTest tests[] = {
     {"/range_forward", test_selection_range_forward, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/range_backward", test_selection_range_backward, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/set_cursor_clamp", test_set_cursor_line_clamp, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/set_cursor_col_clamp", test_set_cursor_clamps_column, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/set_cursor_padding", test_set_cursor_padding_snaps_to_text, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/enter_selection_at", test_enter_selection_at_sets_anchor, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/get_null_col", test_get_cursor_null_col, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/empty_linemap", test_empty_linemap, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/line_start", test_line_start, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

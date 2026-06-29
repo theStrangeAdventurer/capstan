@@ -259,6 +259,55 @@ void visual_set_cursor_line(int line) {
         g_visual.cursor_col = li ? li->char_count : 0;
 }
 
+void visual_set_cursor(int line, int col) {
+    int count = linemap_count();
+    if (count <= 0) {
+        g_visual.cursor_line = 0;
+        g_visual.cursor_col = 0;
+        return;
+    }
+
+    if (line < 0) line = 0;
+    if (line >= count) line = count - 1;
+
+    if (is_padding_line(line)) {
+        int before = line;
+        int after = line;
+        while (before >= 0 && is_padding_line(before))
+            before--;
+        while (after < count && is_padding_line(after))
+            after++;
+
+        if (before < 0 && after < count)
+            line = after;
+        else if (after >= count && before >= 0)
+            line = before;
+        else if (before >= 0 && after < count) {
+            int before_dist = line - before;
+            int after_dist = after - line;
+            line = before_dist <= after_dist ? before : after;
+        }
+    }
+
+    if (line < 0 || line >= count) {
+        g_visual.cursor_line = 0;
+        g_visual.cursor_col = 0;
+        return;
+    }
+
+    const LineInfo *li = linemap_get(line);
+    int max_col = li ? li->char_count : 0;
+    if (col < 0) col = 0;
+    if (col > max_col) col = max_col;
+    g_visual.cursor_line = line;
+    g_visual.cursor_col = col;
+}
+
+void visual_enter_selection_at(int line, int col) {
+    visual_set_cursor(line, col);
+    visual_enter_selection();
+}
+
 void visual_selection_range(int *sl, int *sc, int *el, int *ec) {
     if (!g_visual.selecting) {
         *sl = *el = g_visual.cursor_line;

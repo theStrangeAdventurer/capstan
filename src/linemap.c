@@ -44,7 +44,7 @@ void linemap_build(void **msgs_data, int *msgs_roles, int msgs_count,
             linemap_append(i, 0, 0, 0, role);
         } else {
             const char *p = text;
-            while (*p) {
+            while (1) {
                 const char *line_start = p;
                 int col = 0;
                 const char *line_end = p;
@@ -64,8 +64,12 @@ void linemap_build(void **msgs_data, int *msgs_roles, int msgs_count,
 
                 linemap_append(i, byte_start, byte_end, char_count, role);
 
-                if (*line_end == '\n')
-                    line_end++;
+                if (*line_end == '\n') {
+                    p = line_end + 1;
+                    continue;
+                }
+                if (*line_end == '\0')
+                    break;
                 p = line_end;
             }
         }
