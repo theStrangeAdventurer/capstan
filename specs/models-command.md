@@ -7,10 +7,10 @@ configured provider's models API.
 
 - Popup entries include the provider name and model label. They come from
   provider API responses, not from a static local list.
-- Selecting a model from `/models<Tab>` changes that provider's primary model
-  and makes that provider active for later agent requests.
-- `/models <model-id>` keeps the previous shorthand for changing the current
-  provider's primary model.
+- Selecting a model from `/models<Tab>` sets the selected provider/model as an
+  override for the current active profile.
+- `/models <model-id>` changes the current active profile's model on the
+  current provider.
 - `/models <provider> <model-id>` changes a primary model for an explicit
   provider and makes that provider active.
 - `/models --weak<Tab>` opens the same fuzzy-search popup, but selections are
@@ -20,8 +20,9 @@ configured provider's models API.
   compacting can use a cheaper model from a different provider. Weak model
   selection does not change the active provider.
 - `/models --profile <fast|plan|implement> <provider> <model-id>` sets a
-  provider/model override for that workflow profile. Plain `/models` remains
-  the global primary model command; profile model selection is explicit.
+  provider/model override for that workflow profile. Plain `/models` targets
+  the current active profile; explicit provider arguments target the global
+  primary model.
 - Successful selection updates the provider/model status line through
   `agent.set_info` when the effective active model changes.
 - The command is a no-history control command: its result is shown as UI

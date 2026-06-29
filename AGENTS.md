@@ -291,6 +291,7 @@ Feature specs:
 - [Shell plugin](specs/shell-plugin.md)
 - [Skills](specs/skills.md)
 - [Self improvement](specs/self-improvement.md)
+- [Start screen](specs/start-screen.md)
 - [Subagents](specs/subagents.md)
 - [Terminal runtime](specs/terminal-runtime.md)
 - [Workspace directory](specs/workspace-directory.md)

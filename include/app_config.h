@@ -7,6 +7,7 @@ extern const char *APP_NAME;
 extern const char *APP_BINARY_NAME;
 extern const char *APP_CONFIG_DIR_NAME;
 extern const char *APP_EDITOR_TEMP_TEMPLATE;
+extern const char *APP_VERSION;
 extern const char *APP_BANNER_TITLE;
 extern const char *APP_BANNER_TAGLINE;
 

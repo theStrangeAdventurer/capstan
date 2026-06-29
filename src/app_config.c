@@ -10,6 +10,10 @@ const char *APP_NAME = "capstan";
 const char *APP_BINARY_NAME = "capstan";
 const char *APP_CONFIG_DIR_NAME = "capstan";
 const char *APP_EDITOR_TEMP_TEMPLATE = "/tmp/capstan-editor-XXXXXX";
+#ifndef APP_VERSION_VALUE
+#define APP_VERSION_VALUE "local"
+#endif
+const char *APP_VERSION = APP_VERSION_VALUE;
 const char *APP_BANNER_TITLE = "◉ CAPSTAN";
 const char *APP_BANNER_TAGLINE = "pull context. hold course. ship code.";
 

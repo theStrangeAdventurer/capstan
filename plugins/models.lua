@@ -43,7 +43,13 @@ local function selected_kind(args)
 	if args and args[1] == "--profile" then
 		return "profile", args[2]
 	end
-	return "primary", nil
+	if capstan and capstan.agent and type(capstan.agent.get_profile) == "function" then
+		local ok, profile = pcall(capstan.agent.get_profile)
+		if ok and type(profile) == "string" and profile ~= "" then
+			return "profile", profile
+		end
+	end
+	return "profile", "implement"
 end
 
 local function refresh_status()
@@ -90,6 +96,7 @@ plugin.autocomplete = {
 
 function plugin.handler(ctx)
 	local args = ctx.args or {}
+	local models = runtime()
 	local kind, profile, provider, model = unpack_packed(args[1])
 	if not kind then
 		if args[1] == "--weak" then
@@ -106,8 +113,9 @@ function plugin.handler(ctx)
 			provider = args[1]
 			model = args[2]
 		else
-			kind = "primary"
-			provider = nil
+			kind = "profile"
+			_, profile = selected_kind(args)
+			provider = models and models.current_provider and models.current_provider() or nil
 			model = args[1]
 		end
 	end
@@ -116,7 +124,6 @@ function plugin.handler(ctx)
 		return ctx:replace("Usage: /models [--weak] [provider] <model> | /models --profile <fast|plan|implement> <provider> <model>")
 	end
 
-	local models = runtime()
 	if not models then
 		return ctx:replace("Cannot set model: provider runtime is not initialized")
 	end

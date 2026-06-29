@@ -445,6 +445,73 @@ static int verify_terminal(void) {
   return 1;
 }
 
+static int lua_agent_get_profile(lua_State *l, char *out, size_t out_size) {
+  if (!out || out_size == 0)
+    return 0;
+  out[0] = '\0';
+
+  int top = lua_gettop(l);
+  lua_getglobal(l, "capstan");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "agent");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "get_profile");
+  if (!lua_isfunction(l, -1))
+    goto done;
+  if (lua_pcall(l, 0, 1, 0) != LUA_OK)
+    goto done;
+  const char *profile = lua_tostring(l, -1);
+  if (!profile || !profile[0])
+    goto done;
+  snprintf(out, out_size, "%s", profile);
+  lua_settop(l, top);
+  return 1;
+
+done:
+  lua_settop(l, top);
+  return 0;
+}
+
+static void lua_agent_set_profile(lua_State *l, const char *profile) {
+  int top = lua_gettop(l);
+  lua_getglobal(l, "capstan");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "agent");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "set_profile");
+  if (!lua_isfunction(l, -1))
+    goto done;
+  lua_pushstring(l, profile);
+  lua_pcall(l, 1, 2, 0);
+
+done:
+  lua_settop(l, top);
+}
+
+static const char *next_profile_name(const char *current) {
+  const char *profiles[] = {"fast", "implement", "plan"};
+  size_t count = sizeof(profiles) / sizeof(profiles[0]);
+  for (size_t i = 0; i < count; i++) {
+    if (current && strcmp(current, profiles[i]) == 0)
+      return profiles[(i + 1) % count];
+  }
+  return "fast";
+}
+
+static void cycle_agent_profile(lua_State *l) {
+  char current[64];
+  if (!lua_agent_get_profile(l, current, sizeof(current))) {
+    const char *published = agent_profile_name();
+    snprintf(current, sizeof(current), "%s",
+             published && published[0] ? published : "implement");
+  }
+  lua_agent_set_profile(l, next_profile_name(current));
+}
+
 int main(int argc, char *argv[]) {
   CliOptions cli = cli_parse(argc, argv);
 
@@ -550,12 +617,23 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
+    if (mode_is_profile_cycle_key(ch)) {
+      cycle_agent_profile(L);
+      render_all();
+      continue;
+    }
+
     if (mode_is_focus_toggle_key(ch)) {
       if (mode_get() == FOCUS_MESSAGES)
         visual_exit();
       mode_toggle();
       if (mode_get() == FOCUS_MESSAGES)
         visual_enter();
+      render_all();
+      continue;
+    }
+
+    if (ch == APP_KEY_ESCAPE && mode_get() == FOCUS_INPUT) {
       render_all();
       continue;
     }

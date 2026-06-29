@@ -21,8 +21,9 @@ The popup includes:
   and the effective reasoning effort for each profile when the model runtime is
   available
 
-The empty conversation screen stays minimal and does not duplicate this
-diagnostic information.
+The empty conversation start screen stays brief: it shows only current
+provider/model, profile, workspace, and a ready hint. It does not duplicate this
+diagnostic popup.
 
 ## Architecture
 

@@ -10,4 +10,6 @@ void mode_toggle(void) {
     g_focus = (g_focus == FOCUS_INPUT) ? FOCUS_MESSAGES : FOCUS_INPUT;
 }
 
-int mode_is_focus_toggle_key(int ch) { return ch == APP_KEY_SHIFT_TAB; }
+int mode_is_focus_toggle_key(int ch) { return ch == APP_KEY_CTRL_F; }
+
+int mode_is_profile_cycle_key(int ch) { return ch == APP_KEY_SHIFT_TAB; }
