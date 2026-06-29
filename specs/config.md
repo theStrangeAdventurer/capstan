@@ -25,6 +25,11 @@ return {
   },
   agent = {
     profile = "implement",
+    profile_models = {
+      fast = { provider = "openrouter", model = "cheap/fast" },
+      plan = { provider = "openrouter", model = "strong/planner" },
+      implement = { provider = "openrouter", model = "strong/coder" },
+    },
     reasoning_effort = "medium",
     max_turns = 80,
     max_duration_sec = 900,
@@ -78,7 +83,12 @@ return {
   `fast`, `implement`, and `plan`. Profiles may append system instructions,
   set a default reasoning effort, and restrict model tools. Slash commands
   `/fast`, `/implement`, and `/plan` change the profile for the current TUI
-  session; `capstan run --profile ...` overrides it for one headless run.
+  session; `capstan run --profile ...` overrides it for one headless run. When
+  omitted, Capstan uses the `implement` profile.
+- `agent.profile_models` can set default provider/model pairs per workflow
+  profile. A profile model is used for normal agent runs when that profile is
+  active, without changing the global primary model. `weak_model` remains a
+  separate background/compact model.
 - `agent.reasoning_effort` sets the default effort policy for agent runs.
   Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
   `max`. Run options such as `capstan run --reasoning-effort low` override this

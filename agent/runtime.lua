@@ -16,10 +16,10 @@ hooks.install_config((_G.capstan and _G.capstan.config) or {})
 hooks.install_existing_plugins(_G.plugins)
 
 local runtime_options = (_G.capstan and _G.capstan.runtime_options) or {}
-
--- Initialize MCP servers (no-op if not configured)
-if not runtime_options.disable_mcp then
-    mcp_client.init()
+-- MCP initialization is lazy. Startup must not block the TUI/input path;
+-- agent.mcp initializes before tools are collected for the first request.
+if runtime_options.disable_mcp then
+    mcp_client.disable()
 end
 
 function M.list_models(provider_name)
@@ -36,6 +36,10 @@ end
 
 function M.set_weak_model(provider_name, model)
     return models.set_weak(M, provider_name, model)
+end
+
+function M.set_profile_model(profile_name, provider_name, model)
+    return models.set_profile(M, profile_name, provider_name, model)
 end
 
 function M.get_weak_model()
@@ -66,7 +70,7 @@ local function configured_profile()
 end
 
 local function effective_profile(opts)
-    local name = profiles.normalize(opts and opts.profile) or active_profile_name or configured_profile()
+    local name = profiles.normalize(opts and opts.profile) or active_profile_name or configured_profile() or "implement"
     return profiles.get(name)
 end
 
@@ -113,9 +117,9 @@ end
 
 local function effective_reasoning_effort(provider, opts, profile)
     return normalize_reasoning_effort(opts and opts.reasoning_effort) or
+        configured_reasoning_effort() or
         normalize_reasoning_effort(profile and profile.reasoning_effort) or
-        normalize_reasoning_effort(provider and provider.reasoning_effort) or
-        configured_reasoning_effort()
+        normalize_reasoning_effort(provider and provider.reasoning_effort)
 end
 
 local function copy_table(value)
@@ -139,18 +143,35 @@ local function request_reasoning(provider, effort)
     return next(reasoning) and reasoning or nil
 end
 
--- Resolves and clones provider config for a request (model override, suppress flags).
-local function prepare_provider(opts)
+-- Resolves and clones provider config for a request (profile model, model override,
+-- suppress flags). Runtime profile model choices do not mutate the global
+-- provider selection.
+local function prepare_provider(opts, profile)
     opts = opts or {}
     local provider_name = opts.provider or M.provider
+    local profile_model = nil
+    if not opts.provider and not opts.model and profile and not M.env_provider_override then
+        profile_model = models.profile(M, profile.name)
+        if profile_model then
+            provider_name = profile_model.provider
+        end
+    end
     local active = M.providers[provider_name]
     if not active then
         return nil, provider_name
+    end
+    if profile_model and not (M.env_model_overrides and M.env_model_overrides[provider_name]) then
+        local copy = {}
+        for k, v in pairs(active) do copy[k] = v end
+        copy.model = profile_model.model
+        copy.context_limit = 0
+        active = copy
     end
     if opts.model and opts.model ~= "" then
         local copy = {}
         for k, v in pairs(active) do copy[k] = v end
         copy.model = opts.model
+        copy.context_limit = 0
         active = copy
     end
     if opts.update_usage == false or opts.update_status == false then
@@ -160,6 +181,32 @@ local function prepare_provider(opts)
         active = copy
     end
     return active, provider_name
+end
+
+local function effective_model_info(profile_name)
+    local profile = profiles.get(profile_name) or effective_profile({})
+    local active, provider_name = prepare_provider({}, profile)
+    if not active then
+        return nil, provider_name
+    end
+    return { provider = provider_name, model = active.model, profile = profile and profile.name or nil }, nil
+end
+
+local function display_profile_name(profile)
+    return profile and profile.name or nil
+end
+
+local function publish_agent_status(profile_name)
+    local info = effective_model_info(profile_name)
+    if info and agent then
+        if type(agent.set_info) == "function" then
+            agent.set_info(info.provider, info.model)
+        end
+        if type(agent.set_profile_info) == "function" then
+            agent.set_profile_info(info.profile)
+        end
+    end
+    return info
 end
 
 local function agent_config_number(field, default)
@@ -203,7 +250,8 @@ end
 function M.run(opts, callbacks)
     opts = opts or {}
     callbacks = callbacks or {}
-    local active, provider_name = prepare_provider(opts)
+    local profile = effective_profile(opts)
+    local active, provider_name = prepare_provider(opts, profile)
     if not active then
         local message = "Unknown provider: " .. tostring(provider_name)
         logging.runtime_log("provider", "unknown provider: " .. tostring(provider_name))
@@ -214,13 +262,15 @@ function M.run(opts, callbacks)
 
     if opts.update_status ~= false then
         agent.set_info(provider_name, active.model)
+        if type(agent.set_profile_info) == "function" then
+            agent.set_profile_info(display_profile_name(profile))
+        end
     end
     models.ensure_context_limit(active)
     if opts.update_usage ~= false then
         agent.set_usage(0, 0, 0, active.context_limit or 0)
     end
 
-    local profile = effective_profile(opts)
     local effort = effective_reasoning_effort(active, opts, profile)
     local msgs = build_messages(opts.messages or {}, profile)
     local messages_ctx = hooks.run("before_messages", {
@@ -437,18 +487,42 @@ _G.capstan.agent = {
         local normalized = profiles.normalize(name)
         if not normalized then return nil, "unknown profile" end
         active_profile_name = normalized
+        publish_agent_status(normalized)
         return normalized
     end,
     get_profile = function()
-        return active_profile_name or configured_profile()
+        return active_profile_name or configured_profile() or "implement"
     end,
     clear_profile = function()
         active_profile_name = nil
+        publish_agent_status()
+    end,
+    refresh_status = function()
+        publish_agent_status()
     end,
     profiles = function()
         return profiles.names()
     end,
 }
+
+_G.capstan.models.effective = function(profile_name)
+    local info = effective_model_info(profile_name)
+    return info
+end
+
+_G.capstan.agent.reasoning_effort = function(profile_name)
+    local profile = profiles.get(profile_name) or effective_profile({})
+    local active = prepare_provider({}, profile)
+    return effective_reasoning_effort(active, nil, profile)
+end
+
+_G.capstan.mcp = {
+    tick = function(max_steps)
+        return mcp_client.tick(max_steps)
+    end,
+}
+
+publish_agent_status()
 
 local compact_instruction = [[
 Compact the conversation above into an operational handoff summary for a coding agent.

@@ -16,6 +16,12 @@ local M = {}
 local servers = {}
 local exposed_tool_names = {}
 local protocol_version = "2025-06-18"
+local initialized = false
+local initializing = false
+local disabled = false
+local init_started = false
+local init_configs = {}
+local init_index = 1
 
 -- JSON-RPC request ID counter
 local next_id = 1
@@ -394,6 +400,127 @@ local function rpc_call(server, method, params, timeout_ms)
   return stdio_rpc_call(server, method, params, timeout_ms)
 end
 
+local function now_ms()
+  if _G.capstan and type(_G.capstan.now_ms) == "function" then
+    return _G.capstan.now_ms()
+  end
+  return math.floor(os.clock() * 1000)
+end
+
+local function async_rpc_start(server, method, params, timeout_ms)
+  if not server then
+    return false, "server not connected"
+  end
+  local id = next_id
+  next_id = next_id + 1
+  local payload = json.encode(build_rpc_request(id, method, params))
+  server.pending = {
+    id = id,
+    method = method,
+    started_at = now_ms(),
+    timeout = timeout_ms or server.timeout or 30000,
+  }
+
+  if server.transport == "http" then
+    if not http or type(http.post_response_async) ~= "function" then
+      server.pending = nil
+      return false, "http.post_response_async is not available"
+    end
+    log("send " .. method .. " id=" .. tostring(id) .. " to " .. server.name .. " over HTTP async")
+    local ok, async_id_or_err = pcall(http.post_response_async, server.url, payload,
+                                      http_headers(server), timeout_ms or server.timeout or 30000,
+                                      function(response, err, err_body)
+                                        server.pending_response = response
+                                        server.pending_error = err
+                                        server.pending_error_body = err_body
+                                      end,
+                                      {background = true})
+    if not ok then
+      server.pending = nil
+      return false, "HTTP async request failed: " .. tostring(async_id_or_err)
+    end
+    server.pending.async_id = async_id_or_err
+    return true
+  end
+
+  if not server.handle then
+    server.pending = nil
+    return false, "server not connected"
+  end
+
+  log("send " .. method .. " id=" .. tostring(id) .. " to " .. server.name .. " async")
+  local ok, err = mcp.send(server.handle, payload)
+  if not ok then
+    server.pending = nil
+    return false, "send failed: " .. tostring(err)
+  end
+  return true
+end
+
+local function async_rpc_poll(server)
+  local pending = server and server.pending
+  if not pending then
+    return nil
+  end
+
+  if now_ms() - pending.started_at >= pending.timeout then
+    local method = pending.method
+    server.pending = nil
+    return false, "timeout waiting for response to " .. tostring(method)
+  end
+
+  if server.transport == "http" then
+    if server.pending_response == nil and server.pending_error == nil then
+      return nil
+    end
+    local response = server.pending_response
+    local err = server.pending_error
+    local err_body = server.pending_error_body
+    server.pending = nil
+    server.pending_response = nil
+    server.pending_error = nil
+    server.pending_error_body = nil
+    if err then
+      return false, tostring(err) .. (err_body and (": " .. logging.compact(err_body, 500)) or "")
+    end
+    return decode_http_rpc_response(server, pending.method, pending.id, response)
+  end
+
+  for _ = 1, 8 do
+    local ok_recv, line, rerr = pcall(mcp.recv_nowait, server.handle)
+    if not ok_recv then
+      server.pending = nil
+      return false, "recv crashed: " .. tostring(line)
+    end
+    if not line then
+      if rerr == "again" then
+        return nil
+      end
+      server.pending = nil
+      return false, "recv failed: " .. tostring(rerr)
+    end
+
+    if line ~= "" then
+      local ok_parse, msg = pcall(json.decode, line)
+      if not ok_parse then
+        log("ignoring unparseable line from " .. server.name .. ": " .. logging.compact(line, 200))
+      elseif msg.id == nil then
+        log("notification from " .. server.name .. ": " .. tostring(msg.method))
+      elseif msg.id ~= pending.id then
+        log("ignoring response with mismatched id=" .. tostring(msg.id) .. " (expected " .. tostring(pending.id) .. ")")
+      else
+        server.pending = nil
+        if msg.error then
+          return false, "JSON-RPC error: " .. tostring(msg.error.message or "unknown")
+        end
+        return msg.result or {}
+      end
+    end
+  end
+
+  return nil
+end
+
 --- Send a notification (no response expected)
 local function rpc_notify(server, method, params)
   if not server or (server.status ~= "connected" and server.status ~= "connecting") then
@@ -402,17 +529,16 @@ local function rpc_notify(server, method, params)
 
   local payload = json.encode(build_rpc_notification(method, params))
   if server.transport == "http" then
-    if not http or type(http.post_response) ~= "function" then
-      return false, "http.post_response is not available"
+    if not http or type(http.post_response_async) ~= "function" then
+      return false, "http.post_response_async is not available"
     end
-    local ok, response = pcall(http.post_response, server.url, payload, http_headers(server), server.timeout or 30000)
+    local ok, err = pcall(http.post_response_async, server.url, payload, http_headers(server), server.timeout or 30000,
+                          function(response)
+                            apply_http_session(server, response)
+                          end,
+                          {background = true})
     if not ok then
-      return false, tostring(response)
-    end
-    apply_http_session(server, response)
-    local status = tonumber(response and response.status or 0) or 0
-    if status < 200 or status >= 300 then
-      return false, "HTTP " .. tostring(status)
+      return false, tostring(err)
     end
     return true
   end
@@ -420,11 +546,20 @@ local function rpc_notify(server, method, params)
   return mcp.send(server.handle, payload)
 end
 
---- Initialize a single MCP server: spawn, handshake, discover tools
-local function init_server(cfg)
+local function configured_server_count()
+  local n = 0
+  for _, cfg in ipairs(init_configs) do
+    if type(cfg) == "table" and cfg.name and (cfg.command or cfg.url) then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+local function start_server_async(cfg)
   if cfg.enabled == false then
     log("skipping disabled server: " .. tostring(cfg.name))
-    return
+    return nil
   end
 
   local server = {
@@ -437,10 +572,12 @@ local function init_server(cfg)
     transport = server_transport(cfg),
     url = cfg.url,
     session_id = nil,
+    phase = "spawn",
+    pending = nil,
   }
+  servers[cfg.name] = server
 
   if server.transport == "stdio" then
-    -- Spawn the subprocess
     local args = cfg.args or {}
     local env = cfg.env or {}
     log("spawning server " .. cfg.name .. ": " .. cfg.command .. " " .. json.encode(args))
@@ -449,30 +586,28 @@ local function init_server(cfg)
     if not handle then
       server.status = "failed"
       server.error = "spawn failed: " .. tostring(spawn_err)
+      server.phase = "done"
       log(server.error)
-      servers[cfg.name] = server
-      return
+      return server
     end
-
     server.handle = handle
   elseif server.transport == "http" then
     if type(server.url) ~= "string" or server.url == "" then
       server.status = "failed"
       server.error = "HTTP MCP server missing url"
+      server.phase = "done"
       log(server.error)
-      servers[cfg.name] = server
-      return
+      return server
     end
     log("connecting HTTP server " .. cfg.name .. ": " .. server.url)
   else
     server.status = "failed"
     server.error = "unsupported MCP transport: " .. tostring(server.transport)
+    server.phase = "done"
     log(server.error)
-    servers[cfg.name] = server
-    return
+    return server
   end
 
-  -- Initialize handshake
   local init_params = {
     protocolVersion = protocol_version,
     capabilities = {},
@@ -481,92 +616,182 @@ local function init_server(cfg)
       version = "1.0.0",
     },
   }
-
-  local result, err = rpc_call(server, "initialize", init_params, 15000)
-  if not result then
-    server.status = "failed"
-    server.error = "initialize failed: " .. tostring(err)
-    log(server.error)
-    if server.handle then
-      mcp.kill(server.handle)
-      server.handle = nil
-    end
-    servers[cfg.name] = server
-    return
+  local ok, err = async_rpc_start(server, "initialize", init_params, 15000)
+  if not ok then
+    mark_server_failed(server, "initialize send failed: " .. tostring(err))
+    server.phase = "done"
+    return server
   end
-
-  log("initialized " .. cfg.name .. " — server: " .. tostring(result.serverInfo and result.serverInfo.name or "unknown") .. " v" .. tostring(result.serverInfo and result.serverInfo.version or "?"))
-
-  -- Send initialized notification
-  rpc_notify(server, "notifications/initialized")
-
-  -- Discover tools
-  local tools_result, terr = rpc_call(server, "tools/list", nil, 10000)
-  if not tools_result then
-    server.status = "failed"
-    server.error = "tools/list failed: " .. tostring(terr)
-    log(server.error)
-    if server.handle then
-      mcp.kill(server.handle)
-      server.handle = nil
-    end
-    servers[cfg.name] = server
-    return
-  end
-
-  if type(tools_result.tools) == "table" then
-    for _, t in ipairs(tools_result.tools) do
-      table.insert(server.tools, {
-        name = t.name,
-        description = t.description or "",
-        inputSchema = t.inputSchema or {type = "object", properties = {}},
-      })
-    end
-  end
-
-  server.status = "connected"
-  log("connected " .. cfg.name .. " (" .. #server.tools .. " tools)")
-  servers[cfg.name] = server
+  server.phase = "initialize"
+  return server
 end
 
---- Initialize all configured MCP servers
+local function fail_async_server(server, message)
+  server.status = "failed"
+  server.error = message
+  server.phase = "done"
+  log(message)
+  if server.handle then
+    pcall(mcp.kill, server.handle)
+    server.handle = nil
+  end
+end
+
+local function tick_server(server)
+  if not server or server.phase == "done" then
+    return false
+  end
+  if server.phase == "initialize" then
+    local result, err = async_rpc_poll(server)
+    if result == nil and err == nil then
+      return false
+    end
+    if result == false then
+      fail_async_server(server, "initialize failed: " .. tostring(err))
+      return true
+    end
+    log("initialized " .. server.name .. " — server: " .. tostring(result.serverInfo and result.serverInfo.name or "unknown") .. " v" .. tostring(result.serverInfo and result.serverInfo.version or "?"))
+    rpc_notify(server, "notifications/initialized")
+    local ok, send_err = async_rpc_start(server, "tools/list", nil, 10000)
+    if not ok then
+      fail_async_server(server, "tools/list send failed: " .. tostring(send_err))
+      return true
+    end
+    server.phase = "tools"
+    return true
+  end
+
+  if server.phase == "tools" then
+    local result, err = async_rpc_poll(server)
+    if result == nil and err == nil then
+      return false
+    end
+    if result == false then
+      fail_async_server(server, "tools/list failed: " .. tostring(err))
+      return true
+    end
+    server.tools = {}
+    if type(result.tools) == "table" then
+      for _, t in ipairs(result.tools) do
+        table.insert(server.tools, {
+          name = t.name,
+          description = t.description or "",
+          inputSchema = t.inputSchema or {type = "object", properties = {}},
+        })
+      end
+    end
+    server.status = "connected"
+    server.phase = "done"
+    log("connected " .. server.name .. " (" .. #server.tools .. " tools)")
+    return true
+  end
+
+  return false
+end
+
+local function all_init_done()
+  if not init_started then return false end
+  if init_index <= #init_configs then return false end
+  for _, server in pairs(servers) do
+    if server.phase and server.phase ~= "done" then
+      return false
+    end
+  end
+  return true
+end
+
+--- Start initializing configured MCP servers without waiting for them.
 function M.init()
+  if disabled then
+    log("MCP disabled for this runtime")
+    return
+  end
+  if initialized or init_started then
+    return
+  end
+  initializing = true
   if not mcp_enabled() then
     log("MCP not enabled in config")
+    initialized = true
+    initializing = false
     return
   end
 
-  local configs = servers_config()
-  local total = #configs
-  local done = 0
+  init_configs = servers_config()
+  init_index = 1
+  init_started = true
+  local total = configured_server_count()
+  if total == 0 then
+    initialized = true
+    initializing = false
+    log("MCP: no servers configured")
+  else
+    log("MCP background init queued (" .. tostring(total) .. " servers)")
+  end
+end
 
-  if agent and type(agent.set_activity) == "function" then
-    if total == 0 then
-      agent.set_activity("MCP: no servers configured")
-    else
-      agent.set_activity("Connecting to MCP (0/" .. total .. ")")
-    end
+function M.disable()
+  disabled = true
+  initialized = true
+  init_started = true
+  initializing = false
+end
+
+function M.ensure_initialized()
+  if not initialized and not init_started then
+    M.init()
+  end
+end
+
+function M.tick(max_steps)
+  if disabled or initialized then
+    return false
+  end
+  M.ensure_initialized()
+  if initialized then
+    return false
   end
 
-  for _, cfg in ipairs(configs) do
-    if type(cfg) == "table" and cfg.name and (cfg.command or cfg.url) then
-      if agent and type(agent.set_activity) == "function" then
-        agent.set_activity("Connecting to MCP (" .. done .. "/" .. total ..
-                           ") — " .. tostring(cfg.name))
+  local steps = max_steps or 1
+  if steps < 1 then steps = 1 end
+  local changed = false
+
+  for _ = 1, steps do
+    local started_one = false
+    while init_index <= #init_configs do
+      local cfg = init_configs[init_index]
+      init_index = init_index + 1
+      if type(cfg) == "table" and cfg.name and (cfg.command or cfg.url) then
+        start_server_async(cfg)
+        started_one = true
+        changed = true
+        break
       end
-      init_server(cfg)
-      done = done + 1
+    end
+    if not started_one then
+      break
     end
   end
 
-  if agent and type(agent.set_activity) == "function" then
-    agent.set_activity(nil)
+  for _, server in pairs(servers) do
+    if tick_server(server) then
+      changed = true
+    end
   end
+
+  if all_init_done() then
+    initialized = true
+    initializing = false
+    log("MCP background init complete")
+  end
+
+  return changed
 end
 
 --- Collect all MCP tools in OpenAI function-calling format.
 --- Tool names are prefixed: "mcp__server__original_name"
 function M.collect_tools()
+  M.tick(1)
   local tools = {}
   exposed_tool_names = {}
   for server_name, server in pairs(servers) do
@@ -667,6 +892,22 @@ end
 --- List all servers and their status
 function M.list_servers()
   local list = {}
+  if not init_started and not initialized and mcp_enabled() then
+    for _, cfg in ipairs(servers_config()) do
+      if type(cfg) == "table" and cfg.name and (cfg.command or cfg.url) then
+        table.insert(list, {
+          name = cfg.name,
+          status = "pending",
+          error = nil,
+          transport = server_transport(cfg),
+          tools_count = 0,
+          tools = {},
+        })
+      end
+    end
+    table.sort(list, function(a, b) return a.name < b.name end)
+    return list
+  end
   for name, server in pairs(servers) do
     local tool_names = {}
     for _, t in ipairs(server.tools) do
@@ -681,26 +922,51 @@ function M.list_servers()
       tools = tool_names,
     })
   end
+  if init_started and not initialized then
+    for i = init_index, #init_configs do
+      local cfg = init_configs[i]
+      if type(cfg) == "table" and cfg.name and (cfg.command or cfg.url) and
+         not servers[cfg.name] then
+        table.insert(list, {
+          name = cfg.name,
+          status = "pending",
+          error = nil,
+          transport = server_transport(cfg),
+          tools_count = 0,
+          tools = {},
+        })
+      end
+    end
+  end
   table.sort(list, function(a, b) return a.name < b.name end)
   return list
 end
 
 --- Restart a specific server
 function M.restart(server_name)
+  M.ensure_initialized()
   local server = servers[server_name]
-  if not server then
+  local cfg = server and server.config
+  if not cfg then
+    for _, candidate in ipairs(servers_config()) do
+      if type(candidate) == "table" and candidate.name == server_name then
+        cfg = candidate
+        break
+      end
+    end
+  end
+  if not cfg then
     return false, "unknown server: " .. tostring(server_name)
   end
 
-  if server.handle then
+  if server and server.handle then
     mcp.kill(server.handle)
-    server.handle = nil
   end
-  server.status = "disconnected"
-  server.tools = {}
-
-  init_server(server.config)
-  return server.status == "connected"
+  servers[server_name] = nil
+  start_server_async(cfg)
+  initialized = false
+  initializing = true
+  return true
 end
 
 --- Shutdown all servers

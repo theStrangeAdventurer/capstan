@@ -53,6 +53,10 @@ void init_tui(void) {
     init_pair(4, COLOR_BLACK, COLOR_YELLOW);
     init_pair(5, -1, COLOR_BLACK);
     init_pair(6, COLOR_RED, COLOR_BLACK);
+    init_pair(8, COLOR_RED, -1);
+    init_pair(9, COLORS >= 216 ? 208 : COLOR_YELLOW, -1);
+    init_pair(10, COLOR_BLUE, -1);
+    init_pair(11, COLOR_BLACK, COLOR_WHITE);
     if (COLORS > 8) {
       init_pair(7, 8, -1);
       g_tool_status_color_pair = 7;
@@ -90,6 +94,18 @@ static const char *mode_label(void) {
     return " MESSAGES ";
   }
   return " INSERT ";
+}
+
+static int profile_color_pair(const char *profile) {
+  if (!profile)
+    return 0;
+  if (strcmp(profile, "fast") == 0)
+    return 8;
+  if (strcmp(profile, "implement") == 0)
+    return 9;
+  if (strcmp(profile, "plan") == 0)
+    return 10;
+  return 0;
 }
 
 static int count_visible_chars_to(const char *str, int max_chars) {
@@ -526,12 +542,53 @@ void render_all(void) {
 
   const char *prov = agent_provider_name();
   const char *model = agent_provider_model();
+  const char *profile = agent_profile_name();
   if (prov && model) {
     char info[256];
     int n = snprintf(info, sizeof(info), "%s/%s", prov, model);
-    attron(A_DIM);
-    mvaddstr(rows - 1, cols - n - 2, info);
-    attroff(A_DIM);
+    if (n < 0)
+      n = 0;
+    info[sizeof(info) - 1] = '\0';
+    const char *display = info;
+    int info_len = (int)strlen(display);
+    int max_width = cols > 4 ? cols - 4 : 0;
+    int profile_len = profile && profile[0] ? (int)strlen(profile) : 0;
+    int total_len = profile_len ? profile_len + 1 + info_len : info_len;
+    if (total_len > max_width) {
+      int info_max = max_width - (profile_len ? profile_len + 1 : 0);
+      if (info_max < 0)
+        info_max = 0;
+      if (info_len > info_max) {
+        display += info_len - info_max;
+        info_len = info_max;
+      }
+      total_len = profile_len ? profile_len + 1 + info_len : info_len;
+    }
+    int x = cols - total_len - 2;
+    if (x < 0)
+      x = 0;
+    if (profile_len) {
+      int pair = profile_color_pair(profile);
+      if (pair)
+        attron(A_BOLD | COLOR_PAIR(pair));
+      else
+        attron(A_BOLD);
+      mvaddstr(rows - 1, x, profile);
+      if (pair)
+        attroff(A_BOLD | COLOR_PAIR(pair));
+      else
+        attroff(A_BOLD);
+      x += profile_len;
+      attron(A_DIM);
+      mvaddstr(rows - 1, x, " ");
+      x += 1;
+      mvaddstr(rows - 1, x, display);
+      attroff(A_DIM);
+    } else {
+      attron(A_DIM);
+      mvaddstr(rows - 1, x, display);
+      attroff(A_DIM);
+    }
   }
 
   wnoutrefresh(stdscr);

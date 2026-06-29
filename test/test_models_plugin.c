@@ -8,6 +8,9 @@ static char selected_model[128];
 static char selected_provider[128];
 static char selected_weak_model[128];
 static char selected_weak_provider[128];
+static char selected_profile[128];
+static char selected_profile_model[128];
+static char selected_profile_provider[128];
 
 static int l_ctx_replace(lua_State *L) {
   const char *ui_val = luaL_checkstring(L, 2);
@@ -85,6 +88,21 @@ static int l_models_set_weak(lua_State *L) {
   return 1;
 }
 
+static int l_models_set_profile(lua_State *L) {
+  const char *profile = luaL_checkstring(L, 1);
+  const char *provider = luaL_checkstring(L, 2);
+  const char *model = luaL_checkstring(L, 3);
+  strncpy(selected_profile, profile, sizeof(selected_profile) - 1);
+  selected_profile[sizeof(selected_profile) - 1] = '\0';
+  strncpy(selected_profile_provider, provider,
+          sizeof(selected_profile_provider) - 1);
+  selected_profile_provider[sizeof(selected_profile_provider) - 1] = '\0';
+  strncpy(selected_profile_model, model, sizeof(selected_profile_model) - 1);
+  selected_profile_model[sizeof(selected_profile_model) - 1] = '\0';
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
 static int l_current_provider(lua_State *L) {
   lua_pushstring(L, "openrouter");
   return 1;
@@ -95,6 +113,9 @@ static lua_State *new_state(void) {
   selected_provider[0] = '\0';
   selected_weak_model[0] = '\0';
   selected_weak_provider[0] = '\0';
+  selected_profile[0] = '\0';
+  selected_profile_model[0] = '\0';
+  selected_profile_provider[0] = '\0';
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
 
@@ -110,6 +131,8 @@ static lua_State *new_state(void) {
   lua_setfield(L, -2, "set_for");
   lua_pushcfunction(L, l_models_set_weak);
   lua_setfield(L, -2, "set_weak");
+  lua_pushcfunction(L, l_models_set_profile);
+  lua_setfield(L, -2, "set_profile");
   lua_pushcfunction(L, l_current_provider);
   lua_setfield(L, -2, "current_provider");
   lua_setfield(L, -2, "models");
@@ -169,6 +192,33 @@ static MunitResult test_autocomplete_marks_weak_mode(
   lua_getfield(L, -2, "value");
   munit_assert_true(strstr(lua_tostring(L, -2), "weak  ") != NULL);
   munit_assert_true(strstr(lua_tostring(L, -1), "weak\t") == lua_tostring(L, -1));
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_autocomplete_marks_profile_mode(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_state();
+  load_models_plugin(L);
+
+  lua_getfield(L, -1, "autocomplete");
+  lua_getfield(L, -1, "fetch");
+  lua_newtable(L);
+  lua_pushstring(L, "--profile");
+  lua_rawseti(L, -2, 1);
+  lua_pushstring(L, "plan");
+  lua_rawseti(L, -2, 2);
+  int rc = lua_pcall(L, 1, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_rawgeti(L, -1, 1);
+  lua_getfield(L, -1, "text");
+  lua_getfield(L, -2, "value");
+  munit_assert_true(strstr(lua_tostring(L, -2), "plan  ") != NULL);
+  munit_assert_true(strstr(lua_tostring(L, -1), "profile\tplan\t") ==
+                    lua_tostring(L, -1));
 
   lua_close(L);
   return MUNIT_OK;
@@ -258,6 +308,40 @@ static MunitResult test_handler_sets_weak_model(
   return MUNIT_OK;
 }
 
+static MunitResult test_handler_sets_profile_model(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_state();
+  load_models_plugin(L);
+
+  lua_getfield(L, -1, "handler");
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "--profile");
+  lua_rawseti(L, -2, 1);
+  lua_pushstring(L, "plan");
+  lua_rawseti(L, -2, 2);
+  lua_pushstring(L, "openrouter");
+  lua_rawseti(L, -2, 3);
+  lua_pushstring(L, "planner/model");
+  lua_rawseti(L, -2, 4);
+  lua_setfield(L, -2, "args");
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_string_equal(selected_profile, "plan");
+  munit_assert_string_equal(selected_profile_provider, "openrouter");
+  munit_assert_string_equal(selected_profile_model, "planner/model");
+  munit_assert_true(strstr(lua_tostring(L, -2),
+                           "Profile model set: plan openrouter/planner/model") != NULL);
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_models_plugin_is_no_history_command(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -278,11 +362,15 @@ static MunitTest tests[] = {
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/autocomplete_marks_weak_mode", test_autocomplete_marks_weak_mode, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/autocomplete_marks_profile_mode", test_autocomplete_marks_profile_mode,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/handler_sets_runtime_model", test_handler_sets_runtime_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/handler_sets_provider_model", test_handler_sets_provider_model, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/handler_sets_weak_model", test_handler_sets_weak_model, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/handler_sets_profile_model", test_handler_sets_profile_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/models_plugin_is_no_history_command",
      test_models_plugin_is_no_history_command, NULL, NULL,

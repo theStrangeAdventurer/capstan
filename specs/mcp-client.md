@@ -151,6 +151,7 @@ Provides `mcp` Lua global with bidirectional subprocess management:
 mcp.spawn(command, args, env)  → handle (integer) | nil, error
 mcp.send(handle, line)         → true | nil, error
 mcp.recv(handle, timeout_ms)   → line (string) | nil, error
+mcp.recv_nowait(handle)        → line (string) | nil, "again" | nil, error
 mcp.alive(handle)              → boolean
 mcp.kill(handle)               → void
 ```
@@ -160,36 +161,61 @@ the child, plus a close-on-exec error pipe so failed `exec` calls are reported
 to the parent during spawn. `recv()` uses `select()` with timeout, reads
 line-by-line, and closes/reaps dead subprocesses before returning errors. UI is
 pumped via `tui_pump_blocking()` during blocking reads and graceful shutdown.
+`recv_nowait()` uses a per-process persistent line buffer and returns
+immediately when no complete line is available, so Lua can drive MCP startup as
+a background state machine without losing partial JSON-RPC lines.
 
 `src/http.c` also exposes:
 
 ```lua
 http.post_response(url, body, headers, timeout_ms)
   → {status=number, body=string, headers=table}
+http.post_response_async(url, body, headers, timeout_ms, callback, opts?)
+  → async_id
 ```
 
 The headers table uses lowercase header names. MCP HTTP uses this to capture
-`mcp-session-id` and detect `content-type`.
+`mcp-session-id` and detect `content-type`. Background HTTP MCP initialization
+uses `post_response_async`; the callback receives the same response table shape
+as `post_response`, followed by an optional error string. MCP startup passes
+`{background = true}` so initialize, `notifications/initialized`, and
+`tools/list` transfers do not set foreground loading, hide the input cursor, or
+become cancellable by the foreground stop shortcut.
 
 ### Lua layer: `agent/mcp.lua`
 
 ```lua
 local mcp_client = require("agent.mcp")
 
-mcp_client.init(config)              — spawn + initialize all servers
+mcp_client.init(config)              — queue background initialization
+mcp_client.ensure_initialized()      — start initialization if needed
+mcp_client.tick(max_steps)           — advance background initialization
 mcp_client.collect_tools()           — return OpenAI-format tool definitions
 mcp_client.call(tool_name, args)     — route and execute MCP tool call
 mcp_client.list_servers()            — return server status info
-mcp_client.restart(server_name)      — kill + respawn a server
+mcp_client.restart(server_name)      — kill + queue respawn for a server
 mcp_client.shutdown()                — kill all servers
 ```
 
 ### Integration points in `agent/tools.lua`
 
-1. **`M.collect()`** — after plugin tools, append `mcp_client.collect_tools()`.
-2. **`call_plugin_tool()`** — if tool name matches a known exposed MCP tool,
+1. **Startup** — TUI startup does not initialize MCP servers. Input becomes
+   available immediately.
+2. **Idle loop** — `plugins_mcp_tick()` calls `capstan.mcp.tick(1)` while the
+   UI is idle, advancing MCP spawn, initialize, and `tools/list` without
+   blocking input. The TUI throttles MCP ticks and uses a small HTTP completion
+   budget per idle cycle so completed background callbacks cannot monopolize
+   input rendering. Stdio servers advance through `mcp.recv_nowait()`. HTTP /
+   streamable HTTP servers advance through background
+   `http.post_response_async()` and the existing `http_poll()` curl multi loop.
+3. **`M.collect()`** — after plugin tools, append `mcp_client.collect_tools()`.
+   This returns only already connected MCP tools and may start/advance
+   background initialization, but it does not wait for slow servers. A first
+   request can therefore run without MCP tools; they appear in later requests
+   after background initialization completes.
+4. **`call_plugin_tool()`** — if tool name matches a known exposed MCP tool,
    route to `mcp_client.call()` instead of plugin handler.
-3. **`tool_permission_name()`** — MCP tools return `"mcp"` as permission key.
+5. **`tool_permission_name()`** — MCP tools return `"mcp"` as permission key.
 
 ### Plugin: `plugins/mcp.lua`
 
@@ -201,8 +227,9 @@ Slash command `/mcp`:
 
 ## Constraints
 
-- **Single-threaded**: tool calls block the main loop. The UI is pumped via
-	  `tui_pump_blocking()` during blocking reads, so the spinner stays animated.
+- **Single-threaded**: MCP startup is non-blocking and advanced from the idle
+  loop. MCP tool calls still block the main loop, with UI pumped via
+  `tui_pump_blocking()` during blocking reads so the spinner stays animated.
 - **HTTP is request/response first**: finite JSON and finite SSE responses are
   supported. A separate long-lived server-to-client stream can be added when a
   connector requires it.

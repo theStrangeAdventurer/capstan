@@ -31,6 +31,7 @@ void agent_build_and_dispatch(lua_State *L);
 void agent_compact(lua_State *L);
 const char *agent_provider_name(void);
 const char *agent_provider_model(void);
+const char *agent_profile_name(void);
 UsageStats agent_usage(void);
 void agent_reset_usage(void);
 

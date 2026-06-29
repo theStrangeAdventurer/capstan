@@ -14,7 +14,10 @@ local function runtime()
 	return nil
 end
 
-local function packed_value(kind, provider, model)
+local function packed_value(kind, profile, provider, model)
+	if kind == "profile" then
+		return table.concat({ kind, profile or "", provider or "", model or "" }, "\t")
+	end
 	return table.concat({ kind, provider or "", model or "" }, "\t")
 end
 
@@ -22,18 +25,31 @@ local function unpack_packed(value)
 	if type(value) ~= "string" then
 		return nil
 	end
+	local profile, provider, model = value:match("^profile\t([^\t]+)\t([^\t]+)\t(.+)$")
+	if profile and provider and model then
+		return "profile", profile, provider, model
+	end
 	local kind, provider, model = value:match("^([^\t]+)\t([^\t]+)\t(.+)$")
 	if kind and provider and model then
-		return kind, provider, model
+		return kind, nil, provider, model
 	end
 	return nil
 end
 
 local function selected_kind(args)
 	if args and args[1] == "--weak" then
-		return "weak"
+		return "weak", nil
 	end
-	return "primary"
+	if args and args[1] == "--profile" then
+		return "profile", args[2]
+	end
+	return "primary", nil
+end
+
+local function refresh_status()
+	if capstan and capstan.agent and capstan.agent.refresh_status then
+		capstan.agent.refresh_status()
+	end
 end
 
 plugin.autocomplete = {
@@ -42,7 +58,7 @@ plugin.autocomplete = {
 		if not models or not models.list then
 			return {}
 		end
-		local kind = selected_kind(args)
+		local kind, profile = selected_kind(args)
 		local list, err
 		if models.list_all then
 			list, err = models.list_all()
@@ -61,8 +77,8 @@ plugin.autocomplete = {
 				provider = models.current_provider()
 			end
 			table.insert(items, {
-				text = string.format("%s  %s", kind == "weak" and "weak" or "main", model.text or model.id),
-				value = packed_value(kind, provider, model.id),
+				text = string.format("%s  %s", kind == "weak" and "weak" or kind == "profile" and (profile or "profile") or "main", model.text or model.id),
+				value = packed_value(kind, profile, provider, model.id),
 			})
 		end
 		return items
@@ -74,12 +90,17 @@ plugin.autocomplete = {
 
 function plugin.handler(ctx)
 	local args = ctx.args or {}
-	local kind, provider, model = unpack_packed(args[1])
+	local kind, profile, provider, model = unpack_packed(args[1])
 	if not kind then
 		if args[1] == "--weak" then
 			kind = "weak"
 			provider = args[2]
 			model = args[3]
+		elseif args[1] == "--profile" then
+			kind = "profile"
+			profile = args[2]
+			provider = args[3]
+			model = args[4]
 		elseif args[1] and args[2] then
 			kind = "primary"
 			provider = args[1]
@@ -92,7 +113,7 @@ function plugin.handler(ctx)
 	end
 
 	if not model or model == "" then
-		return ctx:replace("Usage: /models [--weak] [provider] <model>")
+		return ctx:replace("Usage: /models [--weak] [provider] <model> | /models --profile <fast|plan|implement> <provider> <model>")
 	end
 
 	local models = runtime()
@@ -109,7 +130,26 @@ function plugin.handler(ctx)
 		if not ok then
 			return ctx:replace("Cannot set weak model: " .. tostring(err))
 		end
+		refresh_status()
 		return ctx:replace(string.format("Weak model set: %s/%s", provider, model))
+	end
+
+	if kind == "profile" then
+		if not profile or profile == "" then
+			return ctx:replace("Cannot set profile model: missing profile")
+		end
+		if not provider or provider == "" then
+			return ctx:replace("Cannot set profile model: missing provider")
+		end
+		if not models.set_profile then
+			return ctx:replace("Cannot set profile model: provider runtime does not support profile model state")
+		end
+		local ok, err = models.set_profile(profile, provider, model)
+		if not ok then
+			return ctx:replace("Cannot set profile model: " .. tostring(err))
+		end
+		refresh_status()
+		return ctx:replace(string.format("Profile model set: %s %s/%s", profile, provider, model))
 	end
 
 	local ok, err
@@ -122,6 +162,7 @@ function plugin.handler(ctx)
 	if not ok then
 		return ctx:replace("Cannot set model: " .. tostring(err))
 	end
+	refresh_status()
 	return ctx:replace(string.format("Model set: %s/%s", provider, model))
 end
 

@@ -333,20 +333,24 @@ void dispatch_submit(void) {
     return;
 
   scroll_reset();
+  char submitted[INPUT_BUFFER_SIZE];
+  snprintf(submitted, sizeof(submitted), "%s", text);
 
   char command[MAX_COMMAND_LEN];
   size_t cmd_end;
-  if (text[0] && has_command(text, command, &cmd_end)) {
-    int handled = try_builtin_or_plugin_command(text, cmd_end);
+  int is_command = submitted[0] && has_command(submitted, command, &cmd_end);
+  input_clear();
+  render_all();
+
+  if (is_command) {
+    int handled = try_builtin_or_plugin_command(submitted, cmd_end);
     if (handled == 2)
       return;
   } else if (g_buffered_results.size > 0) {
-    flush_buffered_and_send(text, text);
+    flush_buffered_and_send(submitted, submitted);
   } else {
-    flush_buffered_and_send(text, text);
+    flush_buffered_and_send(submitted, submitted);
   }
-
-  input_clear();
 }
 
 void dispatch_popup_result(void) {

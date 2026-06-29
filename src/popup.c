@@ -1,6 +1,7 @@
 #include "popup_internal.h"
 #include "tui.h"
 #include <ncursesw/curses.h>
+#include <stdio.h>
 #include <string.h>
 
 #if POPUP_KEY_UP != KEY_UP
@@ -19,6 +20,48 @@
 static void popup_win_destroy(void *win) { delwin((WINDOW *)win); }
 
 void popup_init(void) { popup_set_win_cleanup(popup_win_destroy); }
+
+static int msg_wrapped_line_count(const char *text, int max_text_w) {
+  int line_count = 1;
+  int line_col = 0;
+  for (const char *p = text; *p; p++) {
+    if (*p == '\n') {
+      line_count++;
+      line_col = 0;
+    } else if ((*p & 0xC0) != 0x80) {
+      line_col++;
+      if (line_col > max_text_w) {
+        line_count++;
+        line_col = 1;
+      }
+    }
+  }
+  return line_count;
+}
+
+static void popup_draw_scrollbar(WINDOW *win, int y, int x, int height,
+                                 PopupScrollbar scrollbar) {
+  if (!scrollbar.visible || height <= 0)
+    return;
+
+  wattron(win, A_DIM);
+  for (int i = 0; i < height; i++)
+    mvwaddch(win, y + i, x, ACS_VLINE);
+  wattroff(win, A_DIM);
+
+  if (has_colors())
+    wattron(win, COLOR_PAIR(11));
+  else
+    wattron(win, A_REVERSE);
+  for (int i = 0; i < height; i++) {
+    if (i >= scrollbar.top && i < scrollbar.top + scrollbar.height)
+      mvwaddch(win, y + i, x, ' ');
+  }
+  if (has_colors())
+    wattroff(win, COLOR_PAIR(11));
+  else
+    wattroff(win, A_REVERSE);
+}
 
 void popup_close(void) {
   if (g_popup.win) {
@@ -119,13 +162,7 @@ void popup_render(void) {
   }
 
   if (scrollbar.visible) {
-    int bar_x = popup_w - 2;
-    for (int i = 0; i < visible; i++) {
-      int ch = (i >= scrollbar.top && i < scrollbar.top + scrollbar.height)
-                   ? '#'
-                   : '|';
-      mvwaddch(win, item_y_offset + i, bar_x, ch);
-    }
+    popup_draw_scrollbar(win, item_y_offset, popup_w - 2, visible, scrollbar);
   }
 
   if (g_popup.filterable) {
@@ -151,28 +188,45 @@ void popup_render_message(void) {
 
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
-  int inner_w = cols - 2 * MARGIN;
-  int input_y = rows - INPUT_WIN_HEIGHT - MARGIN;
+  int margin = cols >= 40 && rows >= 12 ? MARGIN : 0;
+  int max_popup_w = cols - 2 * margin;
+  int max_popup_h = rows - 2 * margin;
+  if (max_popup_w < POPUP_MIN_WIDTH)
+    max_popup_w = cols < POPUP_MIN_WIDTH ? cols : POPUP_MIN_WIDTH;
+  if (max_popup_h < 5)
+    max_popup_h = rows >= 5 ? rows : 5;
 
-  int max_text_w = inner_w > 60 ? 56 : inner_w - 8;
-  if (max_text_w < 20) max_text_w = 20;
+  int popup_w = max_popup_w;
+  if (popup_w > cols)
+    popup_w = cols;
+  if (popup_w < POPUP_MIN_WIDTH && cols >= POPUP_MIN_WIDTH)
+    popup_w = POPUP_MIN_WIDTH;
 
-  int line_count = 1;
-  int line_col = 0;
-  for (const char *p = g_msgpopup.text; *p; p++) {
-    if (*p == '\n') { line_count++; line_col = 0; }
-    else if ((*p & 0xC0) != 0x80) {
-      line_col++;
-      if (line_col > max_text_w) { line_count++; line_col = 1; }
-    }
-  }
+  int max_text_w = popup_w - 4;
+  if (max_text_w < 1)
+    max_text_w = 1;
 
-  int popup_h = line_count + 4;
-  int popup_w = max_text_w + 4;
-  if (popup_w < POPUP_MIN_WIDTH) popup_w = POPUP_MIN_WIDTH;
-  int popup_x = MARGIN + (inner_w - popup_w) / 2;
-  int popup_y = input_y - popup_h;
-  if (popup_y < 0) popup_y = 0;
+  int line_count = msg_wrapped_line_count(g_msgpopup.text, max_text_w);
+  int desired_h = line_count + 4;
+  int popup_h = desired_h < max_popup_h ? desired_h : max_popup_h;
+  if (popup_h < 5)
+    popup_h = 5;
+
+  int popup_x = (cols - popup_w) / 2;
+  if (popup_x < 0)
+    popup_x = 0;
+  int popup_y = desired_h > max_popup_h ? margin : (rows - popup_h) / 2;
+  if (popup_y < 0)
+    popup_y = 0;
+
+  int content_rows = popup_h - 4;
+  if (content_rows < 1)
+    content_rows = 1;
+  int max_scroll = line_count > content_rows ? line_count - content_rows : 0;
+  if (g_msgpopup.scroll < 0)
+    g_msgpopup.scroll = 0;
+  if (g_msgpopup.scroll > max_scroll)
+    g_msgpopup.scroll = max_scroll;
 
   if (!g_msgpopup.win || g_msgpopup.last_rows != rows ||
       g_msgpopup.last_cols != cols) {
@@ -211,8 +265,9 @@ void popup_render_message(void) {
   if (g_msgpopup.is_error) wattron(win, COLOR_PAIR(6));
 
   const char *p = g_msgpopup.text;
+  int logical_y = 0;
   int ty = 2;
-  while (*p && ty < popup_h - 1) {
+  while (*p && ty < popup_h - 2) {
     const char *le = p;
     int lc = 0;
     while (*le && *le != '\n') {
@@ -221,13 +276,43 @@ void popup_render_message(void) {
       le++;
       if (is_char) lc++;
     }
-    mvwaddnstr(win, ty, 2, p, le - p);
-    ty++;
+    if (logical_y >= g_msgpopup.scroll) {
+      int text_w = max_text_w;
+      if (max_scroll > 0)
+        text_w--;
+      mvwaddnstr(win, ty, 2, p, le - p > text_w ? text_w : (int)(le - p));
+      ty++;
+    }
+    logical_y++;
     if (*le == '\n') le++;
     p = le;
   }
 
+  if (max_scroll > 0) {
+    PopupScrollbar scrollbar =
+        popup_scrollbar_calc(line_count, content_rows, g_msgpopup.scroll);
+    popup_draw_scrollbar(win, 2, popup_w - 2, content_rows, scrollbar);
+  }
+
   if (g_msgpopup.is_error) wattroff(win, COLOR_PAIR(6));
+
+  int first = line_count == 0 ? 0 : g_msgpopup.scroll + 1;
+  int last = g_msgpopup.scroll + content_rows;
+  if (last > line_count)
+    last = line_count;
+  int footer_w = popup_w - 4;
+  if (footer_w > 0) {
+    if (max_scroll > 0)
+      mvwprintw(win, popup_h - 2, 2, "%.*s", footer_w,
+                "arrows/j/k scroll, Enter close");
+    else
+      mvwprintw(win, popup_h - 2, 2, "%.*s", footer_w, "Enter close");
+    char pos[32];
+    snprintf(pos, sizeof(pos), "%d-%d/%d", first, last, line_count);
+    int pos_len = (int)strlen(pos);
+    if (pos_len < footer_w)
+      mvwprintw(win, popup_h - 2, popup_w - 2 - pos_len, "%s", pos);
+  }
 
   wnoutrefresh(win);
 }

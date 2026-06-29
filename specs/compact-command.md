@@ -18,6 +18,8 @@ handoff and replaces the visible message history with that summary.
 
 `/compact` prefers `capstan.models.weak()` when a weak provider/model has been
 configured through `/models --weak` or `config.lua`.
+Profile-specific models configured through `/models --profile ...` or
+`agent.profile_models` do not affect compacting.
 
 If no weak model is configured, compacting falls back to the active primary
 provider/model. Compact requests pass `update_status = false` and

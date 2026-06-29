@@ -17,6 +17,9 @@ static int stream_last_is_done;
 static int stream_last_has_err;
 static int stream_last_has_body;
 static int stream_seen_data;
+static int response_done_calls;
+static int response_status;
+static int response_has_session;
 
 void render_all(void) {}
 
@@ -248,6 +251,24 @@ static int stream_capture_callback(lua_State *L) {
   return 0;
 }
 
+static int response_capture_callback(lua_State *L) {
+  response_done_calls++;
+  if (lua_istable(L, 1)) {
+    lua_getfield(L, 1, "status");
+    response_status = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "headers");
+    if (lua_istable(L, -1)) {
+      lua_getfield(L, -1, "mcp-session-id");
+      response_has_session = lua_isstring(L, -1);
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+  }
+  return 0;
+}
+
 static MunitResult test_http_get_follows_redirect(const MunitParameter params[],
                                                   void *data) {
   (void)params;
@@ -318,6 +339,7 @@ static MunitResult test_post_stream_success_done_has_no_error_body(
   lua_pushcfunction(L, stream_capture_callback);
   int rc = lua_pcall(L, 4, 1, 0);
   munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_true(http_is_loading());
   lua_pop(L, 2);
   lua_gc(L, LUA_GCCOLLECT, 0);
 
@@ -332,6 +354,64 @@ static MunitResult test_post_stream_success_done_has_no_error_body(
   munit_assert_int(stream_last_argc, ==, 2);
   munit_assert_int(stream_last_has_err, ==, 0);
   munit_assert_int(stream_last_has_body, ==, 0);
+
+  http_cleanup();
+  lua_close(L);
+
+  int status = 0;
+  waitpid(server_pid, &status, 0);
+  munit_assert_true(WIFEXITED(status));
+  munit_assert_int(WEXITSTATUS(status), ==, 0);
+
+  return MUNIT_OK;
+}
+
+static MunitResult test_background_post_response_does_not_set_loading(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  int port = 0;
+  pid_t server_pid = start_post_response_server(&port);
+  if (server_pid < 0)
+    return MUNIT_SKIP;
+
+  response_done_calls = 0;
+  response_status = 0;
+  response_has_session = 0;
+
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  http_init(L);
+
+  char url[256];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/rpc", port);
+
+  lua_getglobal(L, "http");
+  lua_getfield(L, -1, "post_response_async");
+  lua_pushstring(L, url);
+  lua_pushstring(L, "{}");
+  lua_newtable(L);
+  lua_pushinteger(L, 1000);
+  lua_pushcfunction(L, response_capture_callback);
+  lua_newtable(L);
+  lua_pushboolean(L, 1);
+  lua_setfield(L, -2, "background");
+  int rc = lua_pcall(L, 6, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_false(http_is_loading());
+  munit_assert_true(http_has_background_work());
+  lua_pop(L, 2);
+
+  for (int i = 0; i < 100 && response_done_calls == 0; i++) {
+    http_poll_limited(L, 1);
+    usleep(10000);
+  }
+
+  munit_assert_int(response_done_calls, ==, 1);
+  munit_assert_int(response_status, ==, 200);
+  munit_assert_int(response_has_session, ==, 1);
+  munit_assert_false(http_has_background_work());
 
   http_cleanup();
   lua_close(L);
@@ -400,6 +480,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/post_stream_success_done_has_no_error_body",
      test_post_stream_success_done_has_no_error_body, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/background_post_response_does_not_set_loading",
+     test_background_post_response_does_not_set_loading, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/post_response_returns_headers", test_post_response_returns_headers, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},

@@ -34,6 +34,49 @@ static int l_weak_model(lua_State *L) {
   return 1;
 }
 
+static int push_model(lua_State *L, const char *provider, const char *model) {
+  lua_newtable(L);
+  lua_pushstring(L, provider);
+  lua_setfield(L, -2, "provider");
+  lua_pushstring(L, model);
+  lua_setfield(L, -2, "model");
+  return 1;
+}
+
+static int l_profile_model(lua_State *L) {
+  const char *profile = luaL_checkstring(L, 1);
+  if (strcmp(profile, "fast") == 0)
+    return push_model(L, "openrouter", "fast-model");
+  if (strcmp(profile, "plan") == 0)
+    return push_model(L, "openrouter", "plan-model");
+  return 0;
+}
+
+static int l_effective_model(lua_State *L) {
+  const char *profile = luaL_checkstring(L, 1);
+  if (strcmp(profile, "fast") == 0)
+    return push_model(L, "openrouter", "fast-model");
+  if (strcmp(profile, "plan") == 0)
+    return push_model(L, "openrouter", "plan-model");
+  return push_model(L, "deepseek", "deepseek-chat");
+}
+
+static int l_get_profile(lua_State *L) {
+  lua_pushstring(L, "implement");
+  return 1;
+}
+
+static int l_reasoning_effort(lua_State *L) {
+  const char *profile = luaL_checkstring(L, 1);
+  if (strcmp(profile, "fast") == 0)
+    lua_pushstring(L, "low");
+  else if (strcmp(profile, "plan") == 0)
+    lua_pushstring(L, "high");
+  else
+    lua_pushstring(L, "medium");
+  return 1;
+}
+
 static void set_const_string(lua_State *L, const char *name,
                              const char *value) {
   lua_pushstring(L, value);
@@ -66,7 +109,18 @@ static lua_State *new_state(void) {
   set_const_string(L, "current_model", "deepseek-chat");
   lua_pushcfunction(L, l_weak_model);
   lua_setfield(L, -2, "weak");
+  lua_pushcfunction(L, l_profile_model);
+  lua_setfield(L, -2, "profile");
+  lua_pushcfunction(L, l_effective_model);
+  lua_setfield(L, -2, "effective");
   lua_setfield(L, -2, "models");
+
+  lua_newtable(L);
+  lua_pushcfunction(L, l_get_profile);
+  lua_setfield(L, -2, "get_profile");
+  lua_pushcfunction(L, l_reasoning_effort);
+  lua_setfield(L, -2, "reasoning_effort");
+  lua_setfield(L, -2, "agent");
   lua_setglobal(L, "capstan");
 
   return L;
@@ -131,9 +185,13 @@ static MunitResult test_info_includes_runtime_paths(const MunitParameter params[
   munit_assert_true(strstr(ui, "builtin skills: embedded:skills") != NULL);
   munit_assert_true(strstr(ui, "permissions: /home/me/.local/state/capstan/permissions.lua") != NULL);
   munit_assert_true(strstr(ui, "current log: /home/me/.local/state/capstan/logs/2026-06-27.log") != NULL);
-  munit_assert_true(strstr(ui, "provider: deepseek") != NULL);
-  munit_assert_true(strstr(ui, "model: deepseek-chat") != NULL);
+  munit_assert_true(strstr(ui, "active profile: implement") != NULL);
+  munit_assert_true(strstr(ui, "current provider: deepseek") != NULL);
+  munit_assert_true(strstr(ui, "current model: deepseek-chat") != NULL);
   munit_assert_true(strstr(ui, "weak model: openrouter/minimax/minimax-m3") != NULL);
+  munit_assert_true(strstr(ui, "fast: configured openrouter/fast-model; uses openrouter/fast-model; effort low") != NULL);
+  munit_assert_true(strstr(ui, "implement: configured (default); uses deepseek/deepseek-chat; effort medium") != NULL);
+  munit_assert_true(strstr(ui, "plan: configured openrouter/plan-model; uses openrouter/plan-model; effort high") != NULL);
 
   lua_close(L);
   return MUNIT_OK;

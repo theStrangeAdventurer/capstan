@@ -2,7 +2,8 @@
 
 Agent profiles are named workflow policies for Capstan runs. They are separate
 from raw provider options: a profile can add system prompt guidance, set a
-default reasoning effort, and restrict the model tool list.
+default reasoning effort, select a profile-specific model, and restrict the
+model tool list.
 
 ## Profiles
 
@@ -43,19 +44,33 @@ Profile selection order:
 1. `capstan run --profile ...`
 2. TUI runtime state set by `/fast`, `/implement`, or `/plan`
 3. `agent.profile` in `config.lua`
-4. No active profile
+4. `implement`
 
 Explicit `--reasoning-effort` takes precedence over a profile's default effort.
 Provider-level reasoning configuration still applies when neither the run nor
 the active profile set an effort.
+
+Profile-specific model selection order for normal agent runs:
+
+1. explicit run provider/model options such as `--provider` and `--model`
+2. environment provider/model overrides
+3. `/models --profile ...` persisted runtime state
+4. `agent.profile_models` in `config.lua`
+5. selected global primary provider/model
+
+The TUI publishes the effective profile and provider/model status during
+startup, so the status line is visible before the first agent request. When no
+profile is configured or selected, `implement` is the real fallback profile:
+its system prompt and default reasoning apply.
 
 ## Architecture
 
 `agent/profiles.lua` owns profile definitions and model tool filtering.
 `agent/runtime.lua` resolves the active profile before each run, appends the
 profile prompt to the system message, applies default reasoning effort, and
-filters tools after hook-based tool collection. The profile slash commands are
-small embedded Lua plugins.
+filters tools after hook-based tool collection. `agent/models.lua` owns
+profile model persistence and effective-model reporting. The profile slash
+commands are small embedded Lua plugins.
 
 ## Tests
 

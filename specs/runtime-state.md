@@ -29,7 +29,7 @@ The runtime exposes these helpers to Lua:
 rewrite `config.lua`.
 
 Currently persisted runtime state includes the active provider, selected
-provider models, and an optional weak model:
+provider models, optional profile models, and an optional weak model:
 
 ```lua
 return {
@@ -40,6 +40,12 @@ return {
   weak_model = {
     provider = "openrouter",
     model = "minimax/minimax-m3",
+  },
+  profile_models = {
+    plan = {
+      provider = "openrouter",
+      model = "anthropic/claude-sonnet-4",
+    },
   },
 }
 ```
@@ -63,6 +69,14 @@ Weak model precedence is:
 1. persisted runtime state;
 2. `config.lua` `weak_model = { provider = "...", model = "..." }`;
 3. unavailable.
+
+Profile model precedence for an active profile is:
+
+1. explicit run provider/model options such as `--provider` and `--model`;
+2. environment provider/model overrides;
+3. persisted runtime state `profile_models[profile]`;
+4. `config.lua` `agent.profile_models[profile]`;
+5. the selected global primary provider/model.
 
 Permission prompt choices made with `Always allow` are stored separately in:
 

@@ -47,6 +47,7 @@ typedef struct {
   void *win;
   int last_rows;
   int last_cols;
+  int scroll;
   time_t created_at;
   int auto_close_after_sec;
 } MsgPopup;

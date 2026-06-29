@@ -494,15 +494,22 @@ int main(int argc, char *argv[]) {
   scroll_reset();
   render_all();
   long long last_idle_render_ms = main_now_ms();
+  long long last_mcp_tick_ms = 0;
 
   while (1) {
     int ch = getch();
     if (ch == ERR) {
-      int had_http_events = http_poll(L);
+      int had_http_events = http_poll_limited(L, 2);
+      long long now = main_now_ms();
+      int had_mcp_events = 0;
+      if (now - last_mcp_tick_ms >= 30) {
+        had_mcp_events = plugins_mcp_tick();
+        last_mcp_tick_ms = now;
+      }
       plugins_watch_poll();
       napms(10);
-      long long now = main_now_ms();
-      int active = http_is_loading() || agent_is_thinking() || had_http_events;
+      int active = http_is_loading() || agent_is_thinking() || had_http_events ||
+                   had_mcp_events;
       long long interval =
           active ? ACTIVE_RENDER_INTERVAL_MS : IDLE_RENDER_INTERVAL_MS;
       if (now - last_idle_render_ms >= interval) {

@@ -1,6 +1,7 @@
 #include "popup_internal.h"
 #include "finder.h"
 #include "utils.h"
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -412,6 +413,7 @@ void popup_show_message(const char *title, const char *text, int is_error) {
   g_msgpopup.win = NULL;
   g_msgpopup.last_rows = -1;
   g_msgpopup.last_cols = -1;
+  g_msgpopup.scroll = 0;
   g_msgpopup.created_at = time(NULL);
   g_msgpopup.auto_close_after_sec = is_error ? 8 : 0;
 }
@@ -435,15 +437,38 @@ void popup_close_message(void) {
   g_msgpopup.is_error = 0;
   g_msgpopup.last_rows = -1;
   g_msgpopup.last_cols = -1;
+  g_msgpopup.scroll = 0;
   g_msgpopup.created_at = 0;
   g_msgpopup.auto_close_after_sec = 0;
 }
 
 int popup_message_handle_key(int ch) {
-  (void)ch;
   if (ch == '\n' || ch == '\r' || ch == 27) {
     popup_close_message();
     return 0;
+  }
+  if (ch == 'j' || ch == POPUP_KEY_DOWN || ch == 0x04) {
+    int delta = ch == 0x04 ? 5 : 1;
+    if (g_msgpopup.scroll <= INT_MAX - delta)
+      g_msgpopup.scroll += delta;
+    else
+      g_msgpopup.scroll = INT_MAX;
+    return 1;
+  }
+  if (ch == 'k' || ch == POPUP_KEY_UP || ch == 0x15) {
+    int delta = ch == 0x15 ? 5 : 1;
+    g_msgpopup.scroll -= delta;
+    if (g_msgpopup.scroll < 0)
+      g_msgpopup.scroll = 0;
+    return 1;
+  }
+  if (ch == 'g') {
+    g_msgpopup.scroll = 0;
+    return 1;
+  }
+  if (ch == 'G') {
+    g_msgpopup.scroll = INT_MAX;
+    return 1;
   }
   return 1;
 }

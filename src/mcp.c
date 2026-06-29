@@ -32,6 +32,9 @@ typedef struct {
   int stdin_fd;   /* write end */
   int stdout_fd;  /* read end */
   int alive;
+  char *read_buf;
+  size_t read_len;
+  size_t read_cap;
 } McpProc;
 
 static McpProc g_procs[MCP_MAX_PROCS];
@@ -61,6 +64,10 @@ static void close_proc_slot(int handle) {
     if (g_proc_count > 0)
       g_proc_count--;
   }
+  free(g_procs[handle].read_buf);
+  g_procs[handle].read_buf = NULL;
+  g_procs[handle].read_len = 0;
+  g_procs[handle].read_cap = 0;
   g_procs[handle].pid = 0;
 }
 
@@ -312,6 +319,9 @@ static int l_mcp_spawn(lua_State *L) {
   g_procs[slot].stdin_fd = in_pipe[1];
   g_procs[slot].stdout_fd = out_pipe[0];
   g_procs[slot].alive = 1;
+  g_procs[slot].read_buf = NULL;
+  g_procs[slot].read_len = 0;
+  g_procs[slot].read_cap = 0;
   g_proc_count++;
 
   /* Cleanup argv/envp (child has its own copies after fork) */
@@ -478,6 +488,100 @@ static int l_mcp_recv(lua_State *L) {
   }
 }
 
+static int mcp_append_read_char(McpProc *proc, char ch) {
+  if (proc->read_len + 1 >= proc->read_cap) {
+    size_t new_cap = proc->read_cap ? proc->read_cap * 2 : 256;
+    char *new_buf = realloc(proc->read_buf, new_cap);
+    if (!new_buf)
+      return -1;
+    proc->read_buf = new_buf;
+    proc->read_cap = new_cap;
+  }
+  proc->read_buf[proc->read_len++] = ch;
+  return 0;
+}
+
+static int l_mcp_recv_nowait(lua_State *L) {
+  int handle = (int)luaL_checkinteger(L, 1);
+
+  if (handle < 0 || handle >= MCP_MAX_PROCS || !g_procs[handle].alive) {
+    lua_pushnil(L);
+    lua_pushstring(L, "mcp.recv_nowait: invalid or dead handle");
+    return 2;
+  }
+
+  McpProc *proc = &g_procs[handle];
+
+  int status;
+  pid_t r = waitpid(proc->pid, &status, WNOHANG);
+  if (r == proc->pid) {
+    close_proc_slot(handle);
+    lua_pushnil(L);
+    lua_pushstring(L, "process exited");
+    return 2;
+  }
+
+  fd_set rfds;
+  FD_ZERO(&rfds);
+  FD_SET(proc->stdout_fd, &rfds);
+  struct timeval tv = {.tv_sec = 0, .tv_usec = 0};
+  int n = select(proc->stdout_fd + 1, &rfds, NULL, NULL, &tv);
+  if (n < 0) {
+    if (errno == EINTR) {
+      lua_pushnil(L);
+      lua_pushliteral(L, "again");
+      return 2;
+    }
+    lua_pushnil(L);
+    lua_pushstring(L, "select() failed");
+    return 2;
+  }
+  if (n == 0) {
+    lua_pushnil(L);
+    lua_pushliteral(L, "again");
+    return 2;
+  }
+
+  char ch;
+  ssize_t bytes_read;
+  while ((bytes_read = read(proc->stdout_fd, &ch, 1)) == 1) {
+    if (ch == '\n') {
+      if (proc->read_len == 0)
+        continue;
+      lua_pushlstring(L, proc->read_buf, proc->read_len);
+      proc->read_len = 0;
+      return 1;
+    }
+    if (mcp_append_read_char(proc, ch) != 0) {
+      lua_pushnil(L);
+      lua_pushstring(L, "out of memory");
+      return 2;
+    }
+  }
+
+  if (bytes_read < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      lua_pushnil(L);
+      lua_pushliteral(L, "again");
+      return 2;
+    }
+    lua_pushnil(L);
+    lua_pushstring(L, "read() failed");
+    return 2;
+  }
+
+  if (proc->read_len > 0) {
+    lua_pushlstring(L, proc->read_buf, proc->read_len);
+    proc->read_len = 0;
+    return 1;
+  }
+
+  close_proc_slot(handle);
+  lua_pushnil(L);
+  lua_pushstring(L, "process closed stdout");
+  return 2;
+}
+
 static int l_mcp_alive(lua_State *L) {
   int handle = (int)luaL_checkinteger(L, 1);
   if (handle < 0 || handle >= MCP_MAX_PROCS) {
@@ -582,6 +686,9 @@ void mcp_init(lua_State *L) {
 
   lua_pushcfunction(L, l_mcp_recv);
   lua_setfield(L, -2, "recv");
+
+  lua_pushcfunction(L, l_mcp_recv_nowait);
+  lua_setfield(L, -2, "recv_nowait");
 
   lua_pushcfunction(L, l_mcp_alive);
   lua_setfield(L, -2, "alive");
