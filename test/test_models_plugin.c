@@ -11,6 +11,7 @@ static char selected_weak_provider[128];
 static char selected_profile[128];
 static char selected_profile_model[128];
 static char selected_profile_provider[128];
+static char active_profile[128];
 
 static int l_ctx_replace(lua_State *L) {
   const char *ui_val = luaL_checkstring(L, 2);
@@ -108,6 +109,16 @@ static int l_current_provider(lua_State *L) {
   return 1;
 }
 
+static int l_agent_get_profile(lua_State *L) {
+  lua_pushstring(L, active_profile[0] ? active_profile : "implement");
+  return 1;
+}
+
+static int l_agent_refresh_status(lua_State *L) {
+  (void)L;
+  return 0;
+}
+
 static lua_State *new_state(void) {
   selected_model[0] = '\0';
   selected_provider[0] = '\0';
@@ -116,6 +127,7 @@ static lua_State *new_state(void) {
   selected_profile[0] = '\0';
   selected_profile_model[0] = '\0';
   selected_profile_provider[0] = '\0';
+  strcpy(active_profile, "plan");
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
 
@@ -136,6 +148,12 @@ static lua_State *new_state(void) {
   lua_pushcfunction(L, l_current_provider);
   lua_setfield(L, -2, "current_provider");
   lua_setfield(L, -2, "models");
+  lua_newtable(L);
+  lua_pushcfunction(L, l_agent_get_profile);
+  lua_setfield(L, -2, "get_profile");
+  lua_pushcfunction(L, l_agent_refresh_status);
+  lua_setfield(L, -2, "refresh_status");
+  lua_setfield(L, -2, "agent");
   lua_setglobal(L, "capstan");
 
   return L;
@@ -165,9 +183,9 @@ static MunitResult test_autocomplete_lists_runtime_models(
   lua_getfield(L, -1, "text");
   lua_getfield(L, -2, "value");
   munit_assert_string_equal(lua_tostring(L, -2),
-                            "main  deepseek/deepseek-chat");
+                            "plan  deepseek/deepseek-chat");
   munit_assert_string_equal(lua_tostring(L, -1),
-                            "primary\tdeepseek\tdeepseek-chat");
+                            "profile\tplan\tdeepseek\tdeepseek-chat");
 
   lua_close(L);
   return MUNIT_OK;
@@ -224,7 +242,7 @@ static MunitResult test_autocomplete_marks_profile_mode(
   return MUNIT_OK;
 }
 
-static MunitResult test_handler_sets_runtime_model(
+static MunitResult test_handler_sets_current_profile_model(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -242,8 +260,12 @@ static MunitResult test_handler_sets_runtime_model(
   int rc = lua_pcall(L, 1, 2, 0);
   munit_assert_int(rc, ==, LUA_OK);
 
-  munit_assert_string_equal(selected_model, "model/b");
-  munit_assert_true(strstr(lua_tostring(L, -2), "openrouter/model/b") != NULL);
+  munit_assert_string_equal(selected_model, "");
+  munit_assert_string_equal(selected_profile, "plan");
+  munit_assert_string_equal(selected_profile_provider, "openrouter");
+  munit_assert_string_equal(selected_profile_model, "model/b");
+  munit_assert_true(strstr(lua_tostring(L, -2),
+                           "Profile model set: plan openrouter/model/b") != NULL);
 
   lua_close(L);
   return MUNIT_OK;
@@ -364,7 +386,8 @@ static MunitTest tests[] = {
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/autocomplete_marks_profile_mode", test_autocomplete_marks_profile_mode,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
-    {"/handler_sets_runtime_model", test_handler_sets_runtime_model, NULL, NULL,
+    {"/handler_sets_current_profile_model",
+     test_handler_sets_current_profile_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/handler_sets_provider_model", test_handler_sets_provider_model, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},

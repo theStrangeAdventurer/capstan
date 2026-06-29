@@ -9,6 +9,7 @@
 #include "permit_prompt.h"
 #include "popup.h"
 #include "scroll.h"
+#include "start_screen.h"
 #include "utils.h"
 #include "visual.h"
 #include <stdio.h>
@@ -17,6 +18,7 @@
 
 BufferedPluginResults g_buffered_results = {0};
 static int g_tool_status_color_pair = 0;
+static int g_dim_color_pair = 0;
 
 void buffer_plugin_result(const char *label, char *ui_result, char *raw_result) {
   if (g_buffered_results.size >= g_buffered_results.capacity) {
@@ -60,6 +62,7 @@ void init_tui(void) {
     if (COLORS > 8) {
       init_pair(7, 8, -1);
       g_tool_status_color_pair = 7;
+      g_dim_color_pair = 7;
     }
   }
   curs_set(1);
@@ -96,18 +99,6 @@ static const char *mode_label(void) {
   return " INSERT ";
 }
 
-static int profile_color_pair(const char *profile) {
-  if (!profile)
-    return 0;
-  if (strcmp(profile, "fast") == 0)
-    return 8;
-  if (strcmp(profile, "implement") == 0)
-    return 9;
-  if (strcmp(profile, "plan") == 0)
-    return 10;
-  return 0;
-}
-
 static int count_visible_chars_to(const char *str, int max_chars) {
   int bytes = 0, chars = 0;
   while (str[bytes]) {
@@ -127,7 +118,65 @@ static int centered_x(int width, const char *text) {
   return x > 0 ? x : 0;
 }
 
-static void render_empty_banner(WINDOW *win, int height, int width) {
+static int dim_gray_attr(void) {
+  return g_dim_color_pair ? COLOR_PAIR(g_dim_color_pair) : A_DIM;
+}
+
+static int profile_color_pair(const char *profile) {
+  if (!profile)
+    return 0;
+  if (strcmp(profile, "fast") == 0)
+    return 8;
+  if (strcmp(profile, "implement") == 0)
+    return 9;
+  if (strcmp(profile, "plan") == 0)
+    return 10;
+  return 0;
+}
+
+static void waddn_chars(WINDOW *win, const char *text, int count) {
+  for (int i = 0; i < count; i++)
+    waddstr(win, text);
+}
+
+static void mvwadd_clipped(WINDOW *win, int y, int x, const char *text,
+                           int max_chars) {
+  if (max_chars <= 0)
+    return;
+  char buf[512];
+  start_screen_truncate(text, buf, sizeof(buf), max_chars);
+  mvwaddstr(win, y, x, buf);
+}
+
+static void render_status_pair(WINDOW *win, int y, int x, const char *label,
+                               const char *value, int value_width) {
+  int dim = dim_gray_attr();
+  wattron(win, dim);
+  mvwaddstr(win, y, x, label);
+  mvwadd_clipped(win, y, x + 9, value, value_width);
+  wattroff(win, dim);
+}
+
+static void render_profile_pair(WINDOW *win, int y, int x, const char *profile,
+                                int value_width) {
+  int dim = dim_gray_attr();
+  wattron(win, dim);
+  mvwaddstr(win, y, x, "profile");
+  wattroff(win, dim);
+
+  int pair = profile_color_pair(profile);
+  if (pair)
+    wattron(win, A_BOLD | COLOR_PAIR(pair));
+  else
+    wattron(win, A_BOLD);
+  mvwadd_clipped(win, y, x + 9, profile, value_width);
+  if (pair)
+    wattroff(win, A_BOLD | COLOR_PAIR(pair));
+  else
+    wattroff(win, A_BOLD);
+}
+
+static void render_start_screen_minimal(WINDOW *win, int height, int width) {
   if (height < 3 || width < 1)
     return;
 
@@ -140,9 +189,133 @@ static void render_empty_banner(WINDOW *win, int height, int width) {
   mvwaddstr(win, title_y, title_x, APP_BANNER_TITLE);
   wattroff(win, A_BOLD | COLOR_PAIR(1));
 
-  wattron(win, A_DIM);
+  wattron(win, dim_gray_attr());
   mvwaddstr(win, tagline_y, tagline_x, APP_BANNER_TAGLINE);
-  wattroff(win, A_DIM);
+  wattroff(win, dim_gray_attr());
+}
+
+static void render_start_screen_frame(WINDOW *win, int y, int x, int frame_h,
+                                      int frame_w) {
+  int dim = dim_gray_attr();
+  wattron(win, dim);
+  mvwaddstr(win, y, x, "╭");
+  waddn_chars(win, "─", frame_w - 2);
+  waddstr(win, "╮");
+  for (int row = 1; row < frame_h - 1; row++) {
+    mvwaddstr(win, y + row, x, "│");
+    mvwhline(win, y + row, x + 1, ' ', frame_w - 2);
+    mvwaddstr(win, y + row, x + frame_w - 1, "│");
+  }
+  mvwaddstr(win, y + frame_h - 1, x, "╰");
+  waddn_chars(win, "─", frame_w - 2);
+  waddstr(win, "╯");
+  wattroff(win, dim);
+}
+
+static void render_start_screen_wide(WINDOW *win, int height, int width,
+                                     const StartScreenStatusLines *lines) {
+  int frame_w = width < 104 ? width : 104;
+  int frame_h = 15;
+  int frame_y = (height - frame_h) / 2;
+  int frame_x = (width - frame_w) / 2;
+  int art_x = frame_x + 1;
+  int art_w = 38;
+  int status_x = frame_x + 41;
+  int status_right = frame_x + frame_w - 2;
+  int value_w = status_right - (status_x + 9) + 1;
+
+  render_start_screen_frame(win, frame_y, frame_x, frame_h, frame_w);
+
+  wattron(win, COLOR_PAIR(11));
+  for (int i = 0; i < START_SCREEN_ART_LINES && i < frame_h - 2; i++) {
+    mvwhline(win, frame_y + 1 + i, art_x, ' ', art_w);
+    mvwaddstr(win, frame_y + 1 + i, art_x, START_SCREEN_ART[i]);
+  }
+  wattroff(win, COLOR_PAIR(11));
+
+  wattron(win, A_BOLD | COLOR_PAIR(1));
+  mvwaddstr(win, frame_y + 3, status_x, "◉ CAPSTAN");
+  wattroff(win, A_BOLD | COLOR_PAIR(1));
+  int dim = dim_gray_attr();
+  wattron(win, dim);
+  mvwadd_clipped(win, frame_y + 3, status_x + 10, APP_VERSION,
+                 frame_x + frame_w - status_x - 12);
+  wattroff(win, dim);
+
+  wattron(win, dim);
+  mvwadd_clipped(win, frame_y + 4, status_x, APP_BANNER_TAGLINE,
+                 frame_x + frame_w - status_x - 2);
+  wattroff(win, dim);
+
+  render_status_pair(win, frame_y + 6, status_x, "model", lines->model,
+                     value_w);
+  render_profile_pair(win, frame_y + 7, status_x, lines->profile, value_w);
+  render_status_pair(win, frame_y + 8, status_x, "workdir", lines->workdir,
+                     value_w);
+
+  wattron(win, COLOR_PAIR(2));
+  mvwaddstr(win, frame_y + 12, status_x, "ready");
+  wattroff(win, COLOR_PAIR(2));
+  wattron(win, dim);
+  mvwadd_clipped(win, frame_y + 12, status_x + 9, lines->ready, value_w);
+  wattroff(win, dim);
+}
+
+static void render_start_screen_compact(WINDOW *win, int height, int width,
+                                        const StartScreenStatusLines *lines) {
+  int frame_w = width < 70 ? width : 70;
+  int frame_h = height < 10 ? height : 10;
+  int frame_y = (height - frame_h) / 2;
+  int frame_x = (width - frame_w) / 2;
+  int inner_w = frame_w - 4;
+
+  if (frame_h < 6 || frame_w < 24) {
+    render_start_screen_minimal(win, height, width);
+    return;
+  }
+
+  render_start_screen_frame(win, frame_y, frame_x, frame_h, frame_w);
+
+  wattron(win, A_BOLD | COLOR_PAIR(1));
+  mvwaddstr(win, frame_y + 2, frame_x + 2, "◉ CAPSTAN");
+  wattroff(win, A_BOLD | COLOR_PAIR(1));
+  int dim = dim_gray_attr();
+  wattron(win, dim);
+  mvwadd_clipped(win, frame_y + 2, frame_x + 12, APP_VERSION, inner_w - 10);
+  wattroff(win, dim);
+  wattron(win, dim);
+  mvwadd_clipped(win, frame_y + 3, frame_x + 2, APP_BANNER_TAGLINE, inner_w);
+  wattroff(win, dim);
+
+  render_status_pair(win, frame_y + 5, frame_x + 2, "model", lines->model,
+                     inner_w - 9);
+  render_profile_pair(win, frame_y + 6, frame_x + 2, lines->profile,
+                      inner_w - 9);
+  render_status_pair(win, frame_y + 7, frame_x + 2, "workdir", lines->workdir,
+                     inner_w - 9);
+}
+
+static void render_start_screen(WINDOW *win, int height, int width) {
+  StartScreenStatus status = {
+      .provider = agent_provider_name(),
+      .model = agent_provider_model(),
+      .profile = agent_profile_name(),
+      .workdir = app_workdir(),
+  };
+  StartScreenStatusLines lines;
+  start_screen_build_status(&status, &lines);
+
+  switch (start_screen_layout_for_size(height, width)) {
+  case START_SCREEN_WIDE:
+    render_start_screen_wide(win, height, width, &lines);
+    break;
+  case START_SCREEN_COMPACT:
+    render_start_screen_compact(win, height, width, &lines);
+    break;
+  case START_SCREEN_MINIMAL:
+    render_start_screen_minimal(win, height, width);
+    break;
+  }
 }
 
 void render_all(void) {
@@ -228,7 +401,7 @@ void render_all(void) {
   int win_row = 0;
 
   if (msgs->size == 0) {
-    render_empty_banner(msg_win, msg_h, inner_w);
+    render_start_screen(msg_win, msg_h, inner_w);
   }
 
   for (size_t i = 0; i < msgs->size && win_row < msg_h; i++) {
@@ -398,21 +571,15 @@ void render_all(void) {
   }
 
   werase(input_win);
-  if (mode_get() == FOCUS_INPUT)
-    wattron(input_win, A_BOLD);
-  else
-    wattron(input_win, A_DIM);
+  wattron(input_win, dim_gray_attr());
   box(input_win, 0, 0);
-  wattroff(input_win, A_BOLD);
-  wattroff(input_win, A_DIM);
+  wattroff(input_win, dim_gray_attr());
 
   {
     const char *label = mode_label();
     int label_len = (int)strlen(label);
     int label_x = 2;
-    int label_attr = A_BOLD;
-    if (mode_get() == FOCUS_MESSAGES && !visual_is_active())
-      label_attr |= A_DIM;
+    int label_attr = dim_gray_attr();
 
     wattron(input_win, label_attr);
     if (label_x + label_len < inner_w - 1)
@@ -429,9 +596,9 @@ void render_all(void) {
     if (usage_len > 0) {
       int usage_x = inner_w - usage_len - 2;
       if (usage_x > label_x + label_len + 1) {
-        wattron(input_win, A_DIM);
+        wattron(input_win, dim_gray_attr());
         mvwaddnstr(input_win, 0, usage_x, usage_buf, usage_len);
-        wattroff(input_win, A_DIM);
+        wattroff(input_win, dim_gray_attr());
       }
     }
   }
@@ -450,7 +617,7 @@ void render_all(void) {
 
   int dim_content = mode_get() == FOCUS_MESSAGES;
   if (dim_content)
-    wattron(input_win, A_DIM);
+    wattron(input_win, dim_gray_attr());
 
   int line1_bytes = 0;
   if (input_lines > skip_lines) {
@@ -461,7 +628,7 @@ void render_all(void) {
     mvwaddstr(input_win, 2, 1, visible + line1_bytes);
 
   if (dim_content)
-    wattroff(input_win, A_DIM);
+    wattroff(input_win, dim_gray_attr());
 
   if (mode_get() == FOCUS_INPUT) {
     int cursor_line, cursor_col;
@@ -579,15 +746,15 @@ void render_all(void) {
       else
         attroff(A_BOLD);
       x += profile_len;
-      attron(A_DIM);
+      attron(dim_gray_attr());
       mvaddstr(rows - 1, x, " ");
       x += 1;
       mvaddstr(rows - 1, x, display);
-      attroff(A_DIM);
+      attroff(dim_gray_attr());
     } else {
-      attron(A_DIM);
+      attron(dim_gray_attr());
       mvaddstr(rows - 1, x, display);
-      attroff(A_DIM);
+      attroff(dim_gray_attr());
     }
   }
 

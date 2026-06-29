@@ -70,11 +70,21 @@ static MunitResult test_state_dir_falls_back_to_local_state(
   return MUNIT_OK;
 }
 
+static MunitResult test_version_defaults_to_local(const MunitParameter params[],
+                                                  void *data) {
+  (void)params;
+  (void)data;
+  munit_assert_string_equal(APP_VERSION, "local");
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/state_dir_uses_xdg_state_home", test_state_dir_uses_xdg_state_home, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/state_dir_falls_back_to_local_state",
      test_state_dir_falls_back_to_local_state, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/version_defaults_to_local", test_version_defaults_to_local, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

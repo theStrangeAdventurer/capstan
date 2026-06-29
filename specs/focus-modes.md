@@ -1,13 +1,14 @@
 # Focus Modes
 
 The app has two focus modes: **INPUT** (default) and **MESSAGES**.
-Shift+Tab switches between them. The status bar always shows the current mode.
+Ctrl-F switches between them. Shift-Tab cycles the active agent profile. The
+status bar always shows the current mode.
 
 ## Focus states
 
 | Mode | Description | Status bar | Visual cues |
 |------|-------------|-----------|-------------|
-| `FOCUS_INPUT` | Typing in the input box | `-- INSERT -- Shift+Tab:focus` | Bold input box border, visible cursor in input |
+| `FOCUS_INPUT` | Typing in the input box | `-- INSERT -- Ctrl-F:focus` | Bold input box border, visible cursor in input |
 | `FOCUS_MESSAGES` | Navigating message history | `-- MESSAGES -- v:select Esc:focus` | Dim input box + content, block cursor in messages |
 | `FOCUS_MESSAGES` + visual | Selecting text in messages | `-- VISUAL -- y:yank Esc:cancel` | Dim input box, `A_REVERSE` selection highlight in messages |
 
@@ -17,7 +18,8 @@ Shift+Tab switches between them. The status bar always shows the current mode.
 
 | Key | Action |
 |-----|--------|
-| `Shift+Tab` | Toggle focus: INPUT ↔ MESSAGES |
+| `Ctrl-F` | Toggle focus: INPUT ↔ MESSAGES |
+| `Shift+Tab` | Cycle active profile: fast -> implement -> plan |
 | Scroll wheel | Scroll message history |
 | `PgUp`/`PgDn` | Page scroll (5 lines) |
 
@@ -68,8 +70,8 @@ matching `Enter`.
 ## Transitions
 
 ```
-INPUT ──Shift+Tab──▸ MESSAGES (cursor at last line)
-MESSAGES ──Shift+Tab──▸ INPUT (cursor in input box)
+INPUT ──Ctrl-F──▸ MESSAGES (cursor at last line)
+MESSAGES ──Ctrl-F──▸ INPUT (cursor in input box)
 MESSAGES ──Esc──▸ INPUT (only without active selection)
 MESSAGES ──v──▸ VISUAL (selection starts)
 VISUAL ──y──▸ MESSAGES (yank, selection cleared)

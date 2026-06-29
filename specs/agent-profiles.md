@@ -35,7 +35,8 @@ The TUI exposes no-history control commands:
 ```
 
 These commands update the active profile for later TUI turns without adding the
-command text to model history.
+command text to model history. In the TUI, Shift-Tab cycles profiles in this
+order: `fast` -> `implement` -> `plan` -> `fast`.
 
 ## Precedence
 

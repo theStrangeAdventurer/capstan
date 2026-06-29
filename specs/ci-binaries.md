@@ -22,7 +22,8 @@ binary.
 Each job:
 
 1. Installs Linux build dependencies when running on Ubuntu.
-2. Runs `./build.sh`.
+2. Runs `./build.sh`; tag builds pass `VERSION=$GITHUB_REF_NAME`, so the binary
+   reports the release tag in the TUI start screen.
 3. Runs `make test-build` against the produced standalone binary.
 4. Uploads the renamed `build/capstan` binary as a GitHub Actions artifact.
 
