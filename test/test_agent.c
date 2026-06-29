@@ -1,5 +1,7 @@
 #include "agent.h"
 #include "munit.h"
+#include <lauxlib.h>
+#include <lua.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -41,11 +43,38 @@ static MunitResult test_agent_activity_label(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_agent_profile_label(const MunitParameter params[],
+                                            void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  agent_init(L);
+  lua_getglobal(L, "agent");
+  lua_getfield(L, -1, "set_profile_info");
+  lua_pushstring(L, "plan");
+  int rc = lua_pcall(L, 1, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_string_equal(agent_profile_name(), "plan");
+
+  lua_getfield(L, -1, "set_profile_info");
+  lua_pushnil(L);
+  rc = lua_pcall(L, 1, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_null(agent_profile_name());
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/append_agent_without_agent_message",
      test_append_agent_without_agent_message_creates_agent, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/activity_label", test_agent_activity_label, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/profile_label", test_agent_profile_label, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

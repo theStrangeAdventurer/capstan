@@ -1,4 +1,5 @@
 local state = require("agent.state")
+local profiles = require("agent.profiles")
 
 local M = {}
 
@@ -14,9 +15,13 @@ local function env_context_limit(...)
 end
 
 function M.build()
+    local env_provider = os.getenv("AI_PROVIDER")
+    local env_openrouter_model = os.getenv("OPENROUTER_MODEL")
     local config = (_G.capstan and _G.capstan.config) or {}
     local runtime = {
-        provider = os.getenv("AI_PROVIDER") or state.provider() or config.provider or "deepseek",
+        provider = env_provider or state.provider() or config.provider or "deepseek",
+        env_provider_override = env_provider ~= nil and env_provider ~= "",
+        env_model_overrides = {},
         providers = {
             deepseek = {
                 api_key = os.getenv("DEEPSEEK_API_KEY"),
@@ -27,11 +32,14 @@ function M.build()
             openrouter = {
                 api_key = os.getenv("OPENROUTER_API_KEY"),
                 endpoint = "https://openrouter.ai/api/v1/chat/completions",
-                model = os.getenv("OPENROUTER_MODEL") or "minimax/minimax-m3",
+                model = env_openrouter_model or "minimax/minimax-m3",
                 context_limit = env_context_limit("OPENROUTER_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT"),
             },
         },
     }
+    if env_openrouter_model and env_openrouter_model ~= "" then
+        runtime.env_model_overrides.openrouter = true
+    end
 
     if type(config.providers) == "table" then
         for name, overrides in pairs(config.providers) do
@@ -41,6 +49,31 @@ function M.build()
                     runtime.providers[name][key] = value
                 end
             end
+        end
+    end
+
+    runtime.profile_models = {}
+    local agent_config = type(config.agent) == "table" and config.agent or nil
+    local configured_profile_models = agent_config and agent_config.profile_models
+    if type(configured_profile_models) == "table" then
+        for profile_name, value in pairs(configured_profile_models) do
+            local normalized = profiles.normalize(profile_name)
+            if normalized and type(value) == "table" and
+               type(value.provider) == "string" and value.provider ~= "" and
+               type(value.model) == "string" and value.model ~= "" then
+                runtime.profile_models[normalized] = {
+                    provider = value.provider,
+                    model = value.model,
+                }
+            end
+        end
+    end
+
+    local saved_profile_models = state.profile_models()
+    for profile_name, value in pairs(saved_profile_models) do
+        local normalized = profiles.normalize(profile_name)
+        if normalized then
+            runtime.profile_models[normalized] = value
         end
     end
 
@@ -72,8 +105,8 @@ function M.build()
     if os.getenv("OPENROUTER_API_KEY") and runtime.providers.openrouter then
         runtime.providers.openrouter.api_key = os.getenv("OPENROUTER_API_KEY")
     end
-    if os.getenv("OPENROUTER_MODEL") and runtime.providers.openrouter then
-        runtime.providers.openrouter.model = os.getenv("OPENROUTER_MODEL")
+    if env_openrouter_model and runtime.providers.openrouter then
+        runtime.providers.openrouter.model = env_openrouter_model
     end
 
     local deepseek_context_limit = env_context_limit("DEEPSEEK_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT")

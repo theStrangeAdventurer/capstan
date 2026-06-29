@@ -2,6 +2,7 @@
 #include "popup.h"
 #include "popup_internal.h"
 #include "utils.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +52,42 @@ static MunitResult test_error_message_auto_closes(const MunitParameter p[],
   popup_show_message("Info", "ok", 0);
   munit_assert_int(g_msgpopup.auto_close_after_sec, ==, 0);
   popup_close_message();
+  return MUNIT_OK;
+}
+
+static MunitResult test_message_popup_scroll_keys(const MunitParameter p[],
+                                                  void *d) {
+  (void)p; (void)d;
+  popup_show_message("Info", "one\ntwo\nthree", 0);
+  munit_assert_int(g_msgpopup.scroll, ==, 0);
+  munit_assert_int(popup_message_handle_key('j'), ==, 1);
+  munit_assert_int(g_msgpopup.scroll, ==, 1);
+  munit_assert_int(popup_message_handle_key(POPUP_KEY_DOWN), ==, 1);
+  munit_assert_int(g_msgpopup.scroll, ==, 2);
+  munit_assert_int(popup_message_handle_key(POPUP_KEY_UP), ==, 1);
+  munit_assert_int(g_msgpopup.scroll, ==, 1);
+  munit_assert_int(popup_message_handle_key(0x04), ==, 1);
+  munit_assert_int(g_msgpopup.scroll, ==, 6);
+  munit_assert_int(popup_message_handle_key('k'), ==, 1);
+  munit_assert_int(g_msgpopup.scroll, ==, 5);
+  munit_assert_int(popup_message_handle_key(0x15), ==, 1);
+  munit_assert_int(g_msgpopup.scroll, ==, 0);
+  munit_assert_int(popup_message_handle_key('G'), ==, 1);
+  munit_assert_int(g_msgpopup.scroll, ==, INT_MAX);
+  munit_assert_int(popup_message_handle_key('g'), ==, 1);
+  munit_assert_int(g_msgpopup.scroll, ==, 0);
+  popup_close_message();
+  return MUNIT_OK;
+}
+
+static MunitResult test_message_popup_close_resets_scroll(
+    const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  popup_show_message("Info", "one\ntwo", 0);
+  g_msgpopup.scroll = 3;
+  munit_assert_int(popup_message_handle_key('\n'), ==, 0);
+  munit_assert_int(popup_is_message_active(), ==, 0);
+  munit_assert_int(g_msgpopup.scroll, ==, 0);
   return MUNIT_OK;
 }
 
@@ -549,6 +586,8 @@ static MunitTest tests[] = {
   {"/open_active", test_open_active, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/close_data_inactive", test_close_data_inactive, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/error_message_auto_closes", test_error_message_auto_closes, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/message_popup_scroll_keys", test_message_popup_scroll_keys, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/message_popup_close_resets_scroll", test_message_popup_close_resets_scroll, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/j_down", test_j_down, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/k_up", test_k_up, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/j_clamp_bottom", test_j_clamp_bottom, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

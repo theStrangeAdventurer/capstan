@@ -76,5 +76,6 @@ void load_embedded_plugins(void);
 void load_plugins_from(const char *dir_path);
 void plugins_watch_start(const char *dir_path);
 void plugins_watch_poll(void);
+int plugins_mcp_tick(void);
 void plugin_registry_remove_by_id(const char *id);
 #endif

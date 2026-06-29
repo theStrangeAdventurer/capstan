@@ -47,6 +47,21 @@ function M.weak_model()
     return nil
 end
 
+function M.profile_models()
+    local st = state()
+    local out = {}
+    if type(st.profile_models) ~= "table" then return out end
+    for profile_name, value in pairs(st.profile_models) do
+        if type(profile_name) == "string" and
+           type(value) == "table" and
+           type(value.provider) == "string" and value.provider ~= "" and
+           type(value.model) == "string" and value.model ~= "" then
+            out[profile_name] = { provider = value.provider, model = value.model }
+        end
+    end
+    return out
+end
+
 function M.set_provider(provider_name)
     local st = state()
     st.provider = provider_name
@@ -66,6 +81,15 @@ end
 function M.set_weak_model(provider_name, model)
     local st = state()
     st.weak_model = { provider = provider_name, model = model }
+    return M.save()
+end
+
+function M.set_profile_model(profile_name, provider_name, model)
+    local st = state()
+    if type(st.profile_models) ~= "table" then
+        st.profile_models = {}
+    end
+    st.profile_models[profile_name] = { provider = provider_name, model = model }
     return M.save()
 end
 
@@ -114,6 +138,27 @@ function M.save()
         file:write("    model = ", lua_quote(st.weak_model.model), ",\n")
         file:write("  },\n")
     end
+    file:write("  profile_models = {\n")
+    if type(st.profile_models) == "table" then
+        local keys = {}
+        for profile_name, value in pairs(st.profile_models) do
+            if type(profile_name) == "string" and
+               type(value) == "table" and
+               type(value.provider) == "string" and
+               type(value.model) == "string" then
+                table.insert(keys, profile_name)
+            end
+        end
+        table.sort(keys)
+        for _, profile_name in ipairs(keys) do
+            local value = st.profile_models[profile_name]
+            file:write("    [", lua_quote(profile_name), "] = {\n")
+            file:write("      provider = ", lua_quote(value.provider), ",\n")
+            file:write("      model = ", lua_quote(value.model), ",\n")
+            file:write("    },\n")
+        end
+    end
+    file:write("  },\n")
     file:write("}\n")
     file:close()
     return true, nil

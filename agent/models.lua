@@ -1,4 +1,5 @@
 local json = require("vendor.rxi.json")
+local profiles = require("agent.profiles")
 local state = require("agent.state")
 
 local M = {}
@@ -208,6 +209,40 @@ function M.weak(runtime)
     return nil
 end
 
+function M.profile(runtime, profile_name)
+    local normalized = profiles.normalize(profile_name)
+    if not normalized then return nil end
+    local profile_models = runtime.profile_models
+    local value = type(profile_models) == "table" and profile_models[normalized] or nil
+    if type(value) == "table" and
+       type(value.provider) == "string" and value.provider ~= "" and
+       type(value.model) == "string" and value.model ~= "" then
+        return { provider = value.provider, model = value.model }
+    end
+    return nil
+end
+
+function M.set_profile(runtime, profile_name, provider_name, model)
+    local normalized = profiles.normalize(profile_name)
+    if not normalized then
+        return false, "Unknown profile: " .. tostring(profile_name)
+    end
+    if type(model) ~= "string" or model == "" then
+        return false, "Missing model"
+    end
+    if type(provider_name) ~= "string" or provider_name == "" then
+        return false, "Missing provider"
+    end
+    if not runtime.providers[provider_name] then
+        return false, "Unknown provider: " .. tostring(provider_name)
+    end
+    if type(runtime.profile_models) ~= "table" then
+        runtime.profile_models = {}
+    end
+    runtime.profile_models[normalized] = { provider = provider_name, model = model }
+    return state.set_profile_model(normalized, provider_name, model)
+end
+
 function M.install_runtime_api(runtime)
     if not _G.capstan then _G.capstan = {} end
     _G.capstan.models = {
@@ -233,6 +268,12 @@ function M.install_runtime_api(runtime)
         end,
         set_weak = function(provider_name, model)
             return M.set_weak(runtime, provider_name, model)
+        end,
+        profile = function(profile_name)
+            return M.profile(runtime, profile_name)
+        end,
+        set_profile = function(profile_name, provider_name, model)
+            return M.set_profile(runtime, profile_name, provider_name, model)
         end,
     }
 end

@@ -1323,6 +1323,33 @@ void plugins_watch_poll(void) {
   closedir(dir);
 }
 
+int plugins_mcp_tick(void) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    return 0;
+  }
+  lua_getfield(L, -1, "mcp");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 2);
+    return 0;
+  }
+  lua_getfield(L, -1, "tick");
+  if (!lua_isfunction(L, -1)) {
+    lua_pop(L, 3);
+    return 0;
+  }
+  lua_pushinteger(L, 1);
+  if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+    record_plugin_error("agent.mcp", lua_tostring(L, -1));
+    lua_pop(L, 3);
+    return 0;
+  }
+  int changed = lua_toboolean(L, -1);
+  lua_pop(L, 3);
+  return changed;
+}
+
 void load_embedded_plugins(void) {
   size_t count = 0;
   const EmbeddedAsset *assets = embedded_assets(&count);

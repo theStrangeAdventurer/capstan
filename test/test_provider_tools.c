@@ -17,6 +17,9 @@ static char captured_permit_tool[128];
 static char captured_permit_target[512];
 static char captured_logs[8192];
 static char captured_agent_appends[2048];
+static char last_agent_provider[128];
+static char last_agent_model[128];
+static char last_agent_profile[128];
 static char temp_state_path[512];
 static const char *permit_decision = "deny";
 static const char *permit_prompt_decision = "always";
@@ -112,6 +115,56 @@ static int l_permit_save(lua_State *L) {
   return 1;
 }
 
+static int l_http_post_response_async(lua_State *L) {
+  size_t body_len = 0;
+  const char *body = luaL_checklstring(L, 2, &body_len);
+  size_t copy = body_len < sizeof(captured_body) - 1
+                    ? body_len
+                    : sizeof(captured_body) - 1;
+  memcpy(captured_body, body, copy);
+  captured_body[copy] = '\0';
+
+  const char *method = strstr(captured_body, "\"method\":\"initialize\"")
+                           ? "initialize"
+                           : (strstr(captured_body, "\"method\":\"tools/list\"")
+                                  ? "tools/list"
+                                  : "notification");
+  int id = 0;
+  const char *id_pos = strstr(captured_body, "\"id\":");
+  if (id_pos)
+    id = atoi(id_pos + 5);
+
+  luaL_checktype(L, 5, LUA_TFUNCTION);
+  lua_pushvalue(L, 5);
+  lua_newtable(L);
+  lua_pushinteger(L, 200);
+  lua_setfield(L, -2, "status");
+  if (strcmp(method, "initialize") == 0) {
+    lua_pushfstring(L,
+                    "{\"jsonrpc\":\"2.0\",\"id\":%d,\"result\":{\"serverInfo\":{\"name\":\"github\",\"version\":\"1\"}}}",
+                    id);
+  } else if (strcmp(method, "tools/list") == 0) {
+    lua_pushfstring(L,
+                    "{\"jsonrpc\":\"2.0\",\"id\":%d,\"result\":{\"tools\":[{\"name\":\"search_repositories\",\"description\":\"Search repos\"}]}}",
+                    id);
+  } else {
+    lua_pushliteral(L, "{}");
+  }
+  lua_setfield(L, -2, "body");
+  lua_newtable(L);
+  lua_pushliteral(L, "application/json");
+  lua_setfield(L, -2, "content-type");
+  lua_pushliteral(L, "session-1");
+  lua_setfield(L, -2, "mcp-session-id");
+  lua_setfield(L, -2, "headers");
+  lua_pushnil(L);
+  int rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_pushinteger(L, 1);
+  return 1;
+}
+
 static int l_agent_append(lua_State *L) {
   const char *text = luaL_optstring(L, 1, "");
   size_t used = strlen(captured_agent_appends);
@@ -119,6 +172,23 @@ static int l_agent_append(lua_State *L) {
     snprintf(captured_agent_appends + used,
              sizeof(captured_agent_appends) - used, "%s", text);
   }
+  return 0;
+}
+
+static int l_agent_set_info(lua_State *L) {
+  const char *provider = luaL_optstring(L, 1, "");
+  const char *model = luaL_optstring(L, 2, "");
+  strncpy(last_agent_provider, provider, sizeof(last_agent_provider) - 1);
+  last_agent_provider[sizeof(last_agent_provider) - 1] = '\0';
+  strncpy(last_agent_model, model, sizeof(last_agent_model) - 1);
+  last_agent_model[sizeof(last_agent_model) - 1] = '\0';
+  return 0;
+}
+
+static int l_agent_set_profile_info(lua_State *L) {
+  const char *profile = luaL_optstring(L, 1, "");
+  strncpy(last_agent_profile, profile, sizeof(last_agent_profile) - 1);
+  last_agent_profile[sizeof(last_agent_profile) - 1] = '\0';
   return 0;
 }
 
@@ -158,14 +228,18 @@ static lua_State *new_provider_state(void) {
   lua_setfield(L, -2, "get");
   lua_pushcfunction(L, l_http_post_stream);
   lua_setfield(L, -2, "post_stream");
+  lua_pushcfunction(L, l_http_post_response_async);
+  lua_setfield(L, -2, "post_response_async");
   lua_setglobal(L, "http");
 
   agent_init(L);
   lua_getglobal(L, "agent");
   lua_pushcfunction(L, l_agent_append);
   lua_setfield(L, -2, "append");
-  lua_pushcfunction(L, l_noop);
+  lua_pushcfunction(L, l_agent_set_info);
   lua_setfield(L, -2, "set_info");
+  lua_pushcfunction(L, l_agent_set_profile_info);
+  lua_setfield(L, -2, "set_profile_info");
   lua_pushcfunction(L, l_noop);
   lua_setfield(L, -2, "set_usage");
   lua_pushcfunction(L, l_noop);
@@ -252,6 +326,9 @@ static void reset_captures(lua_State *L) {
   captured_permit_target[0] = '\0';
   captured_logs[0] = '\0';
   captured_agent_appends[0] = '\0';
+  last_agent_provider[0] = '\0';
+  last_agent_model[0] = '\0';
+  last_agent_profile[0] = '\0';
   snprintf(temp_state_path, sizeof(temp_state_path),
            "/tmp/capstan-provider-state-%ld.lua", (long)getpid());
   unlink(temp_state_path);
@@ -429,6 +506,118 @@ static void set_capstan_state_weak_model(lua_State *L, const char *provider,
   lua_pushstring(L, model);
   lua_setfield(L, -2, "model");
   lua_setfield(L, -2, "weak_model");
+  lua_setfield(L, -2, "state");
+  lua_setglobal(L, "capstan");
+}
+
+static void set_capstan_config_profile_model(lua_State *L, const char *profile,
+                                             const char *provider,
+                                             const char *model) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_getfield(L, -1, "config");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_getfield(L, -1, "agent");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_getfield(L, -1, "profile_models");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_newtable(L);
+  lua_pushstring(L, provider);
+  lua_setfield(L, -2, "provider");
+  lua_pushstring(L, model);
+  lua_setfield(L, -2, "model");
+  lua_setfield(L, -2, profile);
+  lua_setfield(L, -2, "profile_models");
+  lua_setfield(L, -2, "agent");
+  lua_setfield(L, -2, "config");
+  lua_setglobal(L, "capstan");
+}
+
+static void set_capstan_mcp_config(lua_State *L) {
+  int rc = luaL_dostring(
+      L,
+      "capstan.config = capstan.config or {}\n"
+      "capstan.config.mcp = {\n"
+      "  enabled = true,\n"
+      "  servers = {{name = 'stub', command = 'stub-mcp'}}\n"
+      "}\n"
+      "MCP_NOW_MS = 0\n"
+      "capstan.now_ms = function() MCP_NOW_MS = MCP_NOW_MS + 10; return MCP_NOW_MS end\n"
+      "MCP_SPAWN_CALLS = 0\n"
+      "MCP_LAST_ID = 0\n"
+      "MCP_LAST_METHOD = ''\n"
+      "mcp = {\n"
+      "  spawn = function(command, args, env)\n"
+      "    MCP_SPAWN_CALLS = MCP_SPAWN_CALLS + 1\n"
+      "    return 1\n"
+      "  end,\n"
+      "  send = function(handle, payload)\n"
+      "    MCP_LAST_ID = tonumber(payload:match('\"id\":(%d+)')) or MCP_LAST_ID\n"
+      "    MCP_LAST_METHOD = payload:match('\"method\":\"([^\"]+)\"') or ''\n"
+      "    return true\n"
+      "  end,\n"
+      "  recv = function(handle, timeout)\n"
+      "    if MCP_LAST_METHOD == 'initialize' then\n"
+      "      return '{\"jsonrpc\":\"2.0\",\"id\":' .. MCP_LAST_ID .. ',\"result\":{\"serverInfo\":{\"name\":\"stub\",\"version\":\"1\"}}}'\n"
+      "    end\n"
+      "    return '{\"jsonrpc\":\"2.0\",\"id\":' .. MCP_LAST_ID .. ',\"result\":{\"tools\":[{\"name\":\"demo\",\"description\":\"Demo\"}]}}'\n"
+      "  end,\n"
+      "  recv_nowait = function(handle)\n"
+      "    return mcp.recv(handle, 0)\n"
+      "  end,\n"
+      "  kill = function(handle) end,\n"
+      "}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void set_capstan_http_mcp_config(lua_State *L) {
+  int rc = luaL_dostring(
+      L,
+      "capstan.config = capstan.config or {}\n"
+      "capstan.config.mcp = {\n"
+      "  enabled = true,\n"
+      "  servers = {{name = 'github', transport = 'streamable_http', url = 'https://api.githubcopilot.com/mcp/'}}\n"
+      "}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void set_capstan_state_profile_model(lua_State *L, const char *profile,
+                                            const char *provider,
+                                            const char *model) {
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_getfield(L, -1, "state");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_getfield(L, -1, "profile_models");
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+  }
+  lua_newtable(L);
+  lua_pushstring(L, provider);
+  lua_setfield(L, -2, "provider");
+  lua_pushstring(L, model);
+  lua_setfield(L, -2, "model");
+  lua_setfield(L, -2, profile);
+  lua_setfield(L, -2, "profile_models");
   lua_setfield(L, -2, "state");
   lua_setglobal(L, "capstan");
 }
@@ -613,6 +802,33 @@ static void call_agent_run_with_profile(lua_State *L, const char *profile) {
   lua_pop(L, 4);
 }
 
+static void call_agent_run_with_profile_and_model(lua_State *L,
+                                                  const char *profile,
+                                                  const char *model) {
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "agent");
+  lua_getfield(L, -1, "run");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "user");
+  lua_setfield(L, -2, "role");
+  lua_pushstring(L, "Inspect the project");
+  lua_setfield(L, -2, "content");
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "messages");
+  lua_pushstring(L, profile);
+  lua_setfield(L, -2, "profile");
+  lua_pushstring(L, model);
+  lua_setfield(L, -2, "model");
+
+  lua_newtable(L);
+  int rc = lua_pcall(L, 2, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 4);
+}
+
 static void send_tool_call(lua_State *L, const char *call_id,
                            const char *name, const char *arguments);
 static void send_text_done(lua_State *L, const char *text);
@@ -697,6 +913,172 @@ static MunitResult test_config_applies_reasoning_effort(
 
   munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"minimal\"}") != NULL);
   munit_assert_true(strstr(captured_body, "Reasoning effort: minimal") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_agent_reasoning_effort_accessor(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dostring(
+      L,
+      "capstan = capstan or {}\n"
+      "capstan.config = {agent = {reasoning_effort = 'minimal'}}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "agent");
+  lua_getfield(L, -1, "reasoning_effort");
+  lua_pushstring(L, "fast");
+  rc = lua_pcall(L, 1, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_string_equal(lua_tostring(L, -1), "minimal");
+  lua_pop(L, 3);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_default_profile_is_implement(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  munit_assert_string_equal(last_agent_profile, "implement");
+
+  call_agent_entry(L);
+
+  munit_assert_true(strstr(captured_body, "Active Profile: Implement") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"medium\"}") != NULL);
+  munit_assert_true(strstr(captured_logs, "[agent] profile=implement") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_mcp_initializes_lazily_after_startup(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_mcp_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "MCP_SPAWN_CALLS");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 0);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+
+  lua_getglobal(L, "MCP_SPAWN_CALLS");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  munit_assert_true(strstr(captured_body, "\"name\":\"mcp__stub__demo\"") == NULL);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "mcp");
+  lua_getfield(L, -1, "tick");
+  lua_pushinteger(L, 2);
+  rc = lua_pcall(L, 1, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 3);
+
+  reset_captures(L);
+  call_agent_entry(L);
+  munit_assert_true(strstr(captured_body, "\"name\":\"mcp__stub__demo\"") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_http_mcp_initializes_without_stdio_spawn(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_http_mcp_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+
+  lua_getglobal(L, "MCP_SPAWN_CALLS");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 1);
+  munit_assert_true(strstr(captured_body, "\"name\":\"mcp__github__search_repositories\"") == NULL);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "mcp");
+  lua_getfield(L, -1, "tick");
+  lua_pushinteger(L, 2);
+  rc = lua_pcall(L, 1, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 3);
+
+  reset_captures(L);
+  call_agent_entry(L);
+  munit_assert_true(strstr(captured_body, "\"name\":\"mcp__github__search_repositories\"") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_disable_mcp_prevents_background_tick(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_mcp_config(L);
+
+  int rc = luaL_dostring(
+      L,
+      "capstan.runtime_options = {disable_mcp = true}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "mcp");
+  lua_getfield(L, -1, "tick");
+  lua_pushinteger(L, 3);
+  rc = lua_pcall(L, 1, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 3);
+
+  lua_getglobal(L, "MCP_SPAWN_CALLS");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 0);
+  lua_pop(L, 1);
 
   reset_captures(L);
   lua_close(L);
@@ -1126,6 +1508,103 @@ static MunitResult test_provider_state_model_overrides_config_model(
   return MUNIT_OK;
 }
 
+static MunitResult test_config_profile_model_selected_for_profile(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  set_capstan_config_profile_model(L, "plan", "openrouter", "config/plan");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_run_with_profile(L, "plan");
+
+  munit_assert_true(strstr(captured_body, "\"model\":\"config/plan\"") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[agent] request provider=openrouter model=config/plan") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_runtime_startup_publishes_configured_profile_status(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  set_capstan_config_profile_model(L, "plan", "openrouter", "config/plan");
+  int rc = luaL_dostring(
+      L,
+      "capstan.config.agent = capstan.config.agent or {}\n"
+      "capstan.config.agent.profile = 'plan'\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  munit_assert_string_equal(last_agent_provider, "openrouter");
+  munit_assert_string_equal(last_agent_model, "config/plan");
+  munit_assert_string_equal(last_agent_profile, "plan");
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_state_profile_model_overrides_config_profile_model(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  set_capstan_config_profile_model(L, "plan", "openrouter", "config/plan");
+  set_capstan_state_profile_model(L, "plan", "openrouter", "state/plan");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_run_with_profile(L, "plan");
+
+  munit_assert_true(strstr(captured_body, "\"model\":\"state/plan\"") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_explicit_model_overrides_profile_model(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  set_capstan_config_profile_model(L, "plan", "openrouter", "config/plan");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_run_with_profile_and_model(L, "plan", "explicit/model");
+
+  munit_assert_true(strstr(captured_body, "\"model\":\"explicit/model\"") != NULL);
+  munit_assert_true(strstr(captured_body, "\"model\":\"config/plan\"") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_provider_state_provider_overrides_config_provider(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -1346,6 +1825,41 @@ static MunitResult test_provider_models_set_weak_persists_state_file(
   munit_assert_true(strstr(contents, "weak_model = {") != NULL);
   munit_assert_true(strstr(contents, "provider = \"openrouter\"") != NULL);
   munit_assert_true(strstr(contents, "model = \"persisted/weak\"") != NULL);
+
+  unlink(temp_state_path);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_provider_models_set_profile_persists_state_file(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "models");
+  lua_getfield(L, -1, "set_profile");
+  lua_pushstring(L, "plan");
+  lua_pushstring(L, "openrouter");
+  lua_pushstring(L, "persisted/plan");
+  rc = lua_pcall(L, 3, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_true(lua_toboolean(L, -2));
+
+  char contents[1024];
+  read_file(temp_state_path, contents, sizeof(contents));
+  munit_assert_true(strstr(contents, "profile_models = {") != NULL);
+  munit_assert_true(strstr(contents, "[\"plan\"] = {") != NULL);
+  munit_assert_true(strstr(contents, "provider = \"openrouter\"") != NULL);
+  munit_assert_true(strstr(contents, "model = \"persisted/plan\"") != NULL);
 
   unlink(temp_state_path);
   reset_captures(L);
@@ -2944,6 +3458,19 @@ static MunitTest tests[] = {
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/config_applies_reasoning_effort", test_config_applies_reasoning_effort,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/agent_reasoning_effort_accessor", test_agent_reasoning_effort_accessor,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/default_profile_is_implement", test_default_profile_is_implement, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/mcp_initializes_lazily_after_startup",
+     test_mcp_initializes_lazily_after_startup, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/http_mcp_initializes_without_stdio_spawn",
+     test_http_mcp_initializes_without_stdio_spawn, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/disable_mcp_prevents_background_tick",
+     test_disable_mcp_prevents_background_tick, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/plan_profile_filters_tools_and_prompt",
      test_plan_profile_filters_tools_and_prompt, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -2976,6 +3503,18 @@ static MunitTest tests[] = {
     {"/provider_state_model_overrides_config_model",
      test_provider_state_model_overrides_config_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/config_profile_model_selected_for_profile",
+     test_config_profile_model_selected_for_profile, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/runtime_startup_publishes_configured_profile_status",
+     test_runtime_startup_publishes_configured_profile_status, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/state_profile_model_overrides_config_profile_model",
+     test_state_profile_model_overrides_config_profile_model, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/explicit_model_overrides_profile_model",
+     test_explicit_model_overrides_profile_model, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_state_provider_overrides_config_provider",
      test_provider_state_provider_overrides_config_provider, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -2999,6 +3538,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_set_weak_persists_state_file",
      test_provider_models_set_weak_persists_state_file, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_models_set_profile_persists_state_file",
+     test_provider_models_set_profile_persists_state_file, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/compact_uses_weak_model_and_replaces_history",
      test_compact_uses_weak_model_and_replaces_history, NULL, NULL,

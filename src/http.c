@@ -29,6 +29,10 @@ typedef struct {
   struct curl_slist *headers;
   char *body;
   size_t body_len;
+  int response_mode;
+  int background;
+  RespBuf response;
+  RespBuf response_headers;
   char err_buf[4096 + 1];
   size_t err_len;
 } StreamCtx;
@@ -44,7 +48,21 @@ static long long g_last_wait_render_ms = 0;
 #define HTTP_WAIT_RENDER_INTERVAL_MS 16
 
 int http_is_loading(void) {
-  return g_sync_active || stream_count > 0;
+  if (g_sync_active)
+    return 1;
+  for (int i = 0; i < stream_count; i++) {
+    if (streams[i] && !streams[i]->background)
+      return 1;
+  }
+  return 0;
+}
+
+int http_has_background_work(void) {
+  for (int i = 0; i < stream_count; i++) {
+    if (streams[i] && streams[i]->background)
+      return 1;
+  }
+  return 0;
 }
 
 void http_set_headless(int headless) { g_headless = headless; }
@@ -116,6 +134,15 @@ static struct curl_slist *parse_headers(lua_State *L, int index) {
   return headers;
 }
 
+static int lua_opt_background(lua_State *L, int index) {
+  if (!lua_istable(L, index))
+    return 0;
+  lua_getfield(L, index, "background");
+  int background = lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  return background;
+}
+
 static void push_headers_table(lua_State *L, const char *raw_headers) {
   lua_newtable(L);
   if (!raw_headers)
@@ -172,6 +199,8 @@ static void stream_ctx_free(StreamCtx *ctx) {
   if (!ctx)
     return;
   free(ctx->body);
+  free(ctx->response.data);
+  free(ctx->response_headers.data);
   free(ctx);
 }
 
@@ -184,6 +213,9 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
   size_t total = size * count;
   if (total == 0)
     return 0;
+
+  if (ctx->response_mode)
+    return write_cb(chunk_ptr, size, count, &ctx->response);
 
   size_t room = sizeof(ctx->err_buf) - 1 - ctx->err_len;
   if (room > 0) {
@@ -251,6 +283,7 @@ static int l_http_post_stream(lua_State *L) {
   ctx->L = L;
   ctx->callback_ref = callback_ref;
   ctx->headers = headers;
+  ctx->background = 0;
 
   configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
@@ -421,6 +454,98 @@ static int l_http_post_response(lua_State *L) {
   return 1;
 }
 
+static int l_http_post_response_async(lua_State *L) {
+  const char *url = luaL_checkstring(L, 1);
+  const char *body = NULL;
+  size_t body_len = 0;
+
+  if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
+    body = luaL_checklstring(L, 2, &body_len);
+  }
+
+  struct curl_slist *headers = parse_headers(L, 3);
+  lua_Integer timeout_ms = luaL_optinteger(L, 4, 30000);
+  int background = lua_opt_background(L, 6);
+
+  luaL_checktype(L, 5, LUA_TFUNCTION);
+  lua_pushvalue(L, 5);
+  int callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+
+  CURL *easy = curl_easy_init();
+  if (!easy) {
+    luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+    curl_slist_free_all(headers);
+    return luaL_error(L, "failed to initialize curl easy handle");
+  }
+
+  StreamCtx *ctx = calloc(1, sizeof(StreamCtx));
+  if (!ctx) {
+    luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(easy);
+    return luaL_error(L, "failed to allocate async response context");
+  }
+  ctx->easy = easy;
+  ctx->L = L;
+  ctx->callback_ref = callback_ref;
+  ctx->headers = headers;
+  ctx->response_mode = 1;
+  ctx->background = background;
+
+  configure_http_handle(easy, url);
+  curl_easy_setopt(easy, CURLOPT_POST, 1L);
+  if (timeout_ms > 0)
+    curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
+
+  if (body) {
+    ctx->body = malloc(body_len + 1);
+    if (!ctx->body) {
+      luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+      curl_slist_free_all(headers);
+      curl_easy_cleanup(easy);
+      stream_ctx_free(ctx);
+      return luaL_error(L, "failed to allocate async response body");
+    }
+    memcpy(ctx->body, body, body_len);
+    ctx->body[body_len] = '\0';
+    ctx->body_len = body_len;
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)body_len);
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, ctx->body);
+  }
+
+  if (headers) {
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+  }
+
+  curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, stream_write_cb);
+  curl_easy_setopt(easy, CURLOPT_WRITEDATA, ctx);
+  curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
+  curl_easy_setopt(easy, CURLOPT_HEADERDATA, &ctx->response_headers);
+
+  if (stream_count >= stream_cap) {
+    int new_cap = stream_cap ? stream_cap * 2 : 4;
+    StreamCtx **new_streams = realloc(streams, new_cap * sizeof(StreamCtx *));
+    if (!new_streams) {
+      luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+      curl_slist_free_all(headers);
+      curl_easy_cleanup(easy);
+      stream_ctx_free(ctx);
+      return luaL_error(L, "failed to allocate stream registry");
+    }
+    streams = new_streams;
+    stream_cap = new_cap;
+  }
+
+  curl_multi_add_handle(multi_handle, easy);
+
+  streams[stream_count] = ctx;
+  int async_id = stream_count;
+  stream_count++;
+
+  lua_pushinteger(L, async_id);
+  return 1;
+}
+
 static int l_http_get(lua_State *L) {
   const char *url = luaL_checkstring(L, 1);
   struct curl_slist *headers = parse_headers(L, 2);
@@ -481,7 +606,7 @@ static int l_http_is_loading(lua_State *L) {
  * Двигает curl_multi, вызывает Lua-колбеки на новые чанки.
  * При завершении стрима — вызывает колбек с (nil, true), чистит ресурсы.
  */
-int http_poll(lua_State *L) {
+int http_poll_limited(lua_State *L, int max_callbacks) {
   if (!multi_handle)
     return 0;
 
@@ -491,6 +616,7 @@ int http_poll(lua_State *L) {
   int had_events = 0;
   CURLMsg *msg;
   int msgs_in_queue;
+  int callbacks = 0;
 
   while ((msg = curl_multi_info_read(multi_handle, &msgs_in_queue))) {
     if (msg->msg != CURLMSG_DONE)
@@ -521,35 +647,55 @@ int http_poll(lua_State *L) {
     long http_status = 0;
     curl_easy_getinfo(e, CURLINFO_RESPONSE_CODE, &http_status);
     CURLcode curl_rc = msg->data.result;
+    int response_mode = found->response_mode;
 
     curl_multi_remove_handle(multi_handle, e);
     streams[found_idx] = NULL;
     curl_slist_free_all(h);
     curl_easy_cleanup(e);
-    stream_ctx_free(found);
 
     lua_getglobal(L, "debug");
     lua_getfield(L, -1, "traceback");
     lua_remove(L, -2);
     lua_rawgeti(L, LUA_REGISTRYINDEX, cb_ref);
-    lua_pushnil(L);
-    lua_pushboolean(L, 1);
 
-    int nargs = 2;
-    int has_error = 0;
-    if (curl_rc != CURLE_OK) {
-      nargs = 3;
-      has_error = 1;
-      lua_pushfstring(L, "Connection error: %s", curl_easy_strerror(curl_rc));
-    } else if (http_status > 0 && (http_status < 200 || http_status >= 300)) {
-      nargs = 3;
-      has_error = 1;
-      lua_pushfstring(L, "HTTP %d", (int)http_status);
-    }
+    int nargs = 0;
+    if (response_mode) {
+      if (curl_rc != CURLE_OK) {
+        lua_pushnil(L);
+        lua_pushfstring(L, "Connection error: %s", curl_easy_strerror(curl_rc));
+        nargs = 2;
+      } else {
+        lua_newtable(L);
+        lua_pushinteger(L, http_status);
+        lua_setfield(L, -2, "status");
+        lua_pushstring(L, found->response.data ? found->response.data : "");
+        lua_setfield(L, -2, "body");
+        push_headers_table(L, found->response_headers.data);
+        lua_setfield(L, -2, "headers");
+        lua_pushnil(L);
+        nargs = 2;
+      }
+    } else {
+      lua_pushnil(L);
+      lua_pushboolean(L, 1);
 
-    if (has_error && err_body) {
-      nargs = 4;
-      lua_pushstring(L, err_body);
+      nargs = 2;
+      int has_error = 0;
+      if (curl_rc != CURLE_OK) {
+        nargs = 3;
+        has_error = 1;
+        lua_pushfstring(L, "Connection error: %s", curl_easy_strerror(curl_rc));
+      } else if (http_status > 0 && (http_status < 200 || http_status >= 300)) {
+        nargs = 3;
+        has_error = 1;
+        lua_pushfstring(L, "HTTP %d", (int)http_status);
+      }
+
+      if (has_error && err_body) {
+        nargs = 4;
+        lua_pushstring(L, err_body);
+      }
     }
 
     int msgh = lua_gettop(L) - nargs - 1;
@@ -565,10 +711,14 @@ int http_poll(lua_State *L) {
     }
 
     free(err_body);
+    stream_ctx_free(found);
 
     luaL_unref(L, LUA_REGISTRYINDEX, cb_ref);
 
     had_events = 1;
+    callbacks++;
+    if (max_callbacks > 0 && callbacks >= max_callbacks)
+      break;
   }
 
   int write_idx = 0;
@@ -582,6 +732,8 @@ int http_poll(lua_State *L) {
   return had_events;
 }
 
+int http_poll(lua_State *L) { return http_poll_limited(L, 0); }
+
 int http_cancel_streams(lua_State *L) {
   if (!multi_handle || stream_count == 0)
     return 0;
@@ -590,6 +742,8 @@ int http_cancel_streams(lua_State *L) {
   for (int i = 0; i < stream_count; i++) {
     StreamCtx *ctx = streams[i];
     if (!ctx)
+      continue;
+    if (ctx->background)
       continue;
 
     curl_multi_remove_handle(multi_handle, ctx->easy);
@@ -601,7 +755,12 @@ int http_cancel_streams(lua_State *L) {
     canceled++;
   }
 
-  stream_count = 0;
+  int write_idx = 0;
+  for (int i = 0; i < stream_count; i++) {
+    if (streams[i] != NULL)
+      streams[write_idx++] = streams[i];
+  }
+  stream_count = write_idx;
   return canceled;
 }
 
@@ -619,6 +778,9 @@ void http_init(lua_State *L) {
 
   lua_pushcfunction(L, l_http_post_response);
   lua_setfield(L, -2, "post_response");
+
+  lua_pushcfunction(L, l_http_post_response_async);
+  lua_setfield(L, -2, "post_response_async");
 
   lua_pushcfunction(L, l_http_post_stream);
   lua_setfield(L, -2, "post_stream");

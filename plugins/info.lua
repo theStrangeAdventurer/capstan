@@ -42,6 +42,49 @@ local function weak_model()
 	return "(unavailable)"
 end
 
+local function profile_model(profile)
+	if capstan and capstan.models and capstan.models.profile then
+		local ok, value = pcall(capstan.models.profile, profile)
+		if ok and type(value) == "table" and value.provider and value.model then
+			return tostring(value.provider) .. "/" .. tostring(value.model)
+		end
+	end
+	return "(default)"
+end
+
+local function effective_model(profile)
+	if capstan and capstan.models and capstan.models.effective then
+		local ok, value = pcall(capstan.models.effective, profile)
+		if ok and type(value) == "table" and value.provider and value.model then
+			return tostring(value.provider) .. "/" .. tostring(value.model)
+		end
+	end
+	return "(unavailable)"
+end
+
+local function active_profile()
+	if capstan and capstan.agent and capstan.agent.get_profile then
+		return call_string(capstan.agent.get_profile)
+	end
+	return "(unavailable)"
+end
+
+local function reasoning_effort(profile)
+	if capstan and capstan.agent and capstan.agent.reasoning_effort then
+		local ok, value = pcall(capstan.agent.reasoning_effort, profile)
+		if ok and value ~= nil and value ~= "" then
+			return tostring(value)
+		end
+	end
+	return "(provider default)"
+end
+
+local function profile_line(profile)
+	return "  " .. profile .. ": configured " .. profile_model(profile) ..
+		"; uses " .. effective_model(profile) ..
+		"; effort " .. reasoning_effort(profile)
+end
+
 local function join_path(base, child)
 	if not base or base == "" or base == "(unavailable)" then
 		return "(unavailable)"
@@ -76,9 +119,15 @@ function plugin.handler(ctx)
 		"  current log: " .. call_string(capstan and capstan.log_path),
 		"",
 		"Agent",
-		"  provider: " .. current_provider(),
-		"  model: " .. current_model(),
+		"  active profile: " .. active_profile(),
+		"  current provider: " .. current_provider(),
+		"  current model: " .. current_model(),
 		"  weak model: " .. weak_model(),
+		"",
+		"Profile models",
+		profile_line("fast"),
+		profile_line("implement"),
+		profile_line("plan"),
 	}
 
 	return ctx:replace(table.concat(lines, "\n"))

@@ -16,6 +16,7 @@ Messages *get_messages(void) { return &messages; }
 
 static char *g_provider_name = NULL;
 static char *g_provider_model = NULL;
+static char *g_profile_name = NULL;
 static char *g_activity = NULL;
 static int g_thinking = 0;
 static UsageStats g_usage = {0};
@@ -57,8 +58,17 @@ static int l_agent_set_provider_info(lua_State *L) {
   return 0;
 }
 
+static int l_agent_set_profile_info(lua_State *L) {
+  free(g_profile_name);
+  g_profile_name = NULL;
+  if (!lua_isnoneornil(L, 1))
+    g_profile_name = my_strdup(luaL_checkstring(L, 1));
+  return 0;
+}
+
 const char *agent_provider_name(void) { return g_provider_name; }
 const char *agent_provider_model(void) { return g_provider_model; }
+const char *agent_profile_name(void) { return g_profile_name; }
 UsageStats agent_usage(void) { return g_usage; }
 void agent_reset_usage(void) { g_usage = (UsageStats){0, 0, 0, 0}; }
 
@@ -189,6 +199,8 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "append");
   lua_pushcfunction(L, l_agent_set_provider_info);
   lua_setfield(L, -2, "set_info");
+  lua_pushcfunction(L, l_agent_set_profile_info);
+  lua_setfield(L, -2, "set_profile_info");
   lua_pushcfunction(L, l_agent_set_thinking);
   lua_setfield(L, -2, "set_thinking");
   lua_pushcfunction(L, l_agent_set_activity);

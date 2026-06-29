@@ -19,11 +19,14 @@ configured provider's models API.
   model is stored as both provider and model so background features such as
   compacting can use a cheaper model from a different provider. Weak model
   selection does not change the active provider.
+- `/models --profile <fast|plan|implement> <provider> <model-id>` sets a
+  provider/model override for that workflow profile. Plain `/models` remains
+  the global primary model command; profile model selection is explicit.
 - Successful selection updates the provider/model status line through
-  `agent.set_info` when the active primary model changes.
+  `agent.set_info` when the effective active model changes.
 - The command is a no-history control command: its result is shown as UI
   feedback but is not sent to the model and does not trigger an agent request.
-- Selected primary models and the weak model are persisted in
+- Selected primary models, profile models, and the weak model are persisted in
   [runtime state](runtime-state.md), not in `config.lua`.
 
 ## Provider API
@@ -37,6 +40,11 @@ configured provider's models API.
   primary model.
 - `weak()` returns the selected weak `{ provider, model }`, or `nil`.
 - `set_weak(provider, model_id)` updates and persists the weak model.
+- `profile(profile_name)` returns a selected profile model, or `nil`.
+- `set_profile(profile_name, provider, model_id)` updates and persists a
+  profile model.
+- `effective(profile_name?)` reports the effective provider/model for a profile
+  or the current active profile.
 - `current_provider()` and `current_model()` report active runtime state.
 
 For OpenAI-compatible providers, the models endpoint is derived from the chat
