@@ -12,6 +12,10 @@ requiring users to export `TERMINFO` or `TERMINFO_DIRS` manually.
   before calling `initscr()`.
 - The diagnostic includes the current `TERM` and suggests rebuilding with
   `./build.sh` if the vendored ncurses fallbacks are stale.
+- The TUI enables bracketed paste mode (`?2004`) so pasted newlines are inserted
+  into the input buffer instead of submitting one message per pasted line.
+  Startup and shutdown both disable the mode first to recover from stale terminal
+  state.
 
 ## Build Contract
 
