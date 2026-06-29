@@ -364,7 +364,10 @@ void popup_render_message(void) {
                 "arrows/j/k scroll, Enter close");
     else
       mvwprintw(win, popup_h - 2, 2, "%.*s", footer_w, "Enter close");
-    char pos[32];
+    /* Keep enough room for worst-case three int values; Linux GCC treats
+       possible snprintf truncation as an error under -Werror. */
+    enum { POS_BUF_SIZE = 64 };
+    char pos[POS_BUF_SIZE];
     snprintf(pos, sizeof(pos), "%d-%d/%d", first, last, line_count);
     int pos_len = (int)strlen(pos);
     if (pos_len < footer_w)
