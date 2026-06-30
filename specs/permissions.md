@@ -9,10 +9,15 @@ Manual slash commands entered by the user, such as `/shell`, `/write`, `/file`,
 or `/fetch`, are treated as direct user intent and do not go through the
 permission prompt. The user already chose to run that command.
 
-Agent-initiated tool calls go through `permit.check(tool, target)` before the
-plugin handler runs. If plugin metadata declares `tool.permission`, that value
-is used as the permission tool name; otherwise the model-facing tool name is
-used. The decision is one of:
+Agent-initiated tool calls first pass the active profile's tool availability
+gate. If a model returns a tool call that was not in the filtered tool list for
+the active run, Capstan returns an unavailable-tool result without checking
+permissions or running plugin handlers.
+
+Available agent-initiated tool calls go through `permit.check(tool, target)`
+before the plugin handler runs. If plugin metadata declares `tool.permission`,
+that value is used as the permission tool name; otherwise the model-facing tool
+name is used. The decision is one of:
 
 - `allow`: run the tool immediately.
 - `deny`: skip the tool and return a denial result.
@@ -126,13 +131,14 @@ UI saves the exact target, not a wildcard.
 
 ## Architecture
 
-`agent/tools.lua` applies permissions while processing model tool calls that
-require permission. For `shell`, it uses `capstan.workdir` as the target. Other
-permissioned tools derive the target from common tool arguments (`command`,
-`path`, `url`, `uri`) or fall back to the tool name. Local file permission
-targets (`file_read` and `file_write`) are normalized before matching: relative
-paths resolve against `capstan.workdir`, `~/` expands through `HOME`, and `.`
-and `..` segments are collapsed.
+`agent/tools.lua` first rejects unavailable model tool calls, then applies
+permissions while processing available tool calls that require permission. For
+`shell`, it uses `capstan.workdir` as the target. Other permissioned tools
+derive the target from common tool arguments (`command`, `path`, `url`, `uri`)
+or fall back to the tool name. Local file permission targets (`file_read` and
+`file_write`) are normalized before matching: relative paths resolve against
+`capstan.workdir`, `~/` expands through `HOME`, and `.` and `..` segments are
+collapsed.
 
 `src/permit.c` owns rule loading, saving, matching, config-rule import, and the
 Lua-facing `permit` table. `src/tui.c` renders the blocking permit confirmation

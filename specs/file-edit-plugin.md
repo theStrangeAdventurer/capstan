@@ -14,7 +14,14 @@ structured `path`, `old_text`, `new_text`, and optional `replace_all` arguments.
   fails without writing.
 - If `replace_all` is true, every exact occurrence is replaced.
 - Existing UTF-8 BOMs are preserved.
-- Successful edits report the resolved path and replacement count.
+- Successful edits report the resolved path, replacement count, and a unified
+  diff showing removed `-` lines and added `+` lines. The diff is returned to
+  the model as the tool result and displayed in the agent transcript for
+  `file_edit` calls.
+- In the TUI transcript, removed diff lines are rendered with a dark red
+  background and added diff lines with a dark green background when terminal
+  colors are available. The same highlighting applies to Markdown fenced
+  `diff` code blocks.
 
 ## Rationale
 
@@ -30,4 +37,4 @@ context fails closed instead of corrupting the file.
 ## Tests
 
 `make test-http-lua` covers single replacement, missing text, ambiguous matches,
-`replace_all`, and UTF-8 BOM preservation.
+`replace_all`, UTF-8 BOM preservation, and diff output in tool results.

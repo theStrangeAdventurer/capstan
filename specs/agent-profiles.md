@@ -2,8 +2,8 @@
 
 Agent profiles are named workflow policies for Capstan runs. They are separate
 from raw provider options: a profile can add system prompt guidance, set a
-default reasoning effort, select a profile-specific model, and restrict the
-model tool list.
+default reasoning effort, select a profile-specific model, and restrict model
+tools.
 
 ## Profiles
 
@@ -11,12 +11,15 @@ model tool list.
 |---------|---------|-------------------|-------------|
 | `fast` | Low-overhead work for simple tasks | `low` | Normal tools |
 | `implement` | Focused code changes | `medium` | Normal tools |
-| `plan` | Read-only exploration and planning | `high` | Inspection tools only |
+| `plan` | Read-only exploration and planning | `high` | Inspection tools and read-only subagents |
 
-`plan` keeps model-initiated `file_read`, `fetch`, and `logs` tools. It removes
-write tools, shell, and subagents from the model tool list. Manual slash
-commands remain direct user actions; `/plan` does not prevent the user from
-typing another manual command.
+`plan` keeps model-initiated `file_read`, `fetch`, `logs`, and `subagents`
+tools. It removes write tools and shell from the model tool list, and the
+runtime also rejects any model tool call that is not available in the active
+profile before permissions or plugin handlers run. Plan subagents inherit the
+plan profile and only receive a subset of the parent run's read-only tools; they
+cannot spawn nested subagents. Manual slash commands remain direct user actions;
+`/plan` does not prevent the user from typing another manual command.
 
 ## Selection
 
@@ -69,14 +72,17 @@ its system prompt and default reasoning apply.
 `agent/profiles.lua` owns profile definitions and model tool filtering.
 `agent/runtime.lua` resolves the active profile before each run, appends the
 profile prompt to the system message, applies default reasoning effort, and
-filters tools after hook-based tool collection. `agent/models.lua` owns
-profile model persistence and effective-model reporting. The profile slash
-commands are small embedded Lua plugins.
+filters tools after hook-based tool collection. `agent/tools.lua` refuses to
+execute model tool calls that are absent from the filtered tool list and passes
+the active profile into subagent runs.
+`agent/models.lua` owns profile model persistence and effective-model reporting.
+The profile slash commands are small embedded Lua plugins.
 
 ## Tests
 
 - `make test` covers CLI profile parsing.
-- `make test-http-lua` covers profile prompt injection, reasoning defaults, and
-  plan-mode tool filtering.
+- `make test-http-lua` covers profile prompt injection, reasoning defaults,
+  plan-mode tool filtering, subagent profile inheritance, and rejection of
+  unavailable model tool calls.
 - `make test-build` verifies the profile slash commands are embedded in the
   standalone binary.

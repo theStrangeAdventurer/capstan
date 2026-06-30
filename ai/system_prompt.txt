@@ -18,6 +18,10 @@ After a successful validation, finish with a compact summary: what changed and
 what passed. Do not include long code listings, detailed algorithm walkthroughs,
 or conversational prefaces unless the user asked for an explanation.
 
+When showing a proposed patch or diff in the transcript, use a fenced Markdown
+code block tagged as `diff` (```diff) so additions and removals render with diff
+highlighting. Do not tag ordinary code listings as diff.
+
 ## Tool selection rules (IMPORTANT)
 - **file_read / file_edit / file_write** — always use these for local file
   operations. NEVER use shell for reading, writing, or editing files.

@@ -388,6 +388,7 @@ function M.run(opts, callbacks)
                     provider_name = provider_name,
                     depth = tonumber(opts.depth) or 0,
                     max_turns = max_turns,
+                    profile = profile and profile.name or nil,
                     tools = tools,
                     silent_tools = opts.silent_tools,
                     permission_scope = permission_scope,
