@@ -49,9 +49,93 @@ static long long main_now_ms(void) {
 }
 
 static void terminal_reset_mouse_modes(void) {
-  fputs("\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l",
+  fputs("\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l\033[?2004l",
         stdout);
   fflush(stdout);
+}
+
+static void terminal_enable_bracketed_paste(void) {
+  fputs("\033[?2004h", stdout);
+  fflush(stdout);
+}
+
+static void terminal_disable_bracketed_paste(void) {
+  fputs("\033[?2004l", stdout);
+  fflush(stdout);
+}
+
+static int getch_wait_ms(int *out_ch, int timeout_ms) {
+  for (int elapsed = 0; elapsed <= timeout_ms; elapsed++) {
+    int ch = getch();
+    if (ch != ERR) {
+      if (out_ch)
+        *out_ch = ch;
+      return 1;
+    }
+    napms(1);
+  }
+  return 0;
+}
+
+static void unget_chars(const int *chars, int count) {
+  for (int i = count - 1; i >= 0; i--)
+    ungetch(chars[i]);
+}
+
+static int read_exact_after_escape(const char *suffix) {
+  int consumed[16];
+  int count = 0;
+  for (size_t i = 0; suffix[i]; i++) {
+    int ch;
+    if (!getch_wait_ms(&ch, 20)) {
+      unget_chars(consumed, count);
+      return 0;
+    }
+    if (count < (int)(sizeof(consumed) / sizeof(consumed[0])))
+      consumed[count++] = ch;
+    if (ch != (unsigned char)suffix[i]) {
+      unget_chars(consumed, count);
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int read_bracketed_paste(void) {
+  int matched = 0;
+
+  while (1) {
+    int ch;
+    if (!getch_wait_ms(&ch, 100))
+      return 1;
+
+    if (matched == 0) {
+      if (ch == APP_KEY_ESCAPE) {
+        matched = 1;
+        continue;
+      }
+      if (ch == '\r')
+        ch = '\n';
+      input_insert(ch);
+      continue;
+    }
+
+    const char end_marker[] = "[201~";
+    if (ch == (unsigned char)end_marker[matched - 1]) {
+      matched++;
+      if (end_marker[matched - 1] == '\0')
+        return 1;
+      continue;
+    }
+
+    input_insert(APP_KEY_ESCAPE);
+    for (int i = 0; i < matched - 1; i++)
+      input_insert(end_marker[i]);
+    if (ch == '\r')
+      ch = '\n';
+    input_insert(ch);
+    matched = 0;
+  }
 }
 
 static int message_pane_geometry(int *out_y, int *out_x, int *out_h,
@@ -722,6 +806,7 @@ int main(int argc, char *argv[]) {
   keypad(stdscr, TRUE);
   terminal_reset_mouse_modes();
   mousemask(ALL_MOUSE_EVENTS, NULL);
+  terminal_enable_bracketed_paste();
   init_tui();
   popup_init();
 
@@ -805,9 +890,15 @@ int main(int argc, char *argv[]) {
     }
 
     if (ch == APP_KEY_ESCAPE && mode_get() == FOCUS_INPUT) {
-      stop_active_stream();
-      render_all();
-      continue;
+      if (read_exact_after_escape("[200~")) {
+        read_bracketed_paste();
+        render_all();
+        continue;
+      } else {
+        stop_active_stream();
+        render_all();
+        continue;
+      }
     }
 
     if (ch == '\t') {
@@ -919,6 +1010,7 @@ int main(int argc, char *argv[]) {
 
     render_all();
   }
+  terminal_disable_bracketed_paste();
   terminal_reset_mouse_modes();
   endwin();
   plugin_registry_cleanup();

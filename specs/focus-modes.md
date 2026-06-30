@@ -45,6 +45,7 @@ matching `Enter`.
 | `Enter` | Submit input |
 | `←`/`→` | Move cursor in input |
 | `Backspace` | Delete character |
+| Bracketed paste | Insert pasted text, including newlines, into input buffer |
 
 **FOCUS_MESSAGES (navigation):**
 

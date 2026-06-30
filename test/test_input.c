@@ -22,6 +22,19 @@ static MunitResult test_insert_ascii(const MunitParameter params[], void *data) 
   return MUNIT_OK;
 }
 
+static MunitResult test_insert_newline(const MunitParameter params[],
+                                       void *data) {
+  (void)params;
+  (void)data;
+  input_init();
+  input_insert('a');
+  input_insert('\n');
+  input_insert('b');
+  munit_assert_string_equal(input_get_text(), "a\nb");
+  munit_assert_int(input_get_cursor(), ==, 3);
+  return MUNIT_OK;
+}
+
 static MunitResult test_backspace_empty(const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -164,6 +177,7 @@ static MunitResult test_insert_clamps_at_buffer_end(const MunitParameter params[
 static MunitTest tests[] = {
   {"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/insert_ascii", test_insert_ascii, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/insert_newline", test_insert_newline, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/backspace_empty", test_backspace_empty, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/backspace_single", test_backspace_single, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/backspace_middle", test_backspace_middle, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
