@@ -103,6 +103,11 @@ static MunitResult test_replaces_single_exact_fragment(
   read_file(path, buf, sizeof(buf));
   munit_assert_string_equal(buf, "alpha\nBETA\ngamma\n");
   munit_assert_true(strstr(lua_tostring(L, -2), "1 replacement") != NULL);
+  munit_assert_true(strstr(lua_tostring(L, -2), "--- a/file.txt") != NULL);
+  munit_assert_true(strstr(lua_tostring(L, -2), "+++ b/file.txt") != NULL);
+  munit_assert_true(strstr(lua_tostring(L, -2), "@@ -2 +2 @@") != NULL);
+  munit_assert_true(strstr(lua_tostring(L, -2), "-beta") != NULL);
+  munit_assert_true(strstr(lua_tostring(L, -2), "+BETA") != NULL);
 
   lua_close(L);
   unlink(path);

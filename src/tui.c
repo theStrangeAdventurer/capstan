@@ -19,6 +19,8 @@
 BufferedPluginResults g_buffered_results = {0};
 static int g_tool_status_color_pair = 0;
 static int g_dim_color_pair = 0;
+static int g_diff_add_color_pair = 0;
+static int g_diff_del_color_pair = 0;
 
 void buffer_plugin_result(const char *label, char *ui_result, char *raw_result) {
   if (g_buffered_results.size >= g_buffered_results.capacity) {
@@ -59,6 +61,15 @@ void init_tui(void) {
     init_pair(9, COLORS >= 216 ? 208 : COLOR_YELLOW, -1);
     init_pair(10, COLOR_BLUE, -1);
     init_pair(11, COLOR_BLACK, COLOR_WHITE);
+    if (COLORS >= 256) {
+      init_pair(12, 71, 22);
+      init_pair(13, 131, 52);
+    } else {
+      init_pair(12, COLOR_BLACK, COLOR_GREEN);
+      init_pair(13, COLOR_BLACK, COLOR_RED);
+    }
+    g_diff_add_color_pair = 12;
+    g_diff_del_color_pair = 13;
     if (COLORS > 8) {
       init_pair(7, 8, -1);
       g_tool_status_color_pair = 7;
@@ -146,6 +157,68 @@ static void mvwadd_clipped(WINDOW *win, int y, int x, const char *text,
   char buf[512];
   start_screen_truncate(text, buf, sizeof(buf), max_chars);
   mvwaddstr(win, y, x, buf);
+}
+
+static int diff_line_color_pair(const char *line, int len) {
+  if (!line || len <= 0)
+    return 0;
+  if (line[0] == '+' && !(len >= 3 && strncmp(line, "+++", 3) == 0))
+    return g_diff_add_color_pair;
+  if (line[0] == '-' && !(len >= 3 && strncmp(line, "---", 3) == 0))
+    return g_diff_del_color_pair;
+  return 0;
+}
+
+static int line_starts_with(const char *line, int len, const char *prefix) {
+  int prefix_len = (int)strlen(prefix);
+  return len >= prefix_len && strncmp(line, prefix, prefix_len) == 0;
+}
+
+static int is_unified_diff_hunk_header(const char *line, int len) {
+  return line_starts_with(line, len, "@@ ") && len >= 5 &&
+         strstr(line + 3, " @@") != NULL;
+}
+
+static int is_fence_line(const char *line, int len) {
+  return line_starts_with(line, len, "```");
+}
+
+static int is_diff_fence_line(const char *line, int len) {
+  int i = 3;
+  if (!is_fence_line(line, len))
+    return 0;
+  while (i < len && (line[i] == ' ' || line[i] == '\t'))
+    i++;
+  return len - i >= 4 && strncmp(line + i, "diff", 4) == 0 &&
+         (i + 4 == len || line[i + 4] == ' ' || line[i + 4] == '\t');
+}
+
+static int update_diff_state(int state, const char *line, int len) {
+  if (state == 4) {
+    return is_fence_line(line, len) ? 0 : 4;
+  }
+  if (is_diff_fence_line(line, len)) {
+    return 4;
+  }
+  if (is_fence_line(line, len)) {
+    return 0;
+  }
+  if (line_starts_with(line, len, "--- ")) {
+    return 1;
+  }
+  if (state == 1 && line_starts_with(line, len, "+++ ")) {
+    return 2;
+  }
+  if (state >= 2 && is_unified_diff_hunk_header(line, len)) {
+    return 3;
+  }
+  if (state == 3) {
+    if (len == 0 || line[0] == ' ' || line[0] == '+' || line[0] == '-' ||
+        line[0] == '\\') {
+      return 3;
+    }
+  }
+  return 0;
 }
 
 static void render_status_pair(WINDOW *win, int y, int x, const char *label,
@@ -426,6 +499,7 @@ void render_all(void) {
       wattron(msg_win, A_DIM);
 
     const char *p = msg->text;
+    int diff_state = 0;
     for (int l = 0; l < line_counts[i]; l++) {
       const char *line_end = p;
       int col = 0;
@@ -438,21 +512,36 @@ void render_all(void) {
           col++;
       }
 
+      int line_len = (int)(line_end - p);
+      int current_diff_state = diff_state;
+      int next_diff_state = update_diff_state(diff_state, p, line_len);
       if (global_line >= top_line && win_row < msg_h) {
         int is_tool_status =
             !is_user && (strncmp(p, "⚙", strlen("⚙")) == 0 ||
                          strncmp(p, "  $ ", 4) == 0);
+        int diff_pair = !is_user && (current_diff_state == 3 || current_diff_state == 4)
+                            ? diff_line_color_pair(p, line_len)
+                            : 0;
         int tool_status_attrs = A_DIM | A_ITALIC;
         if (g_tool_status_color_pair)
           tool_status_attrs |= COLOR_PAIR(g_tool_status_color_pair);
         if (is_tool_status) {
           wattron(msg_win, tool_status_attrs);
         }
+        if (diff_pair) {
+          wattroff(msg_win, A_DIM);
+          wattron(msg_win, COLOR_PAIR(diff_pair));
+          mvwhline(msg_win, win_row, 0, ' ', inner_w);
+        }
 
         if (is_user)
           mvwhline(msg_win, win_row, 0, ' ', inner_w);
         mvwaddnstr(msg_win, win_row, MSG_PAD_H, p, line_end - p);
 
+        if (diff_pair) {
+          wattroff(msg_win, COLOR_PAIR(diff_pair));
+          wattron(msg_win, A_DIM);
+        }
         if (is_tool_status) {
           wattroff(msg_win, tool_status_attrs);
         }
@@ -483,6 +572,7 @@ void render_all(void) {
       if (*line_end == '\n')
         line_end++;
       p = line_end;
+      diff_state = next_diff_state;
       global_line++;
     }
 

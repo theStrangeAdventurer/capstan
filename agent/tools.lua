@@ -95,6 +95,16 @@ function M.names(tools)
     return table.concat(names, ",")
 end
 
+local function tool_available(tools, name)
+    for _, tool in ipairs(tools or {}) do
+        local fn = tool["function"]
+        if type(fn) == "table" and fn.name == name then
+            return true
+        end
+    end
+    return false
+end
+
 local function find_plugin_tool(tool_name)
     if tool_name == "subagents" and capability_enabled("subagents") then
         return {tool = {name = "subagents"}}
@@ -448,6 +458,7 @@ local function run_subagents(args, run_ctx)
             messages = {{role = "user", content = task.task}},
             provider = provider_name,
             model = selected_model,
+            profile = run_ctx and run_ctx.profile or nil,
             max_turns = subagent_max_turns(task),
             depth = depth + 1,
             tools = filter_tools(run_ctx and run_ctx.tools, task.tools),
@@ -828,6 +839,13 @@ local function tool_status_suffix(status, _display_command)
     return status .. "\n\n"
 end
 
+local function tool_success_status(tool_name, result_content, display_command)
+    if tool_name == "file_edit" and type(result_content) == "string" and result_content ~= "" then
+        return "\n" .. result_content .. "\n" .. tool_status_suffix("— done", display_command)
+    end
+    return tool_status_suffix("— done", display_command)
+end
+
 local function first_line(value)
     local s = tostring(value or "")
     s = s:gsub("^%s+", "")
@@ -889,8 +907,9 @@ local function apply_prompt_decision(decision, scope, permission_tool)
     return decision == "allow" or decision == "always"
 end
 
--- Processes tool_calls from an LLM response: decodes, checks permissions,
--- executes each via call_plugin_tool, appends results, then recurses via continue_fn.
+-- Processes tool_calls from an LLM response: rejects unavailable tools, decodes
+-- arguments, checks permissions, executes handlers, appends results, then
+-- recurses via continue_fn.
 function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant_text, continue_fn, run_ctx)
     logging.runtime_log("tools", string.format("received %d tool call(s)", #tool_calls))
     local function append_status(text)
@@ -918,116 +937,128 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
 
     for _, tc in ipairs(tool_calls) do
         local result_content
-        local args, decode_err = decode_tool_arguments(tc.arguments, run_ctx)
-
-        if decode_err then
-            result_content = decode_err
-            logging.runtime_log("tool", string.format("invalid_args name=%s error=%s", tc.name, logging.compact(decode_err, 240)))
-            append_status(string.format("\n⚙ %s: invalid arguments — error\n\n", tc.name))
+        if not tool_available(combined_tools, tc.name) then
+            result_content = "Tool " .. tostring(tc.name) .. " is not available in the active profile"
+            logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tc.name)))
+            append_status(string.format("\n⚙ %s: unavailable — denied\n\n", tostring(tc.name)))
         else
-            local target = tool_call_target(tc.name, args)
-            local permission_tool = tool_permission_name(tc.name)
-            local call_ctx = hooks.run("before_tool_call", {
-                name = tc.name,
-                args = args,
-                target = target,
-                permission_tool = permission_tool,
-                raw_arguments = tc.arguments,
-                tool_call = tc,
-                run = run_ctx or {},
-            })
-            local tool_name = call_ctx.name or tc.name
-            args = call_ctx.args or args
-            target = call_ctx.target or target
-            permission_tool = call_ctx.permission_tool or permission_tool
-            if tool_name == "subagents" then
-                permission_tool = nil
-            end
-            if permission_tool then
-                target = normalize_permission_target(permission_tool, target)
-            end
-            local guard_error = guard_before_tool(tool_name, args, run_ctx)
-            if guard_error then
-                if run_ctx and type(run_ctx.stop_run) == "function" then
-                    run_ctx.stop_run(guard_error, current_msgs)
-                else
-                    logging.runtime_log("tool_guard", logging.compact(guard_error, 500))
-                end
-                return
-            end
-            local display_target = tool_display_target(tool_name, args, target)
-            local display_command = tool_display_command(tool_name, args)
-            local show_generic_status = tool_name ~= "subagents"
-            if tool_name == "shell" then
-                logging.runtime_log("tool", string.format("call name=%s target=%s display=%s args=%s", tool_name, target, display_target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
-            elseif display_command then
-                logging.runtime_log("tool", string.format("call name=%s target=%s display=%s command=%s args=%s", tool_name, target, display_target, logging.compact(redact_sensitive_text(display_command), 240), redacted_tool_arguments(tool_name, tc.arguments) or ""))
+            local args, decode_err = decode_tool_arguments(tc.arguments, run_ctx)
+
+            if decode_err then
+                result_content = decode_err
+                logging.runtime_log("tool", string.format("invalid_args name=%s error=%s", tc.name, logging.compact(decode_err, 240)))
+                append_status(string.format("\n⚙ %s: invalid arguments — error\n\n", tc.name))
             else
-                logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
-            end
-            local permission_scope = run_ctx and run_ctx.permission_scope or nil
-            local perm = "allow"
-            if scope_allows_target(permission_scope, permission_tool, target) then
-                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
-            elseif permission_tool then
-                perm = permit.check(permission_tool, target)
-                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
-            end
-
-            if show_generic_status then
-                append_status(tool_status_prefix(tool_name, display_target, display_command))
-            end
-
-            if perm == "deny" then
-                result_content = "Permission denied for " .. tool_name .. " " .. target
-                if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
-            elseif perm == "ask" then
-                local decision = permit.prompt(permission_tool, target)
-                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
-                if decision == "deny" then
-                    result_content = "User denied " .. tool_name .. " " .. target
-                    if show_generic_status then append_status(tool_status_suffix("— denied by user", display_command)) end
+                local target = tool_call_target(tc.name, args)
+                local permission_tool = tool_permission_name(tc.name)
+                local call_ctx = hooks.run("before_tool_call", {
+                    name = tc.name,
+                    args = args,
+                    target = target,
+                    permission_tool = permission_tool,
+                    raw_arguments = tc.arguments,
+                    tool_call = tc,
+                    run = run_ctx or {},
+                })
+                local tool_name = call_ctx.name or tc.name
+                args = call_ctx.args or args
+                target = call_ctx.target or target
+                permission_tool = call_ctx.permission_tool or permission_tool
+                if not tool_available(combined_tools, tool_name) then
+                    result_content = "Tool " .. tostring(tool_name) .. " is not available in the active profile"
+                    logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tool_name)))
+                    append_status(string.format("\n⚙ %s: unavailable — denied\n\n", tostring(tool_name)))
                 else
-                    if decision == "always" then
-                        permit.grant(permission_tool, target, true)
-                        permit.save()
+                    if tool_name == "subagents" then
+                        permission_tool = nil
                     end
-                    if not apply_prompt_decision(decision, permission_scope, permission_tool) then
-                        result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
-                        if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                    if permission_tool then
+                        target = normalize_permission_target(permission_tool, target)
+                    end
+                    local guard_error = guard_before_tool(tool_name, args, run_ctx)
+                    if guard_error then
+                        if run_ctx and type(run_ctx.stop_run) == "function" then
+                            run_ctx.stop_run(guard_error, current_msgs)
+                        else
+                            logging.runtime_log("tool_guard", logging.compact(guard_error, 500))
+                        end
+                        return
+                    end
+                    local display_target = tool_display_target(tool_name, args, target)
+                    local display_command = tool_display_command(tool_name, args)
+                    local show_generic_status = tool_name ~= "subagents"
+                    if tool_name == "shell" then
+                        logging.runtime_log("tool", string.format("call name=%s target=%s display=%s args=%s", tool_name, target, display_target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
+                    elseif display_command then
+                        logging.runtime_log("tool", string.format("call name=%s target=%s display=%s command=%s args=%s", tool_name, target, display_target, logging.compact(redact_sensitive_text(display_command), 240), redacted_tool_arguments(tool_name, tc.arguments) or ""))
+                    else
+                        logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
+                    end
+                    local permission_scope = run_ctx and run_ctx.permission_scope or nil
+                    local perm = "allow"
+                    if scope_allows_target(permission_scope, permission_tool, target) then
+                        logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
+                    elseif permission_tool then
+                        perm = permit.check(permission_tool, target)
+                        logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
+                    end
+
+                    if show_generic_status then
+                        append_status(tool_status_prefix(tool_name, display_target, display_command))
+                    end
+
+                    if perm == "deny" then
+                        result_content = "Permission denied for " .. tool_name .. " " .. target
+                        if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
+                    elseif perm == "ask" then
+                        local decision = permit.prompt(permission_tool, target)
+                        logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
+                        if decision == "deny" then
+                            result_content = "User denied " .. tool_name .. " " .. target
+                            if show_generic_status then append_status(tool_status_suffix("— denied by user", display_command)) end
+                        else
+                            if decision == "always" then
+                                permit.grant(permission_tool, target, true)
+                                permit.save()
+                            end
+                            if not apply_prompt_decision(decision, permission_scope, permission_tool) then
+                                result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
+                                if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                            else
+                                local tool_ok
+                                result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx)
+                                if tool_ok then
+                                    logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
+                                    if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end
+                                else
+                                    logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
+                                    if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                                end
+                            end
+                        end
                     else
                         local tool_ok
                         result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx)
                         if tool_ok then
                             logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
-                            if show_generic_status then append_status(tool_status_suffix("— done", display_command)) end
+                            if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end
                         else
                             logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
                             if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
                         end
                     end
-                end
-            else
-                local tool_ok
-                result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx)
-                if tool_ok then
-                    logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
-                    if show_generic_status then append_status(tool_status_suffix("— done", display_command)) end
-                else
-                    logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
-                    if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                    local result_ctx = hooks.run("after_tool_call", {
+                        name = tool_name,
+                        args = args,
+                        target = target,
+                        permission_tool = permission_tool,
+                        result = result_content,
+                        tool_call = tc,
+                        run = run_ctx or {},
+                    })
+                    result_content = result_ctx.result
                 end
             end
-            local result_ctx = hooks.run("after_tool_call", {
-                name = tool_name,
-                args = args,
-                target = target,
-                permission_tool = permission_tool,
-                result = result_content,
-                tool_call = tc,
-                run = run_ctx or {},
-            })
-            result_content = result_ctx.result
         end
 
         if result_content then

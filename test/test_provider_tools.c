@@ -1106,9 +1106,44 @@ static MunitResult test_plan_profile_filters_tools_and_prompt(
   munit_assert_true(strstr(captured_body, "\"name\":\"fetch\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"name\":\"file_read\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"name\":\"shell\"") == NULL);
-  munit_assert_true(strstr(captured_body, "\"name\":\"subagents\"") == NULL);
-  munit_assert_true(strstr(captured_logs, "[agent] tools=fetch,file_read") != NULL);
+  munit_assert_true(strstr(captured_body, "\"name\":\"subagents\"") != NULL);
+  munit_assert_true(strstr(captured_logs, "[agent] tools=fetch,file_read,subagents") != NULL);
   munit_assert_true(strstr(captured_logs, "[agent] profile=plan") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_plan_profile_rejects_unavailable_tool_call(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
+
+  call_agent_run_with_profile(L, "plan");
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  send_tool_call(L, "call_forbidden_write", "file_write",
+                 "{\\\"path\\\":\\\"out.txt\\\",\\\"content\\\":\\\"nope\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 0);
+  munit_assert_int(permit_prompt_calls, ==, 0);
+  munit_assert_string_equal(captured_permit_tool, "");
+  munit_assert_true(strstr(captured_logs,
+                           "[tool] unavailable name=file_write") != NULL);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "file_write: unavailable") != NULL);
+  munit_assert_true(strstr(captured_body,
+                           "Tool file_write is not available in the active profile") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -1260,6 +1295,60 @@ static MunitResult test_subagents_tool_returns_structured_results(
   munit_assert_string_equal(captured_permit_target, "");
   munit_assert_true(strstr(captured_agent_appends, "subagents: running 2 concurrent, 2 total") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "subagents: done 2/2") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_plan_subagents_inherit_profile_and_readonly_tools(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "capstan");
+  lua_pushvalue(L, -2);
+  lua_setfield(L, -2, "agent_runtime");
+  lua_pop(L, 2);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "local profiles = require('agent.profiles')\n"
+      "subagents_child_profiles = {}\n"
+      "subagents_child_tools = {}\n"
+      "capstan.agent.run = function(opts, callbacks)\n"
+      "  table.insert(subagents_child_profiles, opts.profile or '')\n"
+      "  local names = {}\n"
+      "  for _, tool in ipairs(opts.tools or {}) do table.insert(names, tool['function'].name) end\n"
+      "  table.sort(names)\n"
+      "  table.insert(subagents_child_tools, table.concat(names, ','))\n"
+      "  callbacks.on_done({ok = true, text = 'done', turns = 1})\n"
+      "  return true, nil\n"
+      "end\n"
+      "local available = profiles.filter_tools(tools.collect(), profiles.get('plan'))\n"
+      "tools.handle_tool_calls({}, available, {{id='call_plan_subs', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"a\\\",\\\"task\\\":\\\"inspect a\\\"},{\\\"id\\\":\\\"b\\\",\\\"task\\\":\\\"inspect b\\\",\\\"tools\\\":[\\\"fetch\\\",\\\"shell\\\"]}],\\\"max_concurrent\\\":2}'}}, '', function() end, {tools = available, depth = 0, profile = 'plan'})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "subagents_child_profiles");
+  lua_rawgeti(L, -1, 1);
+  munit_assert_string_equal(lua_tostring(L, -1), "plan");
+  lua_pop(L, 1);
+  lua_rawgeti(L, -1, 2);
+  munit_assert_string_equal(lua_tostring(L, -1), "plan");
+  lua_pop(L, 2);
+
+  lua_getglobal(L, "subagents_child_tools");
+  lua_rawgeti(L, -1, 1);
+  munit_assert_string_equal(lua_tostring(L, -1), "fetch,file_read");
+  lua_pop(L, 1);
+  lua_rawgeti(L, -1, 2);
+  munit_assert_string_equal(lua_tostring(L, -1), "fetch");
+  lua_pop(L, 2);
 
   reset_captures(L);
   lua_close(L);
@@ -2256,6 +2345,12 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
   munit_assert_true(strstr(captured_logs, "[permit] tool=file_write call=file_edit") != NULL);
   munit_assert_true(strstr(captured_body, "\"role\":\"tool\"") != NULL);
   munit_assert_true(strstr(captured_body, "Edited ") != NULL);
+  munit_assert_true(strstr(captured_body, "--- a/file.txt") != NULL);
+  munit_assert_true(strstr(captured_body, "-beta") != NULL);
+  munit_assert_true(strstr(captured_body, "+BETA") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "--- a/file.txt") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "-beta") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "+BETA") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -3474,6 +3569,9 @@ static MunitTest tests[] = {
     {"/plan_profile_filters_tools_and_prompt",
      test_plan_profile_filters_tools_and_prompt, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/plan_profile_rejects_unavailable_tool_call",
+     test_plan_profile_rejects_unavailable_tool_call, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/fast_profile_applies_reasoning_and_prompt",
      test_fast_profile_applies_reasoning_and_prompt, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -3484,6 +3582,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/subagents_tool_returns_structured_results",
      test_subagents_tool_returns_structured_results, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/plan_subagents_inherit_profile_and_readonly_tools",
+     test_plan_subagents_inherit_profile_and_readonly_tools, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/subagents_wait_loop_yields_between_polls",
      test_subagents_wait_loop_yields_between_polls, NULL, NULL,

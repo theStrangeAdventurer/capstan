@@ -63,6 +63,81 @@ local function replace_all(haystack, old_text, new_text)
 	end
 end
 
+local function line_number_at(text, pos)
+	local line = 1
+	local start = 1
+	while true do
+		local found = text:find("\n", start, true)
+		if not found or found >= pos then
+			return line
+		end
+		line = line + 1
+		start = found + 1
+	end
+end
+
+local function replacement_positions(content, old_text, replace_all_flag)
+	local positions = {}
+	local start = 1
+	while true do
+		local start_pos = content:find(old_text, start, true)
+		if not start_pos then
+			return positions
+		end
+		table.insert(positions, start_pos)
+		if not replace_all_flag then
+			return positions
+		end
+		start = start_pos + #old_text
+	end
+end
+
+local function split_diff_lines(text)
+	if text == "" then
+		return {}
+	end
+	local lines = {}
+	local start = 1
+	while start <= #text do
+		local newline = text:find("\n", start, true)
+		if newline then
+			table.insert(lines, text:sub(start, newline - 1))
+			start = newline + 1
+		else
+			table.insert(lines, text:sub(start))
+			break
+		end
+	end
+	return lines
+end
+
+local function diff_range(count)
+	if count == 1 then
+		return ""
+	end
+	return "," .. tostring(count)
+end
+
+local function unified_edit_diff(path, content, old_text, new_text, replace_all_flag)
+	local out = {
+		"--- a/" .. path,
+		"+++ b/" .. path,
+	}
+	local old_lines = split_diff_lines(old_text)
+	local new_lines = split_diff_lines(new_text)
+	for _, pos in ipairs(replacement_positions(content, old_text, replace_all_flag)) do
+		local line = line_number_at(content, pos)
+		table.insert(out, string.format("@@ -%d%s +%d%s @@", line, diff_range(#old_lines), line, diff_range(#new_lines)))
+		for _, line_text in ipairs(old_lines) do
+			table.insert(out, "-" .. line_text)
+		end
+		for _, line_text in ipairs(new_lines) do
+			table.insert(out, "+" .. line_text)
+		end
+	end
+	return table.concat(out, "\n")
+end
+
 function plugin.handler(ctx)
 	local path = (ctx.tool_args and ctx.tool_args.path) or ctx.args[1]
 	local old_text = (ctx.tool_args and ctx.tool_args.old_text) or ctx.args[2]
@@ -121,7 +196,9 @@ function plugin.handler(ctx)
 		return ctx:replace("Cannot edit " .. resolved_path .. ": " .. tostring(close_err))
 	end
 
-	return ctx:replace(string.format("Edited %s (%d replacement%s)", resolved_path, matches, matches == 1 and "" or "s"))
+	local summary = string.format("Edited %s (%d replacement%s)", resolved_path, matches, matches == 1 and "" or "s")
+	local diff = unified_edit_diff(path, content, old_text, new_text, replace_all_flag)
+	return ctx:replace(summary .. "\n\n" .. diff)
 end
 
 return plugin
