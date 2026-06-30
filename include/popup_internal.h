@@ -3,7 +3,6 @@
 
 #include "popup.h"
 #include <stddef.h>
-#include <time.h>
 
 #define POPUP_KEY_UP    0403
 #define POPUP_KEY_DOWN  0402
@@ -48,8 +47,9 @@ typedef struct {
   int last_rows;
   int last_cols;
   int scroll;
-  time_t created_at;
-  int auto_close_after_sec;
+  long long created_at_ms;
+  int auto_close_after_ms;
+  int compact;
 } MsgPopup;
 
 extern MsgPopup g_msgpopup;
@@ -62,6 +62,7 @@ typedef struct {
 
 void popup_set_win_cleanup(void (*fn)(void *));
 void popup_close_data(void);
+long long popup_now_ms(void);
 int popup_row_prefix_width(int multi);
 PopupScrollbar popup_scrollbar_calc(int item_count, int visible, int scroll);
 

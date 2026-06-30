@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #ifdef POPUP_NCURSES
 #include <ncursesw/curses.h>
@@ -15,6 +16,12 @@ MsgPopup g_msgpopup = {0};
 static void (*g_win_cleanup_fn)(void *) = NULL;
 
 void popup_set_win_cleanup(void (*fn)(void *)) { g_win_cleanup_fn = fn; }
+
+long long popup_now_ms(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
+}
 
 int popup_row_prefix_width(int multi) { return multi ? 4 : 0; }
 
@@ -405,6 +412,11 @@ struct Plugin *popup_get_plugin(void) { return g_popup.plugin; }
 size_t popup_get_cmd_end(void) { return g_popup.cmd_end; }
 
 void popup_show_message(const char *title, const char *text, int is_error) {
+  popup_show_message_ms(title, text, is_error, is_error ? 8000 : 0);
+}
+
+void popup_show_message_ms(const char *title, const char *text, int is_error,
+                           int auto_close_after_ms) {
   popup_close_message();
   g_msgpopup.active = 1;
   g_msgpopup.is_error = is_error;
@@ -414,11 +426,14 @@ void popup_show_message(const char *title, const char *text, int is_error) {
   g_msgpopup.last_rows = -1;
   g_msgpopup.last_cols = -1;
   g_msgpopup.scroll = 0;
-  g_msgpopup.created_at = time(NULL);
-  g_msgpopup.auto_close_after_sec = is_error ? 8 : 0;
+  g_msgpopup.created_at_ms = popup_now_ms();
+  g_msgpopup.auto_close_after_ms = auto_close_after_ms;
+  g_msgpopup.compact = auto_close_after_ms > 0 && !is_error;
 }
 
-int popup_is_message_active(void) { return g_msgpopup.active; }
+int popup_is_message_active(void) {
+  return g_msgpopup.active && !g_msgpopup.compact;
+}
 
 void popup_close_message(void) {
 #ifdef POPUP_NCURSES
@@ -438,8 +453,9 @@ void popup_close_message(void) {
   g_msgpopup.last_rows = -1;
   g_msgpopup.last_cols = -1;
   g_msgpopup.scroll = 0;
-  g_msgpopup.created_at = 0;
-  g_msgpopup.auto_close_after_sec = 0;
+  g_msgpopup.created_at_ms = 0;
+  g_msgpopup.auto_close_after_ms = 0;
+  g_msgpopup.compact = 0;
 }
 
 int popup_message_handle_key(int ch) {

@@ -39,6 +39,8 @@ static int g_mouse_selecting_messages = 0;
 
 #define ACTIVE_RENDER_INTERVAL_MS 16
 #define IDLE_RENDER_INTERVAL_MS 50
+#define KEY_CTRL_D 0x04
+#define KEY_CTRL_U 0x15
 
 static long long main_now_ms(void) {
   struct timeval tv;
@@ -76,6 +78,14 @@ static int message_pane_geometry(int *out_y, int *out_x, int *out_h,
   if (out_w)
     *out_w = inner_w;
   return 1;
+}
+
+static int message_half_page_lines(void) {
+  int pane_h = 0;
+  if (!message_pane_geometry(NULL, NULL, &pane_h, NULL))
+    return 1;
+  int half_page = pane_h / 2;
+  return half_page > 0 ? half_page : 1;
 }
 
 static int mouse_to_visual_position(const MEVENT *event, int *out_line,
@@ -119,6 +129,53 @@ static void focus_messages_at(int line, int col) {
   visual_set_cursor(line, col);
 }
 
+static void copy_active_selection(void) {
+  Messages *msgs = get_messages();
+  if (!msgs || msgs->size == 0)
+    return;
+
+  const char **texts = malloc(msgs->size * sizeof(const char *));
+  if (!texts)
+    return;
+  for (size_t i = 0; i < msgs->size; i++)
+    texts[i] = msgs->items[i]->text;
+  visual_yank(texts, (int)msgs->size);
+  free(texts);
+}
+
+static void flash_copy_active_selection(void) {
+  if (!visual_is_active())
+    return;
+
+  int sl, sc, el, ec;
+  visual_selection_range(&sl, &sc, &el, &ec);
+  if (sl == el && sc == ec)
+    return;
+
+  render_all();
+  napms(70);
+  visual_exit_selection();
+  render_all();
+  napms(70);
+  visual_enter_selection_at(sl, sc);
+  visual_set_cursor(el, ec);
+  render_all();
+  napms(70);
+
+  copy_active_selection();
+  popup_show_message_ms("Copied", "Text copied", 0, 500);
+}
+
+static int stop_active_stream(void) {
+  if (!http_is_loading())
+    return 0;
+  if (http_cancel_streams(L) <= 0)
+    return 0;
+  agent_set_thinking(0);
+  append_to_last_message("\n[stopped]\n", MSG_AGENT);
+  return 1;
+}
+
 static void handle_mouse_event(MEVENT *event) {
   if (event->bstate & BUTTON4_PRESSED) {
     scroll_up(3);
@@ -154,6 +211,7 @@ static void handle_mouse_event(MEVENT *event) {
     if (g_mouse_selecting_messages &&
         mouse_to_visual_position(event, &line, &col)) {
       visual_set_cursor(line, col);
+      flash_copy_active_selection();
     }
     g_mouse_selecting_messages = 0;
     return;
@@ -747,6 +805,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (ch == APP_KEY_ESCAPE && mode_get() == FOCUS_INPUT) {
+      stop_active_stream();
       render_all();
       continue;
     }
@@ -754,15 +813,6 @@ int main(int argc, char *argv[]) {
     if (ch == '\t') {
       if (mode_get() == FOCUS_INPUT)
         dispatch_tab();
-      render_all();
-      continue;
-    }
-
-    if (ch == ' ' && http_is_loading()) {
-      if (http_cancel_streams(L) > 0) {
-        agent_set_thinking(0);
-        append_to_last_message("\n[stopped]\n", MSG_AGENT);
-      }
       render_all();
       continue;
     }
@@ -778,6 +828,18 @@ int main(int argc, char *argv[]) {
         int vc_line;
         visual_get_cursor(&vc_line, NULL);
         visual_set_cursor_line(vc_line - 5);
+      } else if (ch == KEY_CTRL_U) {
+        int half_page = message_half_page_lines();
+        scroll_up(half_page);
+        int vc_line;
+        visual_get_cursor(&vc_line, NULL);
+        visual_set_cursor_line(vc_line + half_page);
+      } else if (ch == KEY_CTRL_D) {
+        int half_page = message_half_page_lines();
+        scroll_down(half_page);
+        int vc_line;
+        visual_get_cursor(&vc_line, NULL);
+        visual_set_cursor_line(vc_line - half_page);
       } else if (ch == '0')
         visual_move_line_start();
       else if (ch == '$')
@@ -795,14 +857,9 @@ int main(int argc, char *argv[]) {
           visual_move_left();
         else if (ch == KEY_RIGHT || ch == 'l')
           visual_move_right();
-        else if (ch == 'y') {
-          Messages *msgs = get_messages();
-          const char **texts = malloc(msgs->size * sizeof(const char *));
-          for (size_t i = 0; i < msgs->size; i++)
-            texts[i] = msgs->items[i]->text;
-          visual_yank(texts, (int)msgs->size);
-          free(texts);
-        } else if (ch == 27)
+        else if (ch == 'y')
+          flash_copy_active_selection();
+        else if (ch == 27)
           visual_exit_selection();
       } else {
         if (ch == KEY_UP || ch == 'k')

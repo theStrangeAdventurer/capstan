@@ -52,6 +52,8 @@ matching `Enter`.
 |-----|--------|
 | `j`/`↓` | Move cursor down |
 | `k`/`↑` | Move cursor up |
+| `Ctrl-D` | Scroll down by half a page |
+| `Ctrl-U` | Scroll up by half a page |
 | `h`/`←` | Move cursor left |
 | `l`/`→` | Move cursor right |
 | `w` | Jump to next word start |
@@ -88,8 +90,10 @@ MESSAGES ──drag messages──▸ VISUAL (selection remains after release)
 - Linux: `xclip -selection clipboard`, fallback `xsel --clipboard`
 
 Mouse selection uses the same visual selection state as keyboard selection.
-Releasing the mouse ends drag tracking but keeps the selection active; `y` yanks
-the selected text through the normal clipboard path.
+Releasing the mouse ends drag tracking and yanks the selected text automatically.
+Keyboard visual selection uses `y` to yank. Both copy paths briefly flash the
+selected range, use the normal clipboard path, and show a non-modal
+`Text copied` toast for 500ms.
 
 ## Architecture
 

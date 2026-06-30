@@ -155,7 +155,7 @@ inspection tools such as `file_read`, `fetch`, and `logs`, and removes write,
 shell, and subagent tools.
 
 The loop is recursive through a continuation function: every tool round produces
-a new HTTP request with the expanded message history. Space cancellation can stop
+a new HTTP request with the expanded message history. Esc cancellation can stop
 active curl streams, but it cannot interrupt synchronous Lua work inside tool
 processing until control returns to the main loop.
 
