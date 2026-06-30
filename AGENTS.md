@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This project is cli llm agent like opencode and claude code
+Capstan is a CLI LLM agent, similar to OpenCode and Claude Code.
 
 ## Build
 
@@ -24,22 +24,22 @@ make clean && make
 ### Build principles
 
 **Static linking** — ncurses and Lua are linked as `.a` archives.
-- Zero runtime dependencies besides `libcurl` (used for LLM API calls).
-- Binary is a single Mach-O / ELF file — portable, no shared libs needed.
+- No runtime dependencies besides `libcurl` (used for LLM API calls).
+- The binary is a single Mach-O / ELF file — portable, no shared libs needed.
 - ncurses: `--enable-widec` (wide-char for Unicode), `--with-termlib`
   (separates terminal constants like `_COLS` into `libtinfow.a`).
-  `--without-shared` — only static `.a` needed, skip `.so`/`.dylib`.
+  `--without-shared` — only static `.a` archives are needed; `.so`/`.dylib` are skipped.
 
 **Single compilation unit** — all `src/*.c` compiled in one `gcc` invocation.
 - No per-file `.o` objects, no incremental build.
 - Simpler Makefile, faster link step.
-- Trade-off: full recompile on any change (mitigated by small codebase ~1500 lines).
+- Trade-off: full recompile on any change (acceptable for a project this size).
 
 **Vendored, not system packages** — ncurses and Lua built from source in `vendor/`.
 - Avoids version mismatches (e.g. Lua 5.4 vs 5.5, ncurses API changes).
 - `libtinfow.a` must come from the same ncurses build — system ncurses may
   not provide it (`--with-termlib` is non-default).
-- Build is idempotent — `build.sh` can be re-run after OS switch or arch change.
+- Build is reproducible — `build.sh` can be re-run after OS switch or arch change.
 
 **Cross-platform** — `build.sh` auto-detects OS at runtime.
 - macOS: `sysctl -n hw.ncpu`, Xcode CLT, libcurl via SDK `.tbd` stubs.
@@ -58,7 +58,7 @@ LDFLAGS = vendor/lua-5.5.0/src/liblua.a
         + vendor/ncurses-install/lib/libncursesw.a
         + vendor/ncurses-install/lib/libtinfow.a
         + -lm -lcurl
-          \____________________ ____/  \__/  \___/
+          \______________________/  \__/  \___/
                                |        |      |
                      vendored static   math  system
 ```
@@ -87,33 +87,34 @@ build/capstan              # final binary (gitignored)
 
 `plugins_init()` in `src/plugins.c`:
 1. `luaL_newstate` → `luaL_openlibs`
-2. Embedded Lua modules are registered in `package.preload`
-3. `http_init(L)` — registers global `http = {get, post, post_stream, ...}`
-4. `agent_init(L)` — registers global `agent = {append, set_info, ...}`
-5. `tools_init(L)` — registers built-in tool helpers
-6. `mcp_init(L)` — registers global `mcp = {spawn, send, recv, alive, kill}`
-7. `capstan` runtime paths are registered
-8. User config and persisted runtime state are loaded into `capstan`
-9. `permit`, `log`, and `popup` globals are registered
-10. The embedded system prompt plus project instructions/skills are loaded
-11. `agent/runtime.lua` is loaded — side-effect: sets `_G.agent_entry`
+2. `package.path` is configured with `~/.config/capstan/?.lua`
+3. Embedded Lua modules are registered in `package.preload`
+4. `http_init(L)` — registers global `http = {get, post, post_stream, ...}`
+5. `agent_init(L)` — registers global `agent = {append, set_info, ...}`
+6. `tools_init(L)` — registers built-in tool helpers
+7. `mcp_init(L)` — registers global `mcp = {spawn, send, recv, alive, kill}`
+8. `capstan` runtime paths are registered
+9. User config and persisted runtime state are loaded into `capstan`
+10. `permit`, `log`, and `popup` globals are registered
+11. The embedded system prompt plus project instructions/skills are loaded
+12. `agent/runtime.lua` is loaded — side-effect: sets `_G.agent_entry`
 
 Plugins are loaded AFTER this — they can use the registered globals.
 
 ### Message flow (the tricky part)
 
-After ANY Enter (command or plain text):
+After a non-empty Enter (command or plain text, or empty Enter with buffered results pending):
 ```
 add_message(ui_text, raw_text, MSG_USER)  // user/plugin text
 add_message(empty, empty, MSG_AGENT)      // empty green placeholder FIRST
-agent_emit(L)                            // THEN emit — builds history, calls _G.agent_entry
+agent_build_and_dispatch(L)              // THEN build & dispatch — builds history, calls _G.agent_entry
 ```
 
-Why this order: `agent_emit` filters empty messages (`text[0] == '\0'`) so the empty AGENT doesn't go to the LLM. But the AGENT message exists in the array — so `agent.append(chunk, "agent")` from Lua callbacks finds and fills it.
+Why this order: `agent_build_and_dispatch` filters empty messages (`text[0] == '\0'`) so the empty AGENT doesn't go to the LLM. But the AGENT message exists in the array — so `agent.append(chunk, "agent")` from Lua callbacks finds and fills it.
 
 ### Memory ownership
 
-- `add_message(text, raw_text, role)` — **takes ownership** of both pointers. Caller must pass malloc'd strings (e.g., `my_strdup`). No strdup inside.
+- `add_message(text, raw_text, role)` — **takes ownership** of both pointers. Caller must pass malloc'd strings (e.g., `my_strdup`). The function does not call strdup internally.
 - `append_to_last_message` — `realloc`s `m->raw_text`, sets `m->text = m->raw_text`.
 - `clear_messages` — frees both `text` and `raw_text` (checks `raw_text != text` to avoid double-free).
 
@@ -152,9 +153,9 @@ All SSE parsing is in Lua (`agent/stream.lua`). C only passes raw bytes. Provide
 - `http.get()` / `http.post()` use `curl_multi` internally and call `render_all()` in a spin loop — UI shows a pulsing dot loader (`·` → `•` → `●`, 8 frames) at `(rows-1, MARGIN+1)`, with an italic label `"Thinking"` (red) or `"Answering"` (dim) next to it, while the request is active.
 - `http.post_stream()` is fully async, data arrives via callbacks, no spinner needed.
 
-### Apperance
+### Appearance
 - Spinner at `(rows-1, MARGIN+1)` shows during any active curl transfer.
-- Cursor hidden while loading, restored after.
+- The cursor is hidden while loading and restored afterwards.
 
 ## Testing
 
@@ -193,14 +194,6 @@ plugins:
 cd /tmp/capstan-build-smoke.XXXXXX/run && HOME=/tmp/capstan-build-smoke.XXXXXX/home /tmp/capstan-build-smoke.XXXXXX/bin/capstan
 ```
 
-### Currently tested modules
-
-| Module | Tests | File |
-|--------|-------|------|
-| `input.c` | 12 tests (ASCII insert, UTF-8 nav, backspace, clear) | `test/test_input.c` |
-| `scroll.c` | 12 tests (up/down, clamp, reset, set, follow-tail) | `test/test_scroll.c` |
-| `utils.c` | 5 tests (my_strdup, replace_with) | `test/test_utils.c` |
-
 ### Adding new tests
 
 1. Create `test/test_<module>.c` with a `MunitTest` array and exported `MunitSuite`.
@@ -230,20 +223,10 @@ MunitSuite my_module_suite = {"/my_module", tests, NULL, 1, MUNIT_SUITE_OPTION_N
 ### Testable vs untestable modules
 
 Modules that depend on ncurses, Lua, or curl cannot be unit-tested without
-those libraries. The current split:
+those libraries. To make more modules testable, extract pure-logic functions
+that don't call ncurses/Lua/curl APIs, and put them in separate source files.
 
-| Testable (no deps) | Untestable (needs ncurses/Lua/curl) |
-|---------------------|--------------------------------------|
-| `dispatch_logic.c` | `tui.c` (ncurses) |
-| `input.c` | `agent.c` (Lua) |
-| `permit_logic.c` | `dispatch.c` (Lua/TUI/plugins) |
-| `scroll.c` | `permit.c` (Lua/TUI/shell) |
-| `utils.c` | `plugins.c` (Lua) |
-|  | `http.c` (curl) |
-|  | `popup.c` (ncurses) |
-
-To make more modules testable, extract pure-logic functions that don't call
-ncurses/Lua/curl APIs, and put them in separate source files.
+See `TEST_SRCS` in the Makefile for the current list of testable modules.
 
 ### Test policy
 
@@ -299,8 +282,8 @@ Feature specs:
 
 ## Conventions
 
-- C99, `-Wall -Wextra -Werror`, `-D_POSIX_C_SOURCE=200112L`
+- `gnu99`, `-Wall -Wextra -Werror`, `-D_POSIX_C_SOURCE=200112L`
 - `l_` prefix for Lua-bound C functions
 - `my_strdup()` instead of POSIX `strdup()`
 - ncurses + Lua linked statically (`.a`), libcurl dynamic (`-lcurl`)
-- Dynamic arrays: double capacity when full (not fixed increment)
+- Dynamic arrays: double capacity when full (rather than a fixed increment)
