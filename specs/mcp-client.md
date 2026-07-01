@@ -64,6 +64,10 @@ LLM calls "mcp__browser__browser_navigate"
 
 ### Permissions
 
+- Configured MCP servers are trusted local or remote integrations, not
+  sandboxed code. Stdio servers run as subprocesses of Capstan, and HTTP
+  servers receive the headers configured by the user. Only configure MCP servers
+  you trust with the workspace and credentials made available to Capstan.
 - Each MCP tool is checked via `permit.check("mcp", tool_name)`.
 - Default: `ask` — user sees a permission popup.
 - Users can pre-grant via config: `{tool="mcp", pattern="https://example.com/*", allow=true}`.

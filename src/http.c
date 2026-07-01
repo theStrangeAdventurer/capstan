@@ -20,6 +20,8 @@ typedef struct {
   char *data;
   size_t size;
   size_t cap;
+  size_t max_size;
+  int overflow;
 } RespBuf;
 
 typedef struct {
@@ -46,6 +48,12 @@ static int g_headless = 0;
 static long long g_last_wait_render_ms = 0;
 
 #define HTTP_WAIT_RENDER_INTERVAL_MS 16
+#define HTTP_DEFAULT_TIMEOUT_MS 60000L
+#define HTTP_CONNECT_TIMEOUT_MS 10000L
+#define HTTP_LOW_SPEED_LIMIT 1L
+#define HTTP_LOW_SPEED_TIME 60L
+#define HTTP_MAX_RESPONSE_BYTES (10L * 1024L * 1024L)
+#define HTTP_MAX_HEADER_BYTES (256L * 1024L)
 
 int http_is_loading(void) {
   if (g_sync_active)
@@ -101,6 +109,11 @@ write_cb(char *chunk_ptr,
 ) {
   RespBuf *buf = resp_data_ptr;
   size_t total = size * count;
+  size_t max_size = buf->max_size ? buf->max_size : HTTP_MAX_RESPONSE_BYTES;
+  if (total > max_size || buf->size + total > max_size) {
+    buf->overflow = 1;
+    return 0;
+  }
   char *new_ptr = realloc(buf->data, buf->size + total + 1);
 
   if (!new_ptr)
@@ -183,6 +196,9 @@ static void configure_http_handle(CURL *easy, const char *url) {
   curl_easy_setopt(easy, CURLOPT_URL, url);
   curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(easy, CURLOPT_MAXREDIRS, 10L);
+  curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT_MS, HTTP_CONNECT_TIMEOUT_MS);
+  curl_easy_setopt(easy, CURLOPT_LOW_SPEED_LIMIT, HTTP_LOW_SPEED_LIMIT);
+  curl_easy_setopt(easy, CURLOPT_LOW_SPEED_TIME, HTTP_LOW_SPEED_TIME);
 #if LIBCURL_VERSION_NUM >= 0x075500
   curl_easy_setopt(easy, CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
@@ -342,6 +358,7 @@ static int l_http_post(lua_State *L) {
   CURL *easy = curl_easy_init();
   configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
+  curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, HTTP_DEFAULT_TIMEOUT_MS);
 
   if (body) {
     curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)body_len);
@@ -353,6 +370,7 @@ static int l_http_post(lua_State *L) {
   }
 
   RespBuf response = {0};
+  response.max_size = HTTP_MAX_RESPONSE_BYTES;
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
 
@@ -372,8 +390,13 @@ static int l_http_post(lua_State *L) {
 
   long status = 0;
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
-  lua_pushinteger(L, status);
-  lua_pushstring(L, response.data ? response.data : "");
+  if (response.overflow) {
+    lua_pushinteger(L, 0);
+    lua_pushliteral(L, "Response too large");
+  } else {
+    lua_pushinteger(L, status);
+    lua_pushstring(L, response.data ? response.data : "");
+  }
   free(response.data);
   curl_slist_free_all(headers);
   curl_easy_cleanup(easy);
@@ -395,8 +418,8 @@ static int l_http_post_response(lua_State *L) {
   CURL *easy = curl_easy_init();
   configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
-  if (timeout_ms > 0)
-    curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
+  curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS,
+                   (long)(timeout_ms > 0 ? timeout_ms : HTTP_DEFAULT_TIMEOUT_MS));
 
   if (body) {
     curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)body_len);
@@ -409,6 +432,8 @@ static int l_http_post_response(lua_State *L) {
 
   RespBuf response = {0};
   RespBuf response_headers = {0};
+  response.max_size = HTTP_MAX_RESPONSE_BYTES;
+  response_headers.max_size = HTTP_MAX_HEADER_BYTES;
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
   curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
@@ -433,10 +458,11 @@ static int l_http_post_response(lua_State *L) {
 
   lua_newtable(L);
 
-  lua_pushinteger(L, status);
+  lua_pushinteger(L, response.overflow ? 0 : status);
   lua_setfield(L, -2, "status");
 
-  lua_pushstring(L, response.data ? response.data : "");
+  lua_pushstring(L, response.overflow ? "Response too large" :
+                                      (response.data ? response.data : ""));
   lua_setfield(L, -2, "body");
 
   push_headers_table(L, response_headers.data);
@@ -486,6 +512,8 @@ static int l_http_post_response_async(lua_State *L) {
   ctx->headers = headers;
   ctx->response_mode = 1;
   ctx->background = background;
+  ctx->response.max_size = HTTP_MAX_RESPONSE_BYTES;
+  ctx->response_headers.max_size = HTTP_MAX_HEADER_BYTES;
 
   configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
@@ -552,6 +580,7 @@ static int l_http_get(lua_State *L) {
   }
 
   RespBuf response = {0};
+  response.max_size = HTTP_MAX_RESPONSE_BYTES;
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
 
@@ -571,8 +600,13 @@ static int l_http_get(lua_State *L) {
 
   long status = 0;
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
-  lua_pushinteger(L, status);
-  lua_pushstring(L, response.data ? response.data : "");
+  if (response.overflow) {
+    lua_pushinteger(L, 0);
+    lua_pushliteral(L, "Response too large");
+  } else {
+    lua_pushinteger(L, status);
+    lua_pushstring(L, response.data ? response.data : "");
+  }
 
   free(response.data);
   curl_slist_free_all(headers);
@@ -656,7 +690,11 @@ int http_poll_limited(lua_State *L, int max_callbacks) {
 
     int nargs = 0;
     if (response_mode) {
-      if (curl_rc != CURLE_OK) {
+      if (found->response.overflow) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "Response too large");
+        nargs = 2;
+      } else if (curl_rc != CURLE_OK) {
         lua_pushnil(L);
         lua_pushfstring(L, "Connection error: %s", curl_easy_strerror(curl_rc));
         nargs = 2;
