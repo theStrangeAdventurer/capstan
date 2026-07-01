@@ -221,6 +221,11 @@ static int update_diff_state(int state, const char *line, int len) {
   return 0;
 }
 
+static int starts_tool_status_line(const char *line) {
+  return strncmp(line, "⚙", strlen("⚙")) == 0 ||
+         strncmp(line, "  $ ", 4) == 0;
+}
+
 static void render_status_pair(WINDOW *win, int y, int x, const char *label,
                                const char *value, int value_width) {
   int dim = dim_gray_attr();
@@ -500,6 +505,8 @@ void render_all(void) {
 
     const char *p = msg->text;
     int diff_state = 0;
+    const char *logical_line_start = p;
+    int in_tool_status_block = 0;
     for (int l = 0; l < line_counts[i]; l++) {
       const char *line_end = p;
       int col = 0;
@@ -515,10 +522,17 @@ void render_all(void) {
       int line_len = (int)(line_end - p);
       int current_diff_state = diff_state;
       int next_diff_state = update_diff_state(diff_state, p, line_len);
+
+      if (!is_user && p == logical_line_start) {
+        if (line_end == logical_line_start) {
+          in_tool_status_block = 0;
+        } else if (starts_tool_status_line(logical_line_start)) {
+          in_tool_status_block = 1;
+        }
+      }
+
       if (global_line >= top_line && win_row < msg_h) {
-        int is_tool_status =
-            !is_user && (strncmp(p, "⚙", strlen("⚙")) == 0 ||
-                         strncmp(p, "  $ ", 4) == 0);
+        int is_tool_status = !is_user && in_tool_status_block;
         int diff_pair = !is_user && (current_diff_state == 3 || current_diff_state == 4)
                             ? diff_line_color_pair(p, line_len)
                             : 0;
@@ -569,8 +583,10 @@ void render_all(void) {
         win_row++;
       }
 
-      if (*line_end == '\n')
+      if (*line_end == '\n') {
         line_end++;
+        logical_line_start = line_end;
+      }
       p = line_end;
       diff_state = next_diff_state;
       global_line++;
