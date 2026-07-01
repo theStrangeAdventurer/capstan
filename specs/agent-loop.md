@@ -227,6 +227,11 @@ internal `capstan.agent.run` executions, hides `subagents` from nested tool
 lists, and returns one structured JSON tool result to the orchestrator.
 `subagents` itself does not use a permission target; its availability and scale
 are controlled by `capabilities.subagents` and the `subagents.max_*` limits.
+The orchestrator can pass shared `instructions` into a subagent call; the
+runtime prepends those instructions to every child prompt. This is intended for
+any delegated workflow where the parent has already selected the policy or tool
+family: the parent passes concrete instructions down and narrows each child
+`tools` list instead of letting children inherit every available tool.
 
 ## Extension Points
 
@@ -251,8 +256,8 @@ must be opt-in with a cheap no-hook fast path.
 ## Performance Constraints
 
 - SSE parsing stays in Lua because provider semantics are policy, not mechanics.
-- Raw SSE logging remains opt-in via `CAPSTAN_LOG_RAW` because stream payloads can
-  be large and sensitive.
+- Raw SSE logging remains opt-in via `LOG_LEVEL=trace` because stream payloads
+  can be large and sensitive.
 - Per-chunk work must stay bounded. Token accounting should avoid rescanning the
   full accumulated answer on every chunk.
 - Hook dispatch must skip allocation-heavy work when no hooks are registered for

@@ -262,7 +262,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                         tool_calls_accum[idx].arguments = tool_calls_accum[idx].arguments .. tc["function"].arguments
                     end
                 end
-                logging.runtime_log("stream", string.format(
+                logging.debug("stream", string.format(
                     "tool_delta index=%d id=%s name=%s args_bytes=%d",
                     idx,
                     logging.compact(tool_calls_accum[idx].id, 64),
@@ -348,7 +348,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             end
 
             if tool_delta_chunks > 0 and #final_calls == 0 then
-                logging.runtime_log("stream", "tool_deltas_without_final_calls")
+                logging.runtime_log("stream", "tool_deltas_without_final_calls", "warn")
             end
             local protocol_error = minimax_text_tool_protocol_error(provider, accumulated_text)
             if #final_calls == 0 and protocol_error then

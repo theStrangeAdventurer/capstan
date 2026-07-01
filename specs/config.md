@@ -47,6 +47,11 @@ return {
     ignore_files = { ".gitignore", ".ignore" },
     ignore_patterns = { "vendor/**", "build/**", "*.o" },
   },
+  redaction = {
+    names = { "tenant-id" },
+    name_patterns = { "^x%-internal%-" },
+    value_patterns = { "org_[%w%-]+" },
+  },
   hooks = {
     before_request = function(ctx)
       ctx.request.temperature = 0.2
@@ -69,6 +74,9 @@ return {
 - `finder.ignore_files` lists workspace-root ignore files to read in addition
   to the default `.gitignore`.
 - `finder.ignore_patterns` adds gitignore-like patterns directly.
+- `redaction` extends secret masking in Lua-visible shell output, tool results,
+  and runtime logs. Built-in masking for common credentials remains enabled;
+  config entries only add project-specific rules.
 - `hooks` registers [agent hook](hooks.md) functions during runtime startup.
 - `capabilities.self_improvement = true` explicitly enables the built-in
   [self-improvement skill](self-improvement.md). It is disabled by default.
@@ -99,7 +107,15 @@ return {
   OpenAI-compatible request body as a `reasoning` object. The run-level effort
   override takes precedence over provider defaults.
 - `subagents.max_concurrent`, `max_tasks`, `max_turns`, and `max_turns_cap`
-  limit delegated internal runs.
+  limit delegated internal runs. `max_turns` is the default per-task turn budget
+  when a subagent task omits its own value; explicit task budgets are respected
+  up to `max_turns_cap`.
+- `redaction.names` is a case-insensitive list of field or header names whose
+  values should be masked.
+- `redaction.name_patterns` is a list of Lua patterns matched against the
+  lowercased field or header name.
+- `redaction.value_patterns` is a list of Lua patterns replaced anywhere in
+  text with `[REDACTED]`.
 
 ## Compatibility
 
