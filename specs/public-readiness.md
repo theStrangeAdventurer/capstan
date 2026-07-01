@@ -10,6 +10,10 @@ posts.
 - User plugins live as separate Lua files under `~/.config/capstan/plugins/`
   and are hot-reloaded by the running process.
 - Model-initiated tool calls go through explicit permissions.
+- Runtime logs and shell/tool continuations redact common secret shapes.
+- Model-initiated file tools reject symlink escapes from the active workspace
+  and prompt for sensitive local filenames such as `.env`.
+- Blocking HTTP helpers enforce time and response-size limits.
 - The `self-improvement` built-in skill is opt-in through
   `capabilities.self_improvement = true`.
 - The binary can be smoke-tested with `./build/capstan --self-test-embedded`.
@@ -37,6 +41,7 @@ Do not present these as implemented:
 
 - forked subagents;
 - isolated plugin sandboxing;
+- sandboxed MCP servers;
 - performance superiority beyond measured binary size and smoke-test behavior.
 
 ## Readiness Checklist

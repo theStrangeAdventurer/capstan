@@ -13,6 +13,8 @@ conversation context.
   `Fetched <url> (HTTP <status>, <bytes> bytes)`.
 - Non-2xx responses display `Fetch failed: <url> (HTTP <status>)`.
 - HTTP redirects are followed by the shared HTTP layer, up to 10 redirects.
+- Blocking HTTP responses are bounded by the shared HTTP layer's timeout and
+  response-size limits.
 - Requests send a `User-Agent` header:
   `Capstan/1.0 (+https://github.com/theStrangeAdventurer/tui-agent)`.
 - Set `CAPSTAN_PLUGIN_FETCH_UA` to a non-empty value to override the default
@@ -45,7 +47,9 @@ prompt path unless the user has granted a matching rule.
 `plugins/fetch.lua` is a built-in Lua plugin. It uses the existing blocking
 `http.get(url)` binding, so the UI spinner behavior is inherited from the HTTP
 module. Redirect handling is configured in `src/http.c` so all Lua HTTP helpers
-share the same redirect behavior.
+share the same redirect behavior. The shared HTTP layer also sets connection
+and low-speed timeouts and rejects responses larger than the built-in response
+limit instead of buffering unbounded data.
 
 The plugin intentionally accepts only `http://` and `https://` URLs. Other
 schemes are rejected so this command cannot bypass file access permissions via
