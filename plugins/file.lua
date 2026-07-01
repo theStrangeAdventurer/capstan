@@ -81,7 +81,9 @@ function plugin.handler(ctx)
 
 	for _i, filename in ipairs(filenames) do
 		if ctx.tool_args then
-			local allowed, reason = workspace.model_path_allowed(filename, "read")
+			local allowed, reason = workspace.model_path_allowed(filename, "read", {
+				allow_outside_workspace = ctx.permission and ctx.permission.allow_outside_workspace
+			})
 			if not allowed then
 				local resolved = workspace.resolve_path(filename)
 				table.insert(ui_parts, "❌ " .. resolved .. " (" .. reason .. ")")

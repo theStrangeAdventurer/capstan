@@ -147,7 +147,10 @@ The built-in file plugins also verify real filesystem paths for model-initiated
 calls when `capstan.realpath` is available. Existing targets are checked after
 resolving symlinks. New write targets check the nearest existing parent
 directory. A path that appears inside the workspace but resolves outside it is
-rejected before reading or writing.
+rejected before reading or writing, unless it is a model-initiated read of a
+registered skill file under one of Capstan's skill roots. Model-initiated reads
+of explicit absolute paths outside the workspace are allowed only after the
+normal permission decision allows that external target.
 
 `src/permit.c` owns rule loading, saving, matching, config-rule import, and the
 Lua-facing `permit` table. `src/tui.c` renders the blocking permit confirmation

@@ -614,7 +614,7 @@ local function run_subagents(args, run_ctx)
 end
 
 -- Dispatches a single tool call to its plugin handler (or subagents builtin or MCP server).
-local function call_plugin_tool(tool_name, args, run_ctx)
+local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
     if tool_name == "subagents" then
         return run_subagents(args, run_ctx)
     end
@@ -641,6 +641,7 @@ local function call_plugin_tool(tool_name, args, run_ctx)
         command = p.command,
         args = {},
         tool_args = args,
+        permission = permission_ctx,
     }
     function ctx:replace(ui_val, llm_val)
         return ui_val, llm_val or ui_val
@@ -848,8 +849,8 @@ local function redacted_tool_arguments(tool_name, raw_arguments)
     return redact_sensitive_text(raw_arguments or "")
 end
 
-local function call_plugin_tool_redacted(tool_name, args, run_ctx)
-    local result, ok = call_plugin_tool(tool_name, args, run_ctx)
+local function call_plugin_tool_redacted(tool_name, args, run_ctx, permission_ctx)
+    local result, ok = call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
     if tool_name == "shell" then
         result = redact_sensitive_text(result)
     end
@@ -912,12 +913,12 @@ local function scope_allows(scope, permission_tool)
 end
 
 local function path_is_within_workdir(path)
-    local workdir = configured_workdir()
+    local workdir = workspace.configured_workdir()
     if type(path) ~= "string" or path == "" or type(workdir) ~= "string" or workdir == "" then
         return false
     end
-    local normalized_path = normalize_path(path):gsub("/+$", "")
-    local normalized_workdir = normalize_path(workdir):gsub("/+$", "")
+    local normalized_path = workspace.normalize_path(path):gsub("/+$", "")
+    local normalized_workdir = workspace.normalize_path(workdir):gsub("/+$", "")
     return normalized_path == normalized_workdir or normalized_path:sub(1, #normalized_workdir + 1) == normalized_workdir .. "/"
 end
 
@@ -950,6 +951,15 @@ local function apply_prompt_decision(decision, scope, permission_tool)
         return true
     end
     return decision == "allow" or decision == "always"
+end
+
+local function tool_permission_context(permission_tool, target)
+    if not permission_tool then return nil end
+    local ctx = {tool = permission_tool, target = target}
+    if permission_tool == "file_read" and not path_is_within_workdir(target) then
+        ctx.allow_outside_workspace = true
+    end
+    return ctx
 end
 
 -- Processes tool_calls from an LLM response: rejects unavailable tools, decodes
@@ -1076,7 +1086,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                 if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
                             else
                                 local tool_ok
-                                result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx)
+                                result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx, tool_permission_context(permission_tool, target))
                                 if tool_ok then
                                     logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
                                     if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end
@@ -1088,7 +1098,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                         end
                     else
                         local tool_ok
-                        result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx)
+                        result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx, tool_permission_context(permission_tool, target))
                         if tool_ok then
                             logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
                             if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end

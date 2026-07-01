@@ -77,7 +77,47 @@ function M.real_workspace()
     return M.realpath(M.configured_workdir())
 end
 
-function M.model_path_allowed(path, mode)
+local function requested_path_is_within_workspace(path)
+    local requested = M.normalize_path(path)
+    local configured = M.normalize_path(M.configured_workdir())
+    return M.path_is_within(requested, configured)
+end
+
+local function real_skill_roots()
+    local roots = {}
+    local configured = _G.capstan and _G.capstan.skill_roots
+    if type(configured) ~= "table" then return roots end
+    for _, root in ipairs(configured) do
+        if type(root) == "string" and root ~= "" then
+            local real = M.realpath(root)
+            if real then table.insert(roots, real) end
+        end
+    end
+    return roots
+end
+
+local function path_is_allowed_skill_read(requested_path, target_real)
+    if type(requested_path) ~= "string" or requested_path == "" then return false end
+    local requested = M.normalize_path(requested_path)
+    for _, root in ipairs(real_skill_roots()) do
+        if M.path_is_within(target_real, root) then
+            return true
+        end
+    end
+    local configured = _G.capstan and _G.capstan.skill_roots
+    if type(configured) ~= "table" then return false end
+    for _, root in ipairs(configured) do
+        if type(root) == "string" and root ~= "" then
+            local normalized_root = M.normalize_path(root)
+            if M.path_is_within(requested, normalized_root) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function M.model_path_allowed(path, mode, opts)
     if not (_G.capstan and type(_G.capstan.realpath) == "function") then
         return true
     end
@@ -91,6 +131,14 @@ function M.model_path_allowed(path, mode)
     local target_real = M.realpath(resolved)
     if target_real then
         if M.path_is_within(target_real, workdir) then
+            return true
+        end
+        if mode == "read" and path_is_allowed_skill_read(resolved, target_real) then
+            return true
+        end
+        local requested = M.normalize_path(resolved)
+        if mode == "read" and opts and opts.allow_outside_workspace and
+            not requested_path_is_within_workspace(requested) then
             return true
         end
         return false, "resolved path escapes workspace: " .. target_real

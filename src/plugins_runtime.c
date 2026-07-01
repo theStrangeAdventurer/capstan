@@ -264,6 +264,22 @@ static void load_system_prompt(void) {
   if (lua_istable(L, -1)) {
     lua_pushstring(L, skills_summary ? skills_summary : "No skills loaded.");
     lua_setfield(L, -2, "skills_summary");
+
+    lua_newtable(L);
+    int skill_root_index = 1;
+    if (project_skills_dir) {
+      lua_pushstring(L, project_skills_dir);
+      lua_rawseti(L, -2, skill_root_index++);
+    }
+    if (user_skills_dir) {
+      lua_pushstring(L, user_skills_dir);
+      lua_rawseti(L, -2, skill_root_index++);
+    }
+    if (common_skills_dir) {
+      lua_pushstring(L, common_skills_dir);
+      lua_rawseti(L, -2, skill_root_index++);
+    }
+    lua_setfield(L, -2, "skill_roots");
   }
   lua_pop(L, 1);
 
