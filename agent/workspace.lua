@@ -43,6 +43,80 @@ function M.resolve_path(path)
     return M.configured_workdir():gsub("/+$", "") .. "/" .. path
 end
 
+function M.realpath(path)
+    if _G.capstan and type(_G.capstan.realpath) == "function" then
+        local ok, resolved = pcall(_G.capstan.realpath, path)
+        if ok then return resolved end
+    end
+    return nil
+end
+
+function M.path_is_within(path, base)
+    if type(path) ~= "string" or type(base) ~= "string" or path == "" or base == "" then
+        return false
+    end
+    path = path:gsub("/+$", "")
+    base = base:gsub("/+$", "")
+    return path == base or path:sub(1, #base + 1) == base .. "/"
+end
+
+local function nearest_existing_parent(path)
+    local dir = M.dirname(path)
+    while dir and dir ~= "" do
+        local real = M.realpath(dir)
+        if real then return real, dir end
+        if dir == "." or dir == "/" then break end
+        local next_dir = M.dirname(dir)
+        if next_dir == dir then break end
+        dir = next_dir
+    end
+    return nil, dir
+end
+
+function M.real_workspace()
+    return M.realpath(M.configured_workdir())
+end
+
+function M.model_path_allowed(path, mode)
+    if not (_G.capstan and type(_G.capstan.realpath) == "function") then
+        return true
+    end
+
+    local workdir = M.real_workspace()
+    if not workdir then
+        return false, "workspace realpath failed"
+    end
+
+    local resolved = M.resolve_path(path)
+    local target_real = M.realpath(resolved)
+    if target_real then
+        if M.path_is_within(target_real, workdir) then
+            return true
+        end
+        return false, "resolved path escapes workspace: " .. target_real
+    end
+
+    if mode == "write" then
+        local parent_real = nearest_existing_parent(resolved)
+        if parent_real and M.path_is_within(parent_real, workdir) then
+            return true
+        end
+        return false, "parent directory escapes workspace"
+    end
+
+    return false, "path does not exist"
+end
+
+function M.is_sensitive_path(path)
+    if type(path) ~= "string" then return false end
+    local name = path:match("([^/]+)$") or path
+    local lower = name:lower()
+    return lower == ".env" or lower:match("^%.env%.") ~= nil or
+        lower:find("secret", 1, true) ~= nil or
+        lower:find("token", 1, true) ~= nil or
+        lower:find("credential", 1, true) ~= nil
+end
+
 function M.normalize_path(path, workdir)
     if type(path) ~= "string" or path == "" then
         return path

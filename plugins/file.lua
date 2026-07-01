@@ -80,6 +80,15 @@ function plugin.handler(ctx)
 	local llm_parts = {}
 
 	for _i, filename in ipairs(filenames) do
+		if ctx.tool_args then
+			local allowed, reason = workspace.model_path_allowed(filename, "read")
+			if not allowed then
+				local resolved = workspace.resolve_path(filename)
+				table.insert(ui_parts, "❌ " .. resolved .. " (" .. reason .. ")")
+				table.insert(llm_parts, "❌ Cannot open " .. resolved .. ": " .. reason)
+				goto continue
+			end
+		end
 		local resolved_filename, file, err = resolve_filename(filename)
 		if not file then
 			local resolved = workspace.resolve_path(filename)
@@ -121,6 +130,7 @@ function plugin.handler(ctx)
 				))
 			end
 		end
+		::continue::
 	end
 
 	local ui_value = table.concat(ui_parts, "\n")
