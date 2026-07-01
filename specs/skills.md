@@ -25,6 +25,21 @@ directories at startup.
   or the task matches a skill description, the agent must read the listed
   `Skill file` completely before applying the skill. The metadata index alone is
   not enough to use a skill.
+- Matching skills have priority zero in tool selection: a skill whose name or
+  description matches the task must be used before MCP tools, built-in tools,
+  fetch/direct HTTP, and shell. For research or web-search tasks, any matching
+  research/web/search skill must be used before MCP browser/search tools,
+  regardless of its exact directory name. Generic fetch/direct HTTP is only a
+  fallback for specific URLs or when no specialized option is available.
+- Once a matching skill is loaded, its tool instructions are authoritative for
+  that workflow. If the skill explicitly instructs the agent to use shell/curl
+  or another otherwise lower-priority tool, the agent should follow the skill
+  rather than applying the generic fallback order.
+- When skill-based work is delegated to subagents, the orchestrator should read
+  the skill first, pass the concrete workflow/tool instructions through the
+  subagents `instructions` field, and restrict each child to the narrow required
+  tool list. Children should not be asked to rediscover the same skill with the
+  full parent tool set.
 - Files below the skill directory, such as `references/*.md` and `scripts/*`,
   are not listed in the system prompt. They are shown by `/skills` for
   diagnostics and should be read only when `SKILL.md` asks for them.
