@@ -3,6 +3,7 @@
 #include <lua.h>
 #include <lualib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -21,6 +22,17 @@ static lua_State *new_state(void) {
   return L;
 }
 
+static int l_capstan_realpath(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+  char resolved[4096];
+  if (!realpath(path, resolved)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushstring(L, resolved);
+  return 1;
+}
+
 static void load_file_plugin(lua_State *L) {
   int rc = luaL_dofile(L, "plugins/file.lua");
   munit_assert_int(rc, ==, LUA_OK);
@@ -31,6 +43,8 @@ static void set_capstan_workdir(lua_State *L, const char *path) {
   lua_newtable(L);
   lua_pushstring(L, path);
   lua_setfield(L, -2, "workdir");
+  lua_pushcfunction(L, l_capstan_realpath);
+  lua_setfield(L, -2, "realpath");
   lua_setglobal(L, "capstan");
 }
 
@@ -47,6 +61,23 @@ static void call_handler(lua_State *L, const char *path) {
   lua_pushstring(L, path);
   lua_rawseti(L, -2, 1);
   lua_setfield(L, -2, "args");
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void call_handler_tool(lua_State *L, const char *path) {
+  lua_getfield(L, -1, "handler");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_setfield(L, -2, "args");
+  lua_newtable(L);
+  lua_pushstring(L, path);
+  lua_setfield(L, -2, "path");
+  lua_setfield(L, -2, "tool_args");
   lua_pushcfunction(L, l_ctx_replace);
   lua_setfield(L, -2, "replace");
 
@@ -178,6 +209,51 @@ static MunitResult test_directory_path_returns_listing(
   return MUNIT_OK;
 }
 
+static MunitResult test_tool_read_rejects_symlink_escape(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  char outside[4096];
+  snprintf(workdir, sizeof(workdir), "/tmp/capstan-file-link-work-%ld",
+           (long)getpid());
+  snprintf(outside, sizeof(outside), "/tmp/capstan-file-link-out-%ld",
+           (long)getpid());
+  rmdir(workdir);
+  rmdir(outside);
+  munit_assert_int(mkdir(workdir, 0700), ==, 0);
+  munit_assert_int(mkdir(outside, 0700), ==, 0);
+
+  char secret[4096];
+  snprintf(secret, sizeof(secret), "%s/secret.txt", outside);
+  FILE *f = fopen(secret, "w");
+  munit_assert_not_null(f);
+  fputs("outside secret", f);
+  fclose(f);
+
+  char link_path[4096];
+  snprintf(link_path, sizeof(link_path), "%s/link.txt", workdir);
+  munit_assert_int(symlink(secret, link_path), ==, 0);
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_plugin(L);
+  call_handler_tool(L, "link.txt");
+
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(llm);
+  munit_assert_null(strstr(llm, "outside secret"));
+  munit_assert_not_null(strstr(llm, "escapes workspace"));
+
+  lua_close(L);
+  unlink(link_path);
+  unlink(secret);
+  rmdir(outside);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/readme_fallback_reads_readme_md", test_readme_fallback_reads_readme_md,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -189,6 +265,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/directory_path_returns_listing", test_directory_path_returns_listing,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_read_rejects_symlink_escape",
+     test_tool_read_rejects_symlink_escape, NULL, NULL, MUNIT_TEST_OPTION_NONE,
+     NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite file_plugin_suite = {"/file_plugin", tests, NULL, 1,

@@ -18,6 +18,12 @@ The built-in `self-improvement` skill, when explicitly enabled, instructs the
 agent to write durable extensions here instead of embedding plugin code inside
 `config.lua`.
 
+Plugins are trusted local code, not a security sandbox. A plugin can use Lua
+standard libraries and Capstan runtime APIs with the same local authority as the
+Capstan process. Only install or generate plugins you are willing to run as
+local code. The self-improvement skill is disabled unless
+`capabilities.self_improvement = true` is set explicitly.
+
 ## Hot Reload
 
 Capstan watches the user plugin directory while the process is running. The

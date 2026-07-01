@@ -16,6 +16,17 @@ static int l_ctx_replace(lua_State *L) {
   return 2;
 }
 
+static int l_capstan_realpath(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+  char resolved[4096];
+  if (!realpath(path, resolved)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushstring(L, resolved);
+  return 1;
+}
+
 static lua_State *new_state(void) {
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
@@ -141,6 +152,8 @@ static void set_capstan_workdir(lua_State *L, const char *path) {
   lua_newtable(L);
   lua_pushstring(L, path);
   lua_setfield(L, -2, "workdir");
+  lua_pushcfunction(L, l_capstan_realpath);
+  lua_setfield(L, -2, "realpath");
   lua_setglobal(L, "capstan");
 }
 
@@ -496,6 +509,52 @@ static MunitResult test_tool_metadata_exposes_append_mode(
   return MUNIT_OK;
 }
 
+static MunitResult test_tool_write_rejects_symlink_escape(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  char outside[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "file-write-link-work");
+  make_tmp_dir(outside, sizeof(outside), "file-write-link-out");
+
+  char secret[4096];
+  snprintf(secret, sizeof(secret), "%s/secret.txt", outside);
+  FILE *f = fopen(secret, "w");
+  munit_assert_not_null(f);
+  fputs("keep me", f);
+  fclose(f);
+
+  char link_path[4096];
+  snprintf(link_path, sizeof(link_path), "%s/link.txt", workdir);
+  munit_assert_int(symlink(secret, link_path), ==, 0);
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_write_plugin(L);
+  call_handler_tool(L, "link.txt", "overwrite");
+
+  const char *ui = lua_tostring(L, -2);
+  munit_assert_not_null(ui);
+  munit_assert_not_null(strstr(ui, "escapes workspace"));
+
+  char buf[64];
+  f = fopen(secret, "r");
+  munit_assert_not_null(f);
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+  munit_assert_string_equal(buf, "keep me");
+
+  lua_close(L);
+  unlink(link_path);
+  unlink(secret);
+  rmdir(outside);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/relative_path_uses_launch_pwd", test_relative_path_uses_launch_pwd, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -521,6 +580,9 @@ static MunitTest tests[] = {
     {"/tool_metadata_exposes_append_mode",
      test_tool_metadata_exposes_append_mode, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_write_rejects_symlink_escape",
+     test_tool_write_rejects_symlink_escape, NULL, NULL, MUNIT_TEST_OPTION_NONE,
+     NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite file_write_plugin_suite = {"/file_write_plugin", tests, NULL, 1,

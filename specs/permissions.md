@@ -102,6 +102,9 @@ If no configured or persisted rule matches:
   configured [workspace directory](workspace-directory.md).
 - `file_read` returns `ask` when the normalized target escapes the configured
   workspace directory.
+- Sensitive local filenames such as `.env`, `.env.*`, or names containing
+  `secret`, `token`, or `credential` force an `ask` decision for model-initiated
+  file tools even when the path is inside the workspace.
 - All other tools return `ask`.
 
 The `subagents` model tool does not use a permission pattern. It is exposed by
@@ -140,6 +143,12 @@ or fall back to the tool name. Local file permission targets (`file_read` and
 `capstan.workdir`, `~/` expands through `HOME`, and `.` and `..` segments are
 collapsed.
 
+The built-in file plugins also verify real filesystem paths for model-initiated
+calls when `capstan.realpath` is available. Existing targets are checked after
+resolving symlinks. New write targets check the nearest existing parent
+directory. A path that appears inside the workspace but resolves outside it is
+rejected before reading or writing.
+
 `src/permit.c` owns rule loading, saving, matching, config-rule import, and the
 Lua-facing `permit` table. `src/tui.c` renders the blocking permit confirmation
 popup.
@@ -157,8 +166,9 @@ rules while still executing the `file_edit` handler.
 ## Tests
 
 Provider-level tests cover permission target selection for `fetch`, `file_read`,
-and `shell`; streamed execution for `file_edit`; permission aliases; malformed
-tool arguments; and runtime log tests cover permission check/prompt logging.
+and `shell`; sensitive file prompting; streamed execution for `file_edit`;
+permission aliases; malformed tool arguments; and runtime log tests cover
+permission check/prompt logging.
 
 Pure permission matching and saved-rule string escaping can be tested through
 `permit_logic.c` without linking ncurses, Lua, or curl.

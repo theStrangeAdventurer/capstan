@@ -155,6 +155,13 @@ function plugin.handler(ctx)
 		return ctx:replace("Cannot edit " .. path .. ": old_text is empty")
 	end
 
+	if ctx.tool_args then
+		local allowed, reason = workspace.model_path_allowed(path, "write")
+		if not allowed then
+			return ctx:replace("Cannot edit " .. workspace.resolve_path(path) .. ": " .. reason)
+		end
+	end
+
 	local resolved_path = workspace.resolve_path(path)
 	local raw_content, read_err = workspace.read_all(resolved_path)
 	if not raw_content then

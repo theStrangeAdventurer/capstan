@@ -58,6 +58,13 @@ function plugin.handler(ctx)
 		return ctx:replace("Usage: /write [--append] <path> <content>")
 	end
 
+	if tool_args then
+		local allowed, reason = workspace.model_path_allowed(path, "write")
+		if not allowed then
+			return ctx:replace("Cannot write " .. workspace.resolve_path(path) .. ": " .. reason)
+		end
+	end
+
 	local resolved_path = workspace.resolve_path(path)
 	local old_content = workspace.read_all(resolved_path)
 	local existed = old_content ~= nil

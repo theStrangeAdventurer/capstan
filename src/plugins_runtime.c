@@ -9,7 +9,9 @@
 #include "permit.h"
 #include "popup.h"
 #include "skills.h"
+#include <errno.h>
 #include <lauxlib.h>
+#include <limits.h>
 #include <lua.h>
 #include <lualib.h>
 #include <stdio.h>
@@ -83,6 +85,7 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.stream", "agent/stream.lua");
   preload_embedded_asset(L, "agent.tools", "agent/tools.lua");
   preload_embedded_asset(L, "agent.workspace", "agent/workspace.lua");
+  preload_embedded_asset(L, "agent.redact", "agent/redact.lua");
   preload_embedded_asset(L, "agent.tokens", "agent/tokens.lua");
   preload_embedded_asset(L, "agent.logging", "agent/logging.lua");
   preload_embedded_asset(L, "agent.hooks", "agent/hooks.lua");
@@ -337,6 +340,18 @@ static int l_capstan_now_ms(lua_State *l) {
   return 1;
 }
 
+static int l_capstan_realpath(lua_State *l) {
+  const char *path = luaL_checkstring(l, 1);
+  char resolved[PATH_MAX];
+  if (!realpath(path, resolved)) {
+    lua_pushnil(l);
+    lua_pushstring(l, strerror(errno));
+    return 2;
+  }
+  lua_pushstring(l, resolved);
+  return 1;
+}
+
 static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_getglobal(L, "capstan");
   if (!lua_istable(L, -1)) {
@@ -364,6 +379,9 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
 
   lua_pushcfunction(L, l_capstan_now_ms);
   lua_setfield(L, -2, "now_ms");
+
+  lua_pushcfunction(L, l_capstan_realpath);
+  lua_setfield(L, -2, "realpath");
 
   lua_newtable(L);
   lua_pushboolean(L, options && options->disable_mcp);
@@ -484,6 +502,7 @@ void plugins_init(void) { plugins_init_with_options(NULL); }
 
 void plugins_cleanup(void) {
   if (L) {
+    log_cleanup();
     lua_close(L);
     L = NULL;
   }
