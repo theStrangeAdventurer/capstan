@@ -2561,6 +2561,50 @@ static MunitResult test_file_read_tool_uses_tool_args_path(
   return MUNIT_OK;
 }
 
+static MunitResult test_file_read_tool_allows_permitted_outside_path(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  char outside[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "provider-file-read-work");
+  make_tmp_dir(outside, sizeof(outside), "provider-file-read-out");
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/NOTE.md", outside);
+  write_file(path, "outside permitted content\n");
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, workdir);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  load_real_file_plugin(L);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+
+  char args[8192];
+  snprintf(args, sizeof(args), "{\\\"path\\\":\\\"%s\\\"}", path);
+  send_tool_call(L, "call_file_read_outside", "file_read", args);
+
+  munit_assert_string_equal(captured_permit_tool, "file_read");
+  munit_assert_string_equal(captured_permit_target, path);
+  munit_assert_true(strstr(captured_body, "\"role\":\"tool\"") != NULL);
+  munit_assert_true(strstr(captured_body, "outside permitted content") != NULL);
+  munit_assert_true(strstr(captured_body, "escapes workspace") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  unlink(path);
+  rmdir(outside);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
 static MunitResult test_file_write_permission_target_uses_absolute_workspace_path(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -2717,7 +2761,9 @@ static void send_tool_call(lua_State *L, const char *call_id,
   lua_pushnil(L);
   lua_pushboolean(L, 1);
   rc = lua_pcall(L, 2, 0, 0);
-  munit_assert_int(rc, ==, LUA_OK);
+  if (rc != LUA_OK) {
+    munit_errorf("stream done callback failed: %s", lua_tostring(L, -1));
+  }
 }
 
 static void send_text_done(lua_State *L, const char *text) {
@@ -3876,6 +3922,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_read_tool_uses_tool_args_path",
      test_file_read_tool_uses_tool_args_path, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/file_read_tool_allows_permitted_outside_path",
+     test_file_read_tool_allows_permitted_outside_path, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_write_permission_target_uses_absolute_workspace_path",
      test_file_write_permission_target_uses_absolute_workspace_path, NULL, NULL,

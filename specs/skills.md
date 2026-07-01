@@ -21,6 +21,9 @@ directories at startup.
   to the system prompt, along with the `SKILL.md` path and source.
 - The `SKILL.md` body is not added to the system prompt. The agent must read the
   file path when the FrontMatter indicates the skill is relevant.
+- Skill roots are registered in Lua as trusted skill-read roots. Model-initiated
+  `file_read` may read files under those roots even when they are outside the
+  active workspace, including symlinked skill files.
 - The system prompt states this as a mandatory rule: if the user names a skill
   or the task matches a skill description, the agent must read the listed
   `Skill file` completely before applying the skill. The metadata index alone is

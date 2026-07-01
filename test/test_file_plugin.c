@@ -48,6 +48,20 @@ static void set_capstan_workdir(lua_State *L, const char *path) {
   lua_setglobal(L, "capstan");
 }
 
+static void set_capstan_workdir_and_skill_root(lua_State *L, const char *workdir,
+                                               const char *skill_root) {
+  lua_newtable(L);
+  lua_pushstring(L, workdir);
+  lua_setfield(L, -2, "workdir");
+  lua_pushcfunction(L, l_capstan_realpath);
+  lua_setfield(L, -2, "realpath");
+  lua_newtable(L);
+  lua_pushstring(L, skill_root);
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "skill_roots");
+  lua_setglobal(L, "capstan");
+}
+
 static int path_exists(const char *path) {
   struct stat st;
   return stat(path, &st) == 0;
@@ -78,6 +92,28 @@ static void call_handler_tool(lua_State *L, const char *path) {
   lua_pushstring(L, path);
   lua_setfield(L, -2, "path");
   lua_setfield(L, -2, "tool_args");
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void call_handler_tool_with_outside_permission(lua_State *L,
+                                                      const char *path) {
+  lua_getfield(L, -1, "handler");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_setfield(L, -2, "args");
+  lua_newtable(L);
+  lua_pushstring(L, path);
+  lua_setfield(L, -2, "path");
+  lua_setfield(L, -2, "tool_args");
+  lua_newtable(L);
+  lua_pushboolean(L, 1);
+  lua_setfield(L, -2, "allow_outside_workspace");
+  lua_setfield(L, -2, "permission");
   lua_pushcfunction(L, l_ctx_replace);
   lua_setfield(L, -2, "replace");
 
@@ -254,6 +290,192 @@ static MunitResult test_tool_read_rejects_symlink_escape(
   return MUNIT_OK;
 }
 
+static MunitResult test_tool_read_allows_skill_root_outside_workdir(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  char skills_root[4096];
+  snprintf(workdir, sizeof(workdir), "/tmp/capstan-file-skill-work-%ld",
+           (long)getpid());
+  snprintf(skills_root, sizeof(skills_root), "/tmp/capstan-file-skill-root-%ld",
+           (long)getpid());
+  rmdir(workdir);
+  rmdir(skills_root);
+  munit_assert_int(mkdir(workdir, 0700), ==, 0);
+  munit_assert_int(mkdir(skills_root, 0700), ==, 0);
+
+  char skill_dir[4096];
+  snprintf(skill_dir, sizeof(skill_dir), "%s/web-search", skills_root);
+  munit_assert_int(mkdir(skill_dir, 0700), ==, 0);
+
+  char skill_file[4096];
+  snprintf(skill_file, sizeof(skill_file), "%s/SKILL.md", skill_dir);
+  FILE *f = fopen(skill_file, "w");
+  munit_assert_not_null(f);
+  fputs("Use curl for web research", f);
+  fclose(f);
+
+  lua_State *L = new_state();
+  set_capstan_workdir_and_skill_root(L, workdir, skills_root);
+  load_file_plugin(L);
+  call_handler_tool(L, skill_file);
+
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(llm);
+  munit_assert_not_null(strstr(llm, "Use curl for web research"));
+  munit_assert_null(strstr(llm, "escapes workspace"));
+
+  lua_close(L);
+  unlink(skill_file);
+  rmdir(skill_dir);
+  rmdir(skills_root);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_read_allows_skill_root_symlink(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  char skills_root[4096];
+  char outside[4096];
+  snprintf(workdir, sizeof(workdir), "/tmp/capstan-file-skill-link-work-%ld",
+           (long)getpid());
+  snprintf(skills_root, sizeof(skills_root),
+           "/tmp/capstan-file-skill-link-root-%ld", (long)getpid());
+  snprintf(outside, sizeof(outside), "/tmp/capstan-file-skill-link-out-%ld",
+           (long)getpid());
+  rmdir(workdir);
+  rmdir(skills_root);
+  rmdir(outside);
+  munit_assert_int(mkdir(workdir, 0700), ==, 0);
+  munit_assert_int(mkdir(skills_root, 0700), ==, 0);
+  munit_assert_int(mkdir(outside, 0700), ==, 0);
+
+  char skill_dir[4096];
+  snprintf(skill_dir, sizeof(skill_dir), "%s/web-search", skills_root);
+  munit_assert_int(mkdir(skill_dir, 0700), ==, 0);
+
+  char real_skill_file[4096];
+  snprintf(real_skill_file, sizeof(real_skill_file), "%s/SKILL.md", outside);
+  FILE *f = fopen(real_skill_file, "w");
+  munit_assert_not_null(f);
+  fputs("Symlinked skill instructions", f);
+  fclose(f);
+
+  char skill_link[4096];
+  snprintf(skill_link, sizeof(skill_link), "%s/SKILL.md", skill_dir);
+  munit_assert_int(symlink(real_skill_file, skill_link), ==, 0);
+
+  lua_State *L = new_state();
+  set_capstan_workdir_and_skill_root(L, workdir, skills_root);
+  load_file_plugin(L);
+  call_handler_tool(L, skill_link);
+
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(llm);
+  munit_assert_not_null(strstr(llm, "Symlinked skill instructions"));
+  munit_assert_null(strstr(llm, "escapes workspace"));
+
+  lua_close(L);
+  unlink(skill_link);
+  unlink(real_skill_file);
+  rmdir(skill_dir);
+  rmdir(outside);
+  rmdir(skills_root);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_read_allows_permitted_absolute_outside_path(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  char outside[4096];
+  snprintf(workdir, sizeof(workdir), "/tmp/capstan-file-permit-work-%ld",
+           (long)getpid());
+  snprintf(outside, sizeof(outside), "/tmp/capstan-file-permit-out-%ld",
+           (long)getpid());
+  rmdir(workdir);
+  rmdir(outside);
+  munit_assert_int(mkdir(workdir, 0700), ==, 0);
+  munit_assert_int(mkdir(outside, 0700), ==, 0);
+
+  char note[4096];
+  snprintf(note, sizeof(note), "%s/note.md", outside);
+  FILE *f = fopen(note, "w");
+  munit_assert_not_null(f);
+  fputs("explicitly permitted outside note", f);
+  fclose(f);
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_plugin(L);
+  call_handler_tool_with_outside_permission(L, note);
+
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(llm);
+  munit_assert_not_null(strstr(llm, "explicitly permitted outside note"));
+  munit_assert_null(strstr(llm, "escapes workspace"));
+
+  lua_close(L);
+  unlink(note);
+  rmdir(outside);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_read_permission_does_not_allow_symlink_escape(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  char outside[4096];
+  snprintf(workdir, sizeof(workdir), "/tmp/capstan-file-permit-link-work-%ld",
+           (long)getpid());
+  snprintf(outside, sizeof(outside), "/tmp/capstan-file-permit-link-out-%ld",
+           (long)getpid());
+  rmdir(workdir);
+  rmdir(outside);
+  munit_assert_int(mkdir(workdir, 0700), ==, 0);
+  munit_assert_int(mkdir(outside, 0700), ==, 0);
+
+  char secret[4096];
+  snprintf(secret, sizeof(secret), "%s/secret.txt", outside);
+  FILE *f = fopen(secret, "w");
+  munit_assert_not_null(f);
+  fputs("hidden symlink secret", f);
+  fclose(f);
+
+  char link_path[4096];
+  snprintf(link_path, sizeof(link_path), "%s/link.txt", workdir);
+  munit_assert_int(symlink(secret, link_path), ==, 0);
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, workdir);
+  load_file_plugin(L);
+  call_handler_tool_with_outside_permission(L, "link.txt");
+
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(llm);
+  munit_assert_null(strstr(llm, "hidden symlink secret"));
+  munit_assert_not_null(strstr(llm, "escapes workspace"));
+
+  lua_close(L);
+  unlink(link_path);
+  unlink(secret);
+  rmdir(outside);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/readme_fallback_reads_readme_md", test_readme_fallback_reads_readme_md,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -268,6 +490,18 @@ static MunitTest tests[] = {
     {"/tool_read_rejects_symlink_escape",
      test_tool_read_rejects_symlink_escape, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/tool_read_allows_skill_root_outside_workdir",
+     test_tool_read_allows_skill_root_outside_workdir, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_read_allows_skill_root_symlink",
+     test_tool_read_allows_skill_root_symlink, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_read_allows_permitted_absolute_outside_path",
+     test_tool_read_allows_permitted_absolute_outside_path, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_read_permission_does_not_allow_symlink_escape",
+     test_tool_read_permission_does_not_allow_symlink_escape, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite file_plugin_suite = {"/file_plugin", tests, NULL, 1,
