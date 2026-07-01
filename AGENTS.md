@@ -83,6 +83,28 @@ build/capstan              # final binary (gitignored)
 
 ## Architecture — non-obvious
 
+### Architecture policy
+
+When adding or changing behavior that affects multiple code paths:
+
+- Prefer one canonical implementation of the policy or business rule over
+  duplicated partial implementations.
+- If the behavior must exist in multiple layers, define which layer owns the
+  policy and which layers are adapters, caches, fallbacks, or compatibility
+  shims.
+- Prefer integrating with the existing configuration model instead of adding
+  hidden constants or parallel configuration paths.
+- Before implementing, identify all affected data paths: UI, model context,
+  logs, persisted state, command-line mode, tests, and plugin/runtime APIs.
+- Define the failure mode explicitly: fail open, fail closed, preserve old
+  behavior, or surface an error.
+- Add tests for the intended behavior and for important false positives or
+  regressions.
+
+Avoid fixing only the observed symptom when the same rule clearly applies
+across multiple paths. First find the owner of the rule, then route callers
+through that owner.
+
 ### Init order (critical)
 
 `plugins_init()` in `src/plugins.c`:

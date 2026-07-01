@@ -3,6 +3,7 @@ local hooks = require("agent.hooks")
 local logging = require("agent.logging")
 local mcp_client = require("agent.mcp")
 local workspace = require("agent.workspace")
+local redact = require("agent.redact")
 
 local M = {}
 
@@ -25,10 +26,14 @@ local function subagents_tool()
         type = "function",
         ["function"] = {
             name = "subagents",
-            description = "Run multiple focused internal sub-agents in parallel and return their independent findings for orchestration.",
+            description = "Run multiple focused internal sub-agents in parallel and return their independent findings for orchestration. First choose the workflow and concrete tools in the orchestrator, then pass shared instructions and give each task the narrowest tools whitelist instead of making children rediscover tools.",
             parameters = {
                 type = "object",
                 properties = {
+                    instructions = {
+                        type = "string",
+                        description = "Shared instructions prepended to every child task. Use this to pass skill/tool instructions already selected by the orchestrator.",
+                    },
                     tasks = {
                         type = "array",
                         items = {
@@ -36,11 +41,16 @@ local function subagents_tool()
                             properties = {
                                 id = {type = "string"},
                                 task = {type = "string"},
+                                instructions = {
+                                    type = "string",
+                                    description = "Task-specific instructions prepended before task.",
+                                },
                                 model = {type = "string"},
-                                max_turns = {type = "integer"},
+                                max_turns = {type = "integer", description = "Requested maximum child turns. Omit for the configured default. Use 2 for simple one-tool fan-out tasks, and more for exploratory work."},
                                 tools = {
                                     type = "array",
                                     items = {type = "string"},
+                                    description = "Narrow whitelist of tool names the child may use. Strongly recommended whenever the orchestrator already knows the required workflow/tools. Omitted means the child inherits all non-subagents parent tools.",
                                 },
                             },
                             required = {"id", "task"},
@@ -126,9 +136,10 @@ local function subagent_config_number(field, default)
 end
 
 local function subagent_max_turns(args)
+    local default_turns = subagent_config_number("max_turns", 6)
     local max_turns = tonumber(args.max_turns)
     if not max_turns or max_turns <= 0 then
-        max_turns = subagent_config_number("max_turns", 6)
+        max_turns = default_turns
     end
     local hard_cap = subagent_config_number("max_turns_cap", 200)
     if hard_cap and hard_cap > 0 and max_turns > hard_cap then
@@ -295,6 +306,21 @@ local function task_label(task)
     return id .. " - " .. text
 end
 
+local function append_prompt_part(parts, title, text)
+    if type(text) ~= "string" then return end
+    text = text:match("^%s*(.-)%s*$")
+    if text == "" then return end
+    table.insert(parts, title .. "\n" .. text)
+end
+
+local function subagent_prompt(args, task)
+    local parts = {}
+    append_prompt_part(parts, "Shared instructions from orchestrator:", args and args.instructions)
+    append_prompt_part(parts, "Task-specific instructions:", task and task.instructions)
+    append_prompt_part(parts, "Task:", task and task.task)
+    return table.concat(parts, "\n\n")
+end
+
 local function filter_tools(parent_tools, requested)
     local inherited = {}
     for _, tool in ipairs(parent_tools or {}) do
@@ -421,6 +447,8 @@ local function run_subagents(args, run_ctx)
         state.result.attempts = attempt
         active = active + 1
         local selected_model = subagent_model(task, model_set, default_model)
+        local child_tools = filter_tools(run_ctx and run_ctx.tools, task.tools)
+        local child_max_turns = subagent_max_turns(task)
 
         logging.runtime_log("subagents", string.format(
             "start index=%d id=%s attempt=%d/%d provider=%s model=%s prompt=%s",
@@ -430,7 +458,16 @@ local function run_subagents(args, run_ctx)
             max_attempts,
             tostring(provider_name or ""),
             tostring(selected_model or ""),
-            logging.compact(task.task, 300)
+            logging.compact(subagent_prompt(args, task), 300)
+        ))
+        logging.runtime_log("subagents", string.format(
+            "child index=%d id=%s depth=%d max_turns=%d tools=%d tool_names=%s",
+            index,
+            state.result.id,
+            depth + 1,
+            child_max_turns,
+            #child_tools,
+            M.names(child_tools)
         ))
 
         local function retry_if_allowed(error_message)
@@ -455,13 +492,13 @@ local function run_subagents(args, run_ctx)
         end
 
         local ok, err = _G.capstan.agent.run({
-            messages = {{role = "user", content = task.task}},
+            messages = {{role = "user", content = subagent_prompt(args, task)}},
             provider = provider_name,
             model = selected_model,
             profile = run_ctx and run_ctx.profile or nil,
-            max_turns = subagent_max_turns(task),
+            max_turns = child_max_turns,
             depth = depth + 1,
-            tools = filter_tools(run_ctx and run_ctx.tools, task.tools),
+            tools = child_tools,
             silent_tools = true,
             update_status = false,
             update_usage = false,
@@ -751,6 +788,11 @@ end
 
 local function redact_sensitive_text(text)
     if type(text) ~= "string" or text == "" then return text end
+    return redact.text(text)
+end
+
+local function redact_sensitive_text_legacy(text)
+    if type(text) ~= "string" or text == "" then return text end
     local result = text
     result = result:gsub("([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]%s*:%s*[Bb][Ee][Aa][Rr][Ee][Rr]%s+)[^%s\"']+", "%1[REDACTED]")
     result = result:gsub("([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]%s*:%s*)[^\r\n\"']+", "%1[REDACTED]")
@@ -881,6 +923,9 @@ end
 
 local function scope_allows_target(scope, permission_tool, target)
     if not scope_allows(scope, permission_tool) then return false end
+    if (permission_tool == "file_read" or permission_tool == "file_write") and workspace.is_sensitive_path(target) then
+        return false
+    end
     if not scope or not scope.workdir_only then return true end
     if permission_tool == "shell" then
         local workdir = configured_workdir()
@@ -964,6 +1009,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 args = call_ctx.args or args
                 target = call_ctx.target or target
                 permission_tool = call_ctx.permission_tool or permission_tool
+
                 if not tool_available(combined_tools, tool_name) then
                     result_content = "Tool " .. tostring(tool_name) .. " is not available in the active profile"
                     logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tool_name)))
@@ -988,18 +1034,22 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                     local display_command = tool_display_command(tool_name, args)
                     local show_generic_status = tool_name ~= "subagents"
                     if tool_name == "shell" then
-                        logging.runtime_log("tool", string.format("call name=%s target=%s display=%s args=%s", tool_name, target, display_target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
+                        logging.runtime_log("tool", string.format("call name=%s target=%s display=%s command=%s args=%s", tool_name, target, display_target, redact_sensitive_text(display_command or ""), redacted_tool_arguments(tool_name, tc.arguments) or ""))
                     elseif display_command then
-                        logging.runtime_log("tool", string.format("call name=%s target=%s display=%s command=%s args=%s", tool_name, target, display_target, logging.compact(redact_sensitive_text(display_command), 240), redacted_tool_arguments(tool_name, tc.arguments) or ""))
+                        logging.runtime_log("tool", string.format("call name=%s target=%s display=%s command=%s args=%s", tool_name, target, display_target, redact_sensitive_text(display_command), redacted_tool_arguments(tool_name, tc.arguments) or ""))
                     else
                         logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
                     end
+
                     local permission_scope = run_ctx and run_ctx.permission_scope or nil
                     local perm = "allow"
                     if scope_allows_target(permission_scope, permission_tool, target) then
                         logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
                     elseif permission_tool then
                         perm = permit.check(permission_tool, target)
+                        if (permission_tool == "file_read" or permission_tool == "file_write") and workspace.is_sensitive_path(target) and perm == "allow" then
+                            perm = "ask"
+                        end
                         logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
                     end
 

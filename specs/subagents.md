@@ -34,10 +34,12 @@ Model tool shape:
 
 ```json
 {
+  "instructions": "Shared workflow/tool instructions already selected by the orchestrator.",
   "tasks": [
     {
       "id": "docs",
       "task": "Study documentation and summarize relevant constraints",
+      "instructions": "Optional task-specific constraints.",
       "model": "deepseek-chat",
       "max_turns": 6,
       "tools": ["file_read", "fetch"]
@@ -47,12 +49,28 @@ Model tool shape:
 }
 ```
 
-`tasks` is required. Model/max_turns/tools are optional per task. Subagents
-always use the orchestrator's current provider. Before launching, Capstan
-fetches that provider's model list; a task `model` is used only when it appears
-in that current-provider list, otherwise the current active model is used.
-`tools` only narrows the parent tool list; it cannot add tools unavailable to
-the orchestrator.
+`tasks` is required. Top-level `instructions` is optional and is prepended to
+every child task. Per-task `instructions`, model, max_turns, and tools are
+optional. Subagents always use the orchestrator's current provider. Before
+launching, Capstan fetches that provider's model list; a task `model` is used
+only when it appears in that current-provider list, otherwise the current active
+model is used. `tools` only narrows the parent tool list; it cannot add tools
+unavailable to the orchestrator.
+
+When the orchestrator already knows the right workflow or tool family, it
+should pass the concrete workflow/tool instructions through `instructions`, so
+child agents do not rediscover the same policy or choose unrelated tools. This
+applies to skills, MCP servers, plugins, built-in tools, and any other selected
+workflow. Pair those instructions with a narrow `tools` whitelist. Omitted
+`tools` means the child inherits all non-subagents parent tools, which is only
+appropriate when the child genuinely needs broad tool choice.
+
+When a subtask needs a tool call, `max_turns` must leave room for both the tool
+call and synthesis. Omitted `max_turns` uses the configured `subagents.max_turns`
+default. Simple one-tool fan-out tasks, such as fetching known URLs, can use
+`max_turns = 2`; exploratory work should usually omit `max_turns` or use a
+larger budget such as 5-6 turns. Runtime caps requests above
+`subagents.max_turns_cap`.
 
 Subagents do not have a separate permission pattern. The user controls exposure
 with `capabilities.subagents` and controls scale with the `subagents.max_*`
@@ -75,6 +93,9 @@ useful.
 - Subagent text and inner tool rows do not stream into the parent message.
 - Each subagent start is written to runtime logs with task id, selected model,
   current provider, and compact prompt preview.
+- Each child run also logs its child depth, effective max turns, and effective
+  tool names, so inherited broad tool lists and narrow whitelists are visible in
+  runtime diagnostics.
 - The parent receives one JSON tool result and must synthesize the final answer.
 
 Result shape:

@@ -498,7 +498,16 @@ char *skills_build_prompt(const BuiltinSkill *builtin_skills,
                    "Mandatory skill use rule: if the user names a skill, or if "
                    "the task matches a skill description, you must read that "
                    "skill's `Skill file` path completely before using the "
-                   "skill. Do not apply a skill from this index alone.\n")) {
+                   "skill. A matching skill has priority zero: use it before "
+                   "MCP tools, built-in tools, fetch/direct HTTP, and shell. "
+                   "If the loaded skill explicitly prescribes a tool or "
+                   "command path, including shell/curl, follow the skill's "
+                   "tool instructions. When delegating skill-based work to "
+                   "subagents, read the skill in the orchestrator first, pass "
+                   "the concrete workflow/tool instructions through the "
+                   "subagents instructions field, and restrict each subagent "
+                   "to the narrow required tools. "
+                   "Do not apply a skill from this index alone.\n")) {
     skill_list_free(&list);
     return my_strdup("");
   }

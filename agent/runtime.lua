@@ -295,11 +295,15 @@ function M.run(opts, callbacks)
     })
     combined_tools = tools_ctx.tools or combined_tools
     combined_tools = profiles.filter_tools(combined_tools, profile)
-    logging.runtime_log("agent", string.format("request provider=%s model=%s messages=%d tools=%d",
+    local run_depth = tonumber(opts.depth) or 0
+    local run_kind = run_depth > 0 and "subagent" or "orchestrator"
+    logging.runtime_log("agent", string.format("request provider=%s model=%s messages=%d tools=%d depth=%d kind=%s",
         provider_name,
         active.model or "",
         #msgs,
-        #combined_tools
+        #combined_tools,
+        run_depth,
+        run_kind
     ))
     logging.runtime_log("agent", "tools=" .. tools_runtime.names(combined_tools))
     if profile then

@@ -76,6 +76,11 @@ static MunitResult test_loads_skill_md_and_resource_manifest(
   munit_assert_true(strstr(prompt, "Mandatory skill use rule") != NULL);
   munit_assert_true(strstr(prompt, "must read that skill's `Skill file` path "
                                   "completely") != NULL);
+  munit_assert_true(strstr(prompt, "priority zero: use it before MCP tools, "
+                                  "built-in tools, fetch/direct HTTP, and shell") !=
+                    NULL);
+  munit_assert_true(strstr(prompt, "including shell/curl, follow the skill's "
+                                  "tool instructions") != NULL);
   munit_assert_true(strstr(prompt, "Do not apply a skill from this index alone") !=
                     NULL);
   munit_assert_true(strstr(prompt, "Review instructions") == NULL);
