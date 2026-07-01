@@ -1,14 +1,18 @@
 #include "log.h"
 #include "app_config.h"
+#include "redact.h"
 #include <lauxlib.h>
 #include <lua.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 
 #define LOG_MAX_BYTES (10L * 1024L * 1024L)
 #define LOG_MAX_ARCHIVES 5
+
+static lua_State *g_log_lua = NULL;
 
 int log_path(char *buf, size_t buf_size) {
   time_t now = time(NULL);
@@ -41,6 +45,54 @@ static void sanitize(char *s) {
     if (*s == '\n' || *s == '\r' || *s == '\t')
       *s = ' ';
   }
+}
+
+static char *dup_string(const char *s) {
+  size_t len = strlen(s);
+  char *copy = malloc(len + 1);
+  if (!copy)
+    return NULL;
+  memcpy(copy, s, len + 1);
+  return copy;
+}
+
+static char *lua_redact_alloc(const char *message) {
+  if (!g_log_lua)
+    return NULL;
+
+  lua_State *l = g_log_lua;
+  int top = lua_gettop(l);
+
+  lua_getglobal(l, "require");
+  if (!lua_isfunction(l, -1)) {
+    lua_settop(l, top);
+    return NULL;
+  }
+  lua_pushstring(l, "agent.redact");
+  if (lua_pcall(l, 1, 1, 0) != LUA_OK) {
+    lua_settop(l, top);
+    return NULL;
+  }
+  if (!lua_istable(l, -1)) {
+    lua_settop(l, top);
+    return NULL;
+  }
+
+  lua_getfield(l, -1, "text");
+  if (!lua_isfunction(l, -1)) {
+    lua_settop(l, top);
+    return NULL;
+  }
+  lua_pushstring(l, message ? message : "");
+  if (lua_pcall(l, 1, 1, 0) != LUA_OK) {
+    lua_settop(l, top);
+    return NULL;
+  }
+
+  const char *redacted = lua_tostring(l, -1);
+  char *copy = dup_string(redacted ? redacted : "");
+  lua_settop(l, top);
+  return copy;
 }
 
 static int rotated_path(const char *path, int archive_index, char *buf,
@@ -103,11 +155,19 @@ void log_event(const char *category, const char *message) {
   snprintf(cat, sizeof(cat), "%s", category ? category : "event");
   sanitize(cat);
 
-  char msg[2048];
-  snprintf(msg, sizeof(msg), "%s", message ? message : "");
-  sanitize(msg);
+  char *redacted = lua_redact_alloc(message ? message : "");
+  if (!redacted)
+    redacted = redact_secrets_alloc(message ? message : "");
+  if (!redacted)
+    redacted = dup_string("[REDACTION_FAILED]");
+  if (!redacted) {
+    fclose(f);
+    return;
+  }
+  sanitize(redacted);
 
-  fprintf(f, "%s [%s] %s\n", ts, cat, msg);
+  fprintf(f, "%s [%s] %s\n", ts, cat, redacted);
+  free(redacted);
   fclose(f);
 }
 
@@ -129,6 +189,8 @@ static int l_capstan_log_path(lua_State *L) {
 }
 
 void log_init(lua_State *L) {
+  g_log_lua = L;
+
   lua_getglobal(L, "capstan");
   if (!lua_istable(L, -1)) {
     lua_pop(L, 1);
@@ -143,3 +205,5 @@ void log_init(lua_State *L) {
 
   lua_setglobal(L, "capstan");
 }
+
+void log_cleanup(void) { g_log_lua = NULL; }

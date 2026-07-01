@@ -9,6 +9,7 @@ extern MunitSuite file_write_plugin_suite;
 extern MunitSuite shell_plugin_suite;
 extern MunitSuite http_redirect_suite;
 extern MunitSuite logs_plugin_suite;
+extern MunitSuite log_suite;
 extern MunitSuite models_plugin_suite;
 extern MunitSuite info_plugin_suite;
 extern MunitSuite provider_tools_suite;
@@ -25,6 +26,7 @@ int main(int argc, char *argv[]) {
     shell_plugin_suite,
     http_redirect_suite,
     logs_plugin_suite,
+    log_suite,
     models_plugin_suite,
     info_plugin_suite,
     provider_tools_suite,

@@ -33,7 +33,12 @@ static int l_tools_shell(lua_State *L) {
                  "Authorization: Bearer stdout-secret\n"
                  "X-API-Key: stdout-api-key\n"
                  "X-Subscription-Key: brave-secret\n"
+                 "x-subscription-token: subscription-secret\n"
+                 "xsubscription.token: dotted-secret\n"
+                 "Tenant-Id: tenant-plain\n"
+                 "X-Internal-Trace: internal-plain\n"
                  "> Accept: */*\n"
+                 "custom value org_custom-secret\n"
                  "{\"access_token\":\"json-secret\"}\n");
   lua_setfield(L, -2, "stdout");
   lua_pushstring(L,
@@ -108,13 +113,17 @@ static MunitResult test_shell_redacts_ui_and_llm_results(
   munit_assert_true(strstr(llm, "stdout-secret") == NULL);
   munit_assert_true(strstr(llm, "stdout-api-key") == NULL);
   munit_assert_true(strstr(llm, "brave-secret") == NULL);
+  munit_assert_true(strstr(llm, "subscription-secret") == NULL);
+  munit_assert_true(strstr(llm, "dotted-secret") == NULL);
   munit_assert_true(strstr(llm, "json-secret") == NULL);
   munit_assert_true(strstr(llm, "stderr-secret") == NULL);
   munit_assert_true(strstr(llm, "stderr-password") == NULL);
   munit_assert_true(strstr(llm, "Authorization: [REDACTED]") != NULL);
   munit_assert_true(strstr(llm, "X-API-Key: [REDACTED]") != NULL);
   munit_assert_true(strstr(llm, "X-Subscription-Key: [REDACTED]") != NULL);
-  munit_assert_true(strstr(llm, "> Accept: [REDACTED]") != NULL);
+  munit_assert_true(strstr(llm, "x-subscription-token: [REDACTED]") != NULL);
+  munit_assert_true(strstr(llm, "xsubscription.token: [REDACTED]") != NULL);
+  munit_assert_true(strstr(llm, "> Accept: */*") != NULL);
   munit_assert_true(strstr(llm, "\"access_token\":\"[REDACTED]") != NULL);
   munit_assert_true(strstr(llm, "Cookie: [REDACTED]") != NULL);
   munit_assert_true(strstr(llm, "password=[REDACTED]") != NULL);
@@ -144,11 +153,44 @@ static MunitResult test_shell_manual_command_preserves_spaces(
   return MUNIT_OK;
 }
 
+static MunitResult test_shell_redaction_uses_config_extensions(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_state();
+  int rc = luaL_dostring(L,
+                         "capstan = { config = { redaction = {"
+                         "names = {'tenant-id'},"
+                         "name_patterns = {'^x%-internal%-'},"
+                         "value_patterns = {'org_[%w%-]+'},"
+                         "} } }");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  load_shell_plugin(L);
+  const char *args[] = {"curl", "-s", "https://example.test"};
+  call_handler(L, "/shell curl -s https://example.test", args, 3);
+
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(llm);
+  munit_assert_true(strstr(llm, "tenant-plain") == NULL);
+  munit_assert_true(strstr(llm, "internal-plain") == NULL);
+  munit_assert_true(strstr(llm, "org_custom-secret") == NULL);
+  munit_assert_true(strstr(llm, "Tenant-Id: [REDACTED]") != NULL);
+  munit_assert_true(strstr(llm, "X-Internal-Trace: [REDACTED]") != NULL);
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/redacts_ui_and_llm_results", test_shell_redacts_ui_and_llm_results, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/manual_command_preserves_spaces",
      test_shell_manual_command_preserves_spaces, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/redaction_uses_config_extensions",
+     test_shell_redaction_uses_config_extensions, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

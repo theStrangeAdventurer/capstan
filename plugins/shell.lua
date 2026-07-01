@@ -1,4 +1,5 @@
 local plugin = {}
+local redact = require("agent.redact")
 
 plugin.id = "shell"
 plugin.name = "Shell"
@@ -20,87 +21,8 @@ plugin.tool = {
 	permission = "shell"
 }
 
-local sensitive_headers = {
-	authorization = true,
-	["proxy-authorization"] = true,
-	cookie = true,
-	["set-cookie"] = true,
-	["x-api-key"] = true,
-	["api-key"] = true,
-	["openai-api-key"] = true,
-	["anthropic-api-key"] = true,
-	["x-goog-api-key"] = true,
-	["x-subscription-key"] = true,
-	["subscription-key"] = true,
-}
-
-local sensitive_keys = {
-	"api_key",
-	"api-key",
-	"apikey",
-	"access_token",
-	"access-token",
-	"refresh_token",
-	"refresh-token",
-	"id_token",
-	"id-token",
-	"auth_token",
-	"auth-token",
-	"bearer_token",
-	"bearer-token",
-	"token",
-	"secret",
-	"password",
-	"passwd",
-}
-
-local function redact_key_values(text)
-	local result = text
-	for _, key in ipairs(sensitive_keys) do
-		result = result:gsub("([\"']?%f[%w]" .. key .. "%f[^%w][\"']?%s*[:=]%s*[\"']?)[^\"'%s,;}]+", "%1[REDACTED]")
-		result = result:gsub("([\"']?%f[%w]" .. key:upper() .. "%f[^%w][\"']?%s*[:=]%s*[\"']?)[^\"'%s,;}]+", "%1[REDACTED]")
-	end
-	return result
-end
-
-local function redact_header_line(line)
-	local curl_prefix, name = line:match("^(%s*[<>]%s*)([%w%-]+)%s*:")
-	if curl_prefix and name then
-		return curl_prefix .. name .. ": [REDACTED]"
-	end
-	name = line:match("^%s*([%w%-]+)%s*:")
-	if not name then
-		return line
-	end
-	if sensitive_headers[name:lower()] then
-		return line:gsub("(:%s*).*$", "%1[REDACTED]")
-	end
-	return line
-end
-
 local function redact_secrets(text)
-	if not text or text == "" then
-		return text or ""
-	end
-
-	local result = text
-	result = result:gsub("([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]%s*:%s*[Bb][Ee][Aa][Rr][Ee][Rr]%s+)[^%s\"']+", "%1[REDACTED]")
-	result = result:gsub("([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]%s*:%s*)[^\r\n\"']+", "%1[REDACTED]")
-	result = redact_key_values(result)
-
-	local lines = {}
-	local had_line = false
-	for line, newline in result:gmatch("([^\r\n]*)(\r?\n?)") do
-		if line == "" and newline == "" then
-			break
-		end
-		had_line = true
-		table.insert(lines, redact_header_line(line) .. newline)
-	end
-	if had_line then
-		result = table.concat(lines)
-	end
-	return result
+	return redact.text(text or "")
 end
 
 local function unquote_shell_token(token)

@@ -7,5 +7,6 @@
 int log_path(char *buf, size_t buf_size);
 void log_event(const char *category, const char *message);
 void log_init(lua_State *L);
+void log_cleanup(void);
 
 #endif

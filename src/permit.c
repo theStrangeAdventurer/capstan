@@ -28,6 +28,35 @@ static long long now_ms(void) {
   return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
 }
 
+static void log_shell_start(int timeout, const char *command) {
+  const char *cmd = command ? command : "";
+  size_t size = strlen(cmd) + 128;
+  char *msg = malloc(size);
+  if (!msg) {
+    log_event("tool", "shell start [log allocation failed]");
+    return;
+  }
+  snprintf(msg, size, "shell start timeout=%d command=%s", timeout, cmd);
+  log_event("tool", msg);
+  free(msg);
+}
+
+static void log_shell_done(int exit_code, int timed_out, long long duration_ms,
+                           const char *command) {
+  const char *cmd = command ? command : "";
+  size_t size = strlen(cmd) + 192;
+  char *msg = malloc(size);
+  if (!msg) {
+    log_event("tool", "shell done [log allocation failed]");
+    return;
+  }
+  snprintf(msg, size,
+           "shell done exit=%d timed_out=%d duration_ms=%lld command=%s",
+           exit_code, timed_out, duration_ms, cmd);
+  log_event("tool", msg);
+  free(msg);
+}
+
 const char *permit_config_dir(void) {
   static char path[512];
   if (app_config_dir(path, sizeof(path)) != 0)
@@ -339,10 +368,7 @@ static int l_tools_shell(lua_State *L) {
   out_buf[0] = '\0';
   err_buf[0] = '\0';
 
-  char log_msg[512];
-  snprintf(log_msg, sizeof(log_msg), "shell start timeout=%d command=%s",
-           timeout, command);
-  log_event("tool", log_msg);
+  log_shell_start(timeout, command);
 
   while (out_open || err_open) {
     long long elapsed_ms = now_ms() - started_ms;
@@ -449,10 +475,7 @@ static int l_tools_shell(lua_State *L) {
   free(out_buf);
   free(err_buf);
 
-  snprintf(log_msg, sizeof(log_msg),
-           "shell done exit=%d timed_out=%d duration_ms=%lld command=%s",
-           exit_code, timed_out, now_ms() - started_ms, command);
-  log_event("tool", log_msg);
+  log_shell_done(exit_code, timed_out, now_ms() - started_ms, command);
 
   return 1;
 }
