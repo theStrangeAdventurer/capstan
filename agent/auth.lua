@@ -1,14 +1,6 @@
-local M = {}
+local serialize = require("agent.lua_serialize")
 
-local function lua_quote(value)
-    local s = tostring(value or "")
-    s = s:gsub("\\", "\\\\")
-         :gsub("\n", "\\n")
-         :gsub("\r", "\\r")
-         :gsub("\t", "\\t")
-         :gsub("\"", "\\\"")
-    return "\"" .. s .. "\""
-end
+local M = {}
 
 local function auth_path()
     if not (_G.capstan and _G.capstan.state_path) then return nil end
@@ -43,30 +35,6 @@ local function load_all()
     return value
 end
 
-local function write_value(file, value, indent)
-    indent = indent or ""
-    if type(value) == "string" then
-        file:write(lua_quote(value))
-    elseif type(value) == "number" or type(value) == "boolean" then
-        file:write(tostring(value))
-    elseif type(value) == "table" then
-        file:write("{\n")
-        local keys = {}
-        for k, _ in pairs(value) do
-            if type(k) == "string" then table.insert(keys, k) end
-        end
-        table.sort(keys)
-        for _, k in ipairs(keys) do
-            file:write(indent, "  [", lua_quote(k), "] = ")
-            write_value(file, value[k], indent .. "  ")
-            file:write(",\n")
-        end
-        file:write(indent, "}")
-    else
-        file:write("nil")
-    end
-end
-
 local function save_all(all)
     local ok, err = ensure_auth_dir()
     if not ok then return false, err end
@@ -75,18 +43,7 @@ local function save_all(all)
     if not (_G.capstan and type(_G.capstan.secure_write_file) == "function") then
         return false, "secure file writer is not available"
     end
-    local chunks = {}
-    local writer = {
-        write = function(_, ...)
-            for i = 1, select("#", ...) do
-                table.insert(chunks, tostring(select(i, ...)))
-            end
-        end
-    }
-    writer:write("return ")
-    write_value(writer, all, "")
-    writer:write("\n")
-    local write_ok, write_err = _G.capstan.secure_write_file(path, table.concat(chunks))
+    local write_ok, write_err = _G.capstan.secure_write_file(path, serialize.encode_return(all))
     if not write_ok then return false, write_err end
     return true
 end
