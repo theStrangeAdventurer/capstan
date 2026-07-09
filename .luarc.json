@@ -1,0 +1,18 @@
+{
+  "runtime.version": "Lua 5.4",
+  "workspace.library": [
+    "types"
+  ],
+  "workspace.checkThirdParty": false,
+  "diagnostics.globals": [
+    "agent",
+    "capstan",
+    "http",
+    "log",
+    "mcp",
+    "permit",
+    "plugins",
+    "popup",
+    "tools"
+  ]
+}

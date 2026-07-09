@@ -488,6 +488,9 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   PluginsInitOptions plugin_options = {.disable_mcp = opts->no_mcp};
   plugins_init_with_options(&plugin_options);
   load_embedded_plugins();
+  char global_plugins[512];
+  if (app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
+    load_plugins_from(global_plugins);
 
   lua_getglobal(L, "capstan");
   lua_getfield(L, -1, "agent");
@@ -602,7 +605,8 @@ static int run_embedded_self_test(void) {
 
   const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
                             "/logs", "/skills", "/models", "/info", "/mcp",
-                            "/plan", "/implement", "/fast"};
+                            "/plan", "/implement", "/fast", "/auth",
+                            "/logout", "/connect"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);

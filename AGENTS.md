@@ -290,6 +290,7 @@ Feature specs:
 - [File edit plugin](specs/file-edit-plugin.md)
 - [File write plugin](specs/file-write-plugin.md)
 - [Models command](specs/models-command.md)
+- [OAuth auth](specs/oauth-auth.md)
 - [Permissions](specs/permissions.md)
 - [Runtime logs](specs/runtime-logs.md)
 - [Runtime state](specs/runtime-state.md)

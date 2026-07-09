@@ -30,6 +30,9 @@ Capstan watches the user plugin directory while the process is running. The
 watcher uses a portable polling loop from the main idle branch, so no platform
 specific `inotify` or `kqueue` dependency is required.
 
+Headless `capstan run` loads user plugins from the same directory once at
+startup. It does not watch for changes during the run.
+
 - New `.lua` files are loaded automatically.
 - Changed `.lua` files are reloaded automatically.
 - Deleted `.lua` files are removed; built-in plugins are restored if a deleted
@@ -50,6 +53,17 @@ plugin.history = false
 
 No-history commands show UI feedback but do not add messages, do not add pending
 context, and do not trigger an agent request. `/models` uses this mode.
+
+## Lua Language Server
+
+Capstan ships LuaLS annotations in `types/capstan.d.lua` and `.luarc.json`.
+Annotate plugin tables to get completion for plugin fields, ctx helpers, and
+runtime globals:
+
+```lua
+---@type CapstanPlugin
+local plugin = {}
+```
 
 ## Ecosystem
 

@@ -135,9 +135,18 @@ static struct curl_slist *parse_headers(lua_State *L, int index) {
     while (lua_next(L, index) != 0) {
       const char *key = lua_tostring(L, -2);
       const char *val = lua_tostring(L, -1);
-      char header[2048];
-      snprintf(header, sizeof(header), "%s: %s", key, val);
-      headers = curl_slist_append(headers, header);
+      if (key && val) {
+        size_t header_len = strlen(key) + 2 + strlen(val) + 1;
+        char *header = malloc(header_len);
+        if (!header) {
+          lua_pop(L, 1);
+          curl_slist_free_all(headers);
+          return NULL;
+        }
+        snprintf(header, header_len, "%s: %s", key, val);
+        headers = curl_slist_append(headers, header);
+        free(header);
+      }
       lua_pop(L, 1);
     }
   }
