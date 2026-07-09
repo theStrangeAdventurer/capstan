@@ -10,6 +10,7 @@
 #include "popup.h"
 #include "skills.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <lauxlib.h>
 #include <limits.h>
 #include <lua.h>
@@ -17,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -90,6 +92,7 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.logging", "agent/logging.lua");
   preload_embedded_asset(L, "agent.hooks", "agent/hooks.lua");
   preload_embedded_asset(L, "agent.state", "agent/state.lua");
+  preload_embedded_asset(L, "agent.auth", "agent/auth.lua");
   preload_embedded_asset(L, "agent.shell_safe", "agent/shell_safe.lua");
   preload_embedded_asset(L, "agent.mcp", "agent/mcp.lua");
   preload_embedded_asset(L, "agent.profiles", "agent/profiles.lua");
@@ -368,6 +371,81 @@ static int l_capstan_realpath(lua_State *l) {
   return 1;
 }
 
+static int write_all_fd(int fd, const char *data, size_t size) {
+  size_t written = 0;
+  while (written < size) {
+    ssize_t n = write(fd, data + written, size - written);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      return -1;
+    }
+    if (n == 0)
+      return -1;
+    written += (size_t)n;
+  }
+  return 0;
+}
+
+static int l_capstan_secure_write_file(lua_State *l) {
+  const char *path = luaL_checkstring(l, 1);
+  size_t content_size = 0;
+  const char *content = luaL_checklstring(l, 2, &content_size);
+  char tmp_path[PATH_MAX];
+  int n = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%ld", path, (long)getpid());
+  if (n < 0 || (size_t)n >= sizeof(tmp_path)) {
+    lua_pushboolean(l, 0);
+    lua_pushstring(l, "temporary path is too long");
+    return 2;
+  }
+
+  unlink(tmp_path);
+  int fd = open(tmp_path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (fd < 0) {
+    lua_pushboolean(l, 0);
+    lua_pushstring(l, strerror(errno));
+    return 2;
+  }
+  if (fchmod(fd, 0600) != 0) {
+    char err[256];
+    snprintf(err, sizeof(err), "%s", strerror(errno));
+    close(fd);
+    unlink(tmp_path);
+    lua_pushboolean(l, 0);
+    lua_pushstring(l, err);
+    return 2;
+  }
+
+  if (write_all_fd(fd, content, content_size) != 0) {
+    char err[256];
+    snprintf(err, sizeof(err), "%s", strerror(errno));
+    close(fd);
+    unlink(tmp_path);
+    lua_pushboolean(l, 0);
+    lua_pushstring(l, err);
+    return 2;
+  }
+  if (close(fd) != 0) {
+    char err[256];
+    snprintf(err, sizeof(err), "%s", strerror(errno));
+    unlink(tmp_path);
+    lua_pushboolean(l, 0);
+    lua_pushstring(l, err);
+    return 2;
+  }
+  if (rename(tmp_path, path) != 0) {
+    char err[256];
+    snprintf(err, sizeof(err), "%s", strerror(errno));
+    unlink(tmp_path);
+    lua_pushboolean(l, 0);
+    lua_pushstring(l, err);
+    return 2;
+  }
+
+  lua_pushboolean(l, 1);
+  return 1;
+}
+
 static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_getglobal(L, "capstan");
   if (!lua_istable(L, -1)) {
@@ -398,6 +476,9 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
 
   lua_pushcfunction(L, l_capstan_realpath);
   lua_setfield(L, -2, "realpath");
+
+  lua_pushcfunction(L, l_capstan_secure_write_file);
+  lua_setfield(L, -2, "secure_write_file");
 
   lua_newtable(L);
   lua_pushboolean(L, options && options->disable_mcp);

@@ -467,6 +467,15 @@ function M.run(opts, callbacks)
         request = request_ctx.request or request
         headers = request_ctx.headers or headers
         local endpoint = request_ctx.endpoint or active.endpoint
+        if request_ctx.error then
+            local message = tostring(request_ctx.error)
+            if opts.update_usage ~= false then
+                agent.set_info("error", message)
+            end
+            if callbacks.on_error then callbacks.on_error(message) end
+            if callbacks.on_done then callbacks.on_done({ok = false, error = message, text = ""}) end
+            return false, message
+        end
         local body = json.encode(request)
 
         logging.runtime_log("api", string.format("post_stream endpoint=%s messages=%d tools=%d",

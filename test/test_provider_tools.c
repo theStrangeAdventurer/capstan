@@ -2122,6 +2122,50 @@ static MunitResult test_provider_models_list_uses_api_response(
   return MUNIT_OK;
 }
 
+static MunitResult test_provider_models_list_all_includes_static_config_models(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int config_rc = luaL_dostring(
+      L,
+      "capstan.config = {providers = {static_provider = {"
+      "endpoint = 'https://llm.example/v1/chat/completions',"
+      "model = 'static/model-a',"
+      "models = {{id = 'static/model-a', context_limit = 1234}}"
+      "}}}\n");
+  munit_assert_int(config_rc, ==, LUA_OK);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "models");
+  lua_getfield(L, -1, "list_all");
+  rc = lua_pcall(L, 0, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  int found = 0;
+  for (int i = 1; i <= (int)lua_rawlen(L, -1); i++) {
+    lua_rawgeti(L, -1, i);
+    lua_getfield(L, -1, "provider");
+    lua_getfield(L, -2, "id");
+    const char *provider = lua_tostring(L, -2);
+    const char *id = lua_tostring(L, -1);
+    if (provider && id && strcmp(provider, "static_provider") == 0 &&
+        strcmp(id, "static/model-a") == 0)
+      found = 1;
+    lua_pop(L, 3);
+  }
+  munit_assert_true(found);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_provider_models_endpoint_derived_from_chat_endpoint(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -3893,6 +3937,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_list_uses_api_response",
      test_provider_models_list_uses_api_response, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_models_list_all_includes_static_config_models",
+     test_provider_models_list_all_includes_static_config_models, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_endpoint_derived_from_chat_endpoint",
      test_provider_models_endpoint_derived_from_chat_endpoint, NULL, NULL,

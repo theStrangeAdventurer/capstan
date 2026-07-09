@@ -42,6 +42,9 @@ local function provider_models_url(provider)
 end
 
 local function load_provider_models(provider)
+    if provider and type(provider.models) == "table" then
+        return provider.models
+    end
     local url = provider_models_url(provider)
     if not url then return nil end
     if models_cache_by_url[url] ~= nil then
@@ -123,6 +126,10 @@ function M.list(runtime, provider_name)
     local provider = runtime.providers[provider_name]
     if not provider then
         return nil, "Unknown provider: " .. tostring(provider_name)
+    end
+
+    if type(provider.models) == "table" then
+        return normalize_models_response({data = provider.models}), nil
     end
 
     local url = provider_models_url(provider)
