@@ -1,3 +1,5 @@
+local serialize = require("agent.lua_serialize")
+
 local M = {}
 
 local function state()
@@ -6,16 +8,6 @@ local function state()
         _G.capstan.state = {}
     end
     return _G.capstan.state
-end
-
-local function lua_quote(value)
-    local s = tostring(value or "")
-    s = s:gsub("\\", "\\\\")
-         :gsub("\n", "\\n")
-         :gsub("\r", "\\r")
-         :gsub("\t", "\\t")
-         :gsub("\"", "\\\"")
-    return "\"" .. s .. "\""
 end
 
 function M.model_for(provider_name)
@@ -114,7 +106,7 @@ function M.save()
 
     file:write("return {\n")
     if type(st.provider) == "string" and st.provider ~= "" then
-        file:write("  provider = ", lua_quote(st.provider), ",\n")
+        file:write("  provider = ", serialize.quote(st.provider), ",\n")
     end
     file:write("  models = {\n")
     if type(st.models) == "table" then
@@ -126,7 +118,7 @@ function M.save()
         end
         table.sort(keys)
         for _, provider_name in ipairs(keys) do
-            file:write("    [", lua_quote(provider_name), "] = ", lua_quote(st.models[provider_name]), ",\n")
+            file:write("    [", serialize.quote(provider_name), "] = ", serialize.quote(st.models[provider_name]), ",\n")
         end
     end
     file:write("  },\n")
@@ -134,8 +126,8 @@ function M.save()
        type(st.weak_model.provider) == "string" and
        type(st.weak_model.model) == "string" then
         file:write("  weak_model = {\n")
-        file:write("    provider = ", lua_quote(st.weak_model.provider), ",\n")
-        file:write("    model = ", lua_quote(st.weak_model.model), ",\n")
+        file:write("    provider = ", serialize.quote(st.weak_model.provider), ",\n")
+        file:write("    model = ", serialize.quote(st.weak_model.model), ",\n")
         file:write("  },\n")
     end
     file:write("  profile_models = {\n")
@@ -152,9 +144,9 @@ function M.save()
         table.sort(keys)
         for _, profile_name in ipairs(keys) do
             local value = st.profile_models[profile_name]
-            file:write("    [", lua_quote(profile_name), "] = {\n")
-            file:write("      provider = ", lua_quote(value.provider), ",\n")
-            file:write("      model = ", lua_quote(value.model), ",\n")
+            file:write("    [", serialize.quote(profile_name), "] = {\n")
+            file:write("      provider = ", serialize.quote(value.provider), ",\n")
+            file:write("      model = ", serialize.quote(value.model), ",\n")
             file:write("    },\n")
         end
     end
