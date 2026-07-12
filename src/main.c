@@ -4,6 +4,7 @@
 #include "dispatch.h"
 #include "http.h"
 #include "input.h"
+#include "input_history.h"
 #include "linemap.h"
 #include "mode.h"
 #include "plugins.h"
@@ -822,6 +823,7 @@ int main(int argc, char *argv[]) {
     plugins_watch_start(global_plugins);
 
   input_init();
+  input_history_load(app_workdir());
   scroll_reset();
   render_all();
   long long last_idle_render_ms = main_now_ms();
@@ -996,6 +998,18 @@ int main(int argc, char *argv[]) {
 
     if (ch == KEY_RIGHT) {
       input_move_right();
+      render_all();
+      continue;
+    }
+
+    if (ch == KEY_UP) {
+      input_set_text(input_history_prev(input_get_text()));
+      render_all();
+      continue;
+    }
+
+    if (ch == KEY_DOWN) {
+      input_set_text(input_history_next(input_get_text()));
       render_all();
       continue;
     }

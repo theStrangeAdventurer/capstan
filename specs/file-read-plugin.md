@@ -10,6 +10,10 @@ and uses the same path behavior.
 - Absolute paths are used as provided.
 - Relative paths resolve against the configured
   [workspace directory](workspace-directory.md).
+- Paths with the `embedded:` prefix read read-only embedded runtime assets
+  through `capstan.embedded_asset`. This is used for built-in skill files such
+  as `embedded:skills/wiki-onboarding/SKILL.md` and does not touch the
+  filesystem.
 - `README` falls back to common README extensions when the exact file is
   missing.
 - Manual directory paths are listed with one entry per line and directories
@@ -45,4 +49,5 @@ internally, reads workspace-root `.gitignore` by default, and also applies
 `make test` covers finder matching, ignore rules, filterable popup input, and
 selection behavior. `make test-http-lua` covers README fallback,
 workspace-relative file reads, model-tool `ctx.tool_args.path` handling,
-directory path listing, and shell-quoting regression for directory listing.
+embedded asset reads, directory path listing, and shell-quoting regression for
+directory listing.

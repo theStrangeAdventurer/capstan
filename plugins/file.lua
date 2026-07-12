@@ -12,6 +12,28 @@ local function list_dir(path)
 	return io.popen("ls -1p -- " .. workspace.shell_quote(path) .. " 2>/dev/null")
 end
 
+local function embedded_asset_name(path)
+	if type(path) ~= "string" then return nil end
+	return path:match("^embedded:(.+)$")
+end
+
+local function read_embedded_asset(filename)
+	local asset_path = embedded_asset_name(filename)
+	if not asset_path then return nil end
+	if not (capstan and type(capstan.embedded_asset) == "function") then
+		return "❌ " .. filename .. " (embedded assets are unavailable)",
+			"❌ Cannot open " .. filename .. ": embedded assets are unavailable"
+	end
+	local content, err = capstan.embedded_asset(asset_path)
+	if type(content) ~= "string" then
+		local message = tostring(err or "missing embedded asset")
+		return "❌ " .. filename .. " (" .. message .. ")",
+			"❌ Cannot open " .. filename .. ": " .. message
+	end
+	return "📄 " .. filename,
+		string.format("📄 %s\n─────────────\n%s\n─────────────", filename, content)
+end
+
 plugin.autocomplete = {
   fetch = function(args)
     local dir = workspace.resolve_path(args[1] or ".")
@@ -80,6 +102,12 @@ function plugin.handler(ctx)
 	local llm_parts = {}
 
 	for _i, filename in ipairs(filenames) do
+		local embedded_ui, embedded_llm = read_embedded_asset(filename)
+		if embedded_ui then
+			table.insert(ui_parts, embedded_ui)
+			table.insert(llm_parts, embedded_llm)
+			goto continue
+		end
 		if ctx.tool_args then
 			local allowed, reason = workspace.model_path_allowed(filename, "read", {
 				allow_outside_workspace = ctx.permission and ctx.permission.allow_outside_workspace

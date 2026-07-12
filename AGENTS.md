@@ -280,6 +280,7 @@ Feature specs:
 - [Focus modes](specs/focus-modes.md)
 - [Hooks](specs/hooks.md)
 - [Info command](specs/info-command.md)
+- [Input history](specs/input-history.md)
 - [Editor command](specs/editor-command.md)
 - [Popups](specs/popups.md)
 - [Plugins](specs/plugins.md)
@@ -301,6 +302,8 @@ Feature specs:
 - [Subagents](specs/subagents.md)
 - [Terminal runtime](specs/terminal-runtime.md)
 - [Workspace directory](specs/workspace-directory.md)
+- [Wiki](specs/wiki.md)
+  - Built-in `wiki-onboarding` skill guides first-time setup when `/wiki` is run without configured `wiki.path`.
 - [MCP client](specs/mcp-client.md)
 
 ## Conventions

@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <sys/time.h>
 
 #ifdef POPUP_NCURSES
@@ -458,7 +459,58 @@ void popup_close_message(void) {
   g_msgpopup.compact = 0;
 }
 
+static void popup_copy_to_clipboard(const char *text) {
+  if (getenv("CAPSTAN_DISABLE_CLIPBOARD"))
+    return;
+#ifdef __APPLE__
+  FILE *p = popen("pbcopy", "w");
+#else
+  FILE *p = popen("xclip -selection clipboard 2>/dev/null", "w");
+  if (!p)
+    p = popen("xsel --clipboard 2>/dev/null", "w");
+#endif
+  if (p) {
+    fputs(text ? text : "", p);
+    pclose(p);
+  }
+}
+
+static void popup_copy_message_and_ack(void) {
+  const char *title = g_msgpopup.title ? g_msgpopup.title : "";
+  const char *text = g_msgpopup.text ? g_msgpopup.text : "";
+  size_t title_len = strlen(title);
+  size_t text_len = strlen(text);
+  size_t total = title_len + text_len + 3;
+  char *copy = malloc(total);
+  if (!copy)
+    return;
+  if (title_len > 0 && text_len > 0)
+    snprintf(copy, total, "%s\n%s", title, text);
+  else
+    snprintf(copy, total, "%s%s", title, text);
+  popup_copy_to_clipboard(copy);
+  free(copy);
+  popup_close_message();
+  popup_show_message_ms("Copied", "Error copied to clipboard", 0, 900);
+}
+
 int popup_message_handle_key(int ch) {
+  if (g_msgpopup.is_error && (ch == 'c' || ch == 'C' || ch == 'y' || ch == 'Y')) {
+    popup_copy_message_and_ack();
+    return 0;
+  }
+#ifdef POPUP_NCURSES
+  if (g_msgpopup.is_error && ch == KEY_MOUSE) {
+    MEVENT event;
+    if (getmouse(&event) == OK &&
+        (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED |
+                         BUTTON1_RELEASED))) {
+      popup_copy_message_and_ack();
+      return 0;
+    }
+    return 1;
+  }
+#endif
   if (ch == '\n' || ch == '\r' || ch == 27) {
     popup_close_message();
     return 0;

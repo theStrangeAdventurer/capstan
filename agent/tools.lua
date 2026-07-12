@@ -65,18 +65,32 @@ local function subagents_tool()
 end
 
 -- Gathers all available LLM tools: plugin tools + optional subagents tool.
+local function plugin_tool_specs(p)
+    local specs = {}
+    if type(p.tools) == "table" then
+        for _, tool in ipairs(p.tools) do
+            if type(tool) == "table" then table.insert(specs, tool) end
+        end
+        return specs
+    end
+    if type(p.tool) == "table" then
+        table.insert(specs, p.tool)
+    end
+    return specs
+end
+
 function M.collect(opts)
     opts = opts or {}
     local tools = {}
     if _G.plugins then
         for _, p in pairs(_G.plugins) do
-            if p.tool then
+            for _, tool in ipairs(plugin_tool_specs(p)) do
                 table.insert(tools, {
                     type = "function",
                     ["function"] = {
-                        name = p.tool.name,
-                        description = p.tool.description,
-                        parameters = p.tool.parameters,
+                        name = tool.name,
+                        description = tool.description,
+                        parameters = tool.parameters,
                     }
                 })
             end
@@ -117,12 +131,14 @@ end
 
 local function find_plugin_tool(tool_name)
     if tool_name == "subagents" and capability_enabled("subagents") then
-        return {tool = {name = "subagents"}}
+        return {tool = {name = "subagents"}}, {name = "subagents"}
     end
     if not _G.plugins then return nil end
     for _, p in pairs(_G.plugins) do
-        if p.tool and p.tool.name == tool_name then
-            return p
+        for _, tool in ipairs(plugin_tool_specs(p)) do
+            if tool.name == tool_name then
+                return p, tool
+            end
         end
     end
     return nil
@@ -625,7 +641,7 @@ local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
         return result, ok
     end
 
-    local p = find_plugin_tool(tool_name)
+    local p, tool_spec = find_plugin_tool(tool_name)
     if not p then
         if not _G.plugins then return "No plugins loaded", false end
         return "Unknown tool: " .. tool_name, false
@@ -641,15 +657,20 @@ local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
         command = p.command,
         args = {},
         tool_args = args,
+        tool_name = tool_name,
+        tool = tool_spec,
         permission = permission_ctx,
     }
     function ctx:replace(ui_val, llm_val)
         return ui_val, llm_val or ui_val
     end
+    function ctx:error(ui_val, llm_val)
+        return ui_val, llm_val or ui_val, false
+    end
     local function traceback(err)
         return debug.traceback(tostring(err), 2)
     end
-    local ok, ui_result, llm_result = xpcall(function()
+    local ok, ui_result, llm_result, result_ok = xpcall(function()
         return p.handler(ctx)
     end, traceback)
     if not ok then
@@ -665,7 +686,7 @@ local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
             tostring(ui_result),
         }, "\n"), false
     end
-    return llm_result or ui_result, true
+    return llm_result or ui_result, result_ok ~= false
 end
 
 local function tool_permission_name(tool_name)
@@ -673,9 +694,12 @@ local function tool_permission_name(tool_name)
     if mcp_client.is_mcp_tool(tool_name) then
         return "mcp"
     end
-    local p = find_plugin_tool(tool_name)
-    if p and p.tool and p.tool.permission and p.tool.permission ~= "" then
-        return p.tool.permission
+    local _, tool_spec = find_plugin_tool(tool_name)
+    if tool_spec and tool_spec.permission == false then
+        return nil
+    end
+    if tool_spec and tool_spec.permission and tool_spec.permission ~= "" then
+        return tool_spec.permission
     end
     return tool_name
 end
@@ -953,6 +977,16 @@ local function apply_prompt_decision(decision, scope, permission_tool)
     return decision == "allow" or decision == "always"
 end
 
+local function prompt_decision_allows(decision)
+    return decision == "allow" or decision == "allow_tool_run" or
+        decision == "allow_run" or decision == "always"
+end
+
+local function should_persist_prompt_decision(tool_name, permission_tool, decision)
+    return tool_name == "wiki_ingest" and permission_tool == "file_read" and
+        prompt_decision_allows(decision)
+end
+
 local function tool_permission_context(permission_tool, target)
     if not permission_tool then return nil end
     local ctx = {tool = permission_tool, target = target}
@@ -1077,7 +1111,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             result_content = "User denied " .. tool_name .. " " .. target
                             if show_generic_status then append_status(tool_status_suffix("— denied by user", display_command)) end
                         else
-                            if decision == "always" then
+                            if decision == "always" or should_persist_prompt_decision(tool_name, permission_tool, decision) then
                                 permit.grant(permission_tool, target, true)
                                 permit.save()
                             end

@@ -2234,6 +2234,147 @@ static MunitResult test_fetch_permission_target_uses_url(
   return MUNIT_OK;
 }
 
+static MunitResult test_plugin_tools_collection_and_permission_false(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "plugins.multi = {\n"
+      "  tools = {\n"
+      "    { name = 'multi_regular', description = 'regular', parameters = { type = 'object', properties = { path = { type = 'string' } }, required = {'path'} } },\n"
+      "    { name = 'multi_internal', permission = false, description = 'internal', parameters = { type = 'object', properties = { path = { type = 'string' } }, required = {'path'} } },\n"
+      "  },\n"
+      "  handler = function(ctx)\n"
+      "    _G.multi_tool_name = ctx.tool_name\n"
+      "    _G.multi_tool_path = ctx.tool_args.path\n"
+      "    if ctx.tool_args.path == '/missing' then return ctx:error('missing ui', 'missing file') end\n"
+      "    return ctx:replace('ui', 'llm:' .. ctx.tool_name .. ':' .. ctx.tool_args.path)\n"
+      "  end,\n"
+      "}\n"
+      "local available = tools.collect({ disable_subagents = true })\n"
+      "_G.multi_tool_count = 0\n"
+      "for _, tool in ipairs(available) do\n"
+      "  local name = tool['function'] and tool['function'].name\n"
+      "  if name == 'multi_regular' or name == 'multi_internal' then _G.multi_tool_count = _G.multi_tool_count + 1 end\n"
+      "end\n"
+      "tools.handle_tool_calls({}, available, {{ id = 'call_multi', name = 'multi_internal', arguments = '{\"path\":\"/outside\"}' }}, '', function(msgs) _G.multi_result = msgs[#msgs].content end, { tools = available, silent_tools = true })\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "multi_tool_count");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 2);
+  lua_pop(L, 1);
+  lua_getglobal(L, "multi_tool_name");
+  munit_assert_string_equal(lua_tostring(L, -1), "multi_internal");
+  lua_pop(L, 1);
+  lua_getglobal(L, "multi_result");
+  munit_assert_string_equal(lua_tostring(L, -1), "llm:multi_internal:/outside");
+  lua_pop(L, 1);
+  munit_assert_int(permit_check_calls, ==, 0);
+  munit_assert_int(permit_prompt_calls, ==, 0);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "local available = tools.collect({ disable_subagents = true })\n"
+      "tools.handle_tool_calls({}, available, {{ id = 'call_missing', name = 'multi_internal', arguments = '{\"path\":\"/missing\"}' }}, '', function(msgs) _G.multi_error_result = msgs[#msgs].content end, { tools = available, silent_tools = true })\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "multi_error_result");
+  munit_assert_string_equal(lua_tostring(L, -1), "missing file");
+  lua_pop(L, 1);
+  munit_assert_true(strstr(captured_logs, "[tool] error name=multi_internal") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_wiki_ingest_permission_target_uses_path(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "plugins.wiki_tool_test = {\n"
+      "  tools = {{ name = 'wiki_ingest', permission = 'file_read', description = 'ingest', parameters = { type = 'object', properties = { path = { type = 'string' } }, required = {'path'} } }},\n"
+      "  handler = function(ctx) _G.wiki_ingest_called = true return ctx:replace('ui', 'llm') end,\n"
+      "}\n"
+      "local available = tools.collect({ disable_subagents = true })\n"
+      "tools.handle_tool_calls({}, available, {{ id = 'call_wiki_ingest', name = 'wiki_ingest', arguments = '{\"path\":\"/tmp/source-notes\"}' }}, '', function(msgs) _G.wiki_ingest_result = msgs[#msgs].content end, { tools = available, silent_tools = true })\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_string_equal(captured_permit_tool, "file_read");
+  munit_assert_string_equal(captured_permit_target, "/tmp/source-notes");
+  munit_assert_int(permit_check_calls, ==, 1);
+  lua_getglobal(L, "wiki_ingest_called");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "wiki_ingest_result");
+  munit_assert_true(strstr(lua_tostring(L, -1), "Permission denied for wiki_ingest /tmp/source-notes") != NULL);
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_wiki_ingest_yes_persists_file_read_permission(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("ask");
+  set_permit_prompt_decision("allow");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "plugins.wiki_tool_test = {\n"
+      "  tools = {{ name = 'wiki_ingest', permission = 'file_read', description = 'ingest', parameters = { type = 'object', properties = { path = { type = 'string' } }, required = {'path'} } }},\n"
+      "  handler = function(ctx) _G.wiki_ingest_called = true return ctx:replace('ui', 'llm') end,\n"
+      "}\n"
+      "local available = tools.collect({ disable_subagents = true })\n"
+      "tools.handle_tool_calls({}, available, {{ id = 'call_wiki_ingest', name = 'wiki_ingest', arguments = '{\"path\":\"/tmp/source-notes\"}' }}, '', function(msgs) _G.wiki_ingest_result = msgs[#msgs].content end, { tools = available, silent_tools = true })\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_int(permit_prompt_calls, ==, 1);
+  munit_assert_int(permit_save_calls, ==, 1);
+  munit_assert_int(grant_allow, ==, 1);
+  munit_assert_string_equal(granted_tool, "file_read");
+  munit_assert_string_equal(granted_pattern, "/tmp/source-notes");
+  lua_getglobal(L, "wiki_ingest_called");
+  munit_assert_true(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "wiki_ingest_result");
+  munit_assert_string_equal(lua_tostring(L, -1), "llm");
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_logs_text_when_model_does_not_call_tool(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -3946,6 +4087,15 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/fetch_permission_target_uses_url", test_fetch_permission_target_uses_url,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/plugin_tools_collection_and_permission_false",
+     test_plugin_tools_collection_and_permission_false, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/wiki_ingest_permission_target_uses_path",
+     test_wiki_ingest_permission_target_uses_path, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/wiki_ingest_yes_persists_file_read_permission",
+     test_wiki_ingest_yes_persists_file_read_permission, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/logs_text_when_model_does_not_call_tool",
      test_logs_text_when_model_does_not_call_tool, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

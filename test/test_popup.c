@@ -103,6 +103,22 @@ static MunitResult test_message_popup_close_resets_scroll(
   return MUNIT_OK;
 }
 
+static MunitResult test_error_message_copy_key_shows_copied_ack(
+    const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  setenv("CAPSTAN_DISABLE_CLIPBOARD", "1", 1);
+  popup_show_message("API Error", "HTTP 400", 1);
+  munit_assert_int(popup_is_message_active(), ==, 1);
+  munit_assert_int(popup_message_handle_key('c'), ==, 0);
+  munit_assert_int(g_msgpopup.active, ==, 1);
+  munit_assert_int(g_msgpopup.compact, ==, 1);
+  munit_assert_string_equal(g_msgpopup.title, "Copied");
+  munit_assert_string_equal(g_msgpopup.text, "Error copied to clipboard");
+  popup_close_message();
+  unsetenv("CAPSTAN_DISABLE_CLIPBOARD");
+  return MUNIT_OK;
+}
+
 static MunitResult test_j_down(const MunitParameter p[], void *d) {
   (void)p; (void)d;
   open_popup(5, 0);
@@ -601,6 +617,7 @@ static MunitTest tests[] = {
   {"/compact_message_is_non_modal", test_compact_message_is_non_modal, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/message_popup_scroll_keys", test_message_popup_scroll_keys, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/message_popup_close_resets_scroll", test_message_popup_close_resets_scroll, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/error_message_copy_key_shows_copied_ack", test_error_message_copy_key_shows_copied_ack, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/j_down", test_j_down, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/k_up", test_k_up, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/j_clamp_bottom", test_j_clamp_bottom, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

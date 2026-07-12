@@ -10,7 +10,7 @@
 ---@field command? string
 ---@field async? boolean
 ---@field history? boolean
----@field handler? fun(ctx: CapstanPluginContext): string?, string?
+---@field handler? fun(ctx: CapstanPluginContext): string?, string?, boolean?
 ---@field autocomplete? CapstanAutocompleteSpec
 ---@field tool? CapstanToolSpec
 ---@field hooks? table<string, fun(ctx: table): table>
@@ -23,6 +23,7 @@
 ---@field command string
 ---@field args string[]
 ---@field replace fun(self: CapstanPluginContext, ui_val: string, llm_val?: string): string, string
+---@field error fun(self: CapstanPluginContext, ui_val: string, llm_val?: string): string, string, boolean
 
 ---@class CapstanAutocompleteSpec
 ---@field title? string

@@ -32,3 +32,10 @@ List popups render a slim scrollbar only when the item count exceeds the visible
 row count. The scrollbar is drawn inside the popup's right edge and does not
 change the popup width. Filterable popups start the scrollbar below the `Find:`
 input row.
+
+## Message popups
+
+Message popups close with `Enter` or `Esc` and scroll with arrows, `j`/`k`,
+`Ctrl-D`, and `Ctrl-U`. Error message popups can be copied to the system
+clipboard by clicking them or pressing `c`/`y`; after copying, Capstan shows a
+short non-modal acknowledgement.
