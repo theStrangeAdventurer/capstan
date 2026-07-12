@@ -9,6 +9,7 @@
 #include "permit.h"
 #include "popup.h"
 #include "skills.h"
+#include "wiki.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <lauxlib.h>
@@ -148,22 +149,32 @@ static void cleanup_materialized_builtin_skills(void) {
 static size_t collect_builtin_skills(BuiltinSkill *builtin_skills,
                                      size_t builtin_skill_capacity) {
   size_t count = 0;
-  if (!self_improvement_allowed())
-    return 0;
-  if (count >= builtin_skill_capacity)
-    return count;
+  if (self_improvement_allowed() && count < builtin_skill_capacity) {
+    const EmbeddedAsset *asset =
+        embedded_asset_find("skills/self-improvement/SKILL.md");
+    if (asset) {
+      builtin_skills[count++] = (BuiltinSkill){
+          .name = "self-improvement",
+          .path = "embedded:skills/self-improvement/SKILL.md",
+          .content = asset->data,
+          .content_size = asset->size,
+      };
+    }
+  }
 
-  const EmbeddedAsset *asset =
-      embedded_asset_find("skills/self-improvement/SKILL.md");
-  if (!asset)
-    return count;
+  if (count < builtin_skill_capacity) {
+    const EmbeddedAsset *asset =
+        embedded_asset_find("skills/wiki-onboarding/SKILL.md");
+    if (asset) {
+      builtin_skills[count++] = (BuiltinSkill){
+          .name = "wiki-onboarding",
+          .path = "embedded:skills/wiki-onboarding/SKILL.md",
+          .content = asset->data,
+          .content_size = asset->size,
+      };
+    }
+  }
 
-  builtin_skills[count++] = (BuiltinSkill){
-      .name = "self-improvement",
-      .path = "embedded:skills/self-improvement/SKILL.md",
-      .content = asset->data,
-      .content_size = asset->size,
-  };
   return count;
 }
 
@@ -183,7 +194,7 @@ static void load_system_prompt(void) {
   char project_skills[512];
   char user_skills[512];
   char common_skills[512];
-  BuiltinSkill builtin_skills[1];
+  BuiltinSkill builtin_skills[2];
   cleanup_materialized_builtin_skills();
   size_t builtin_skill_count =
       collect_builtin_skills(builtin_skills,
@@ -211,6 +222,34 @@ static void load_system_prompt(void) {
       skills_build_summary(builtin_skills, builtin_skill_count,
                            project_skills_dir, user_skills_dir,
                            common_skills_dir);
+
+  const char *wiki_path = NULL;
+  char default_wiki_path[512];
+  default_wiki_path[0] = '\0';
+  lua_getglobal(L, "capstan");
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "config");
+    if (lua_istable(L, -1)) {
+      lua_getfield(L, -1, "wiki");
+      if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, "path");
+        if (lua_isstring(L, -1))
+          wiki_path = lua_tostring(L, -1);
+        lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  if (!wiki_path &&
+      app_state_path(default_wiki_path, sizeof(default_wiki_path), "wiki") == 0) {
+    if (app_state_ensure_dir() == 0)
+      mkdir(default_wiki_path, 0755);
+    wiki_path = default_wiki_path;
+  }
+  char *wiki_prompt = wiki_build_prompt(wiki_path);
+  char *wiki_summary = wiki_build_summary(wiki_path);
 
   char agents_path[512];
   char *agents_content = NULL;
@@ -245,7 +284,8 @@ static void load_system_prompt(void) {
   }
 
   size_t skills_size = skills_prompt ? strlen(skills_prompt) : 0;
-  char *combined = malloc(size + agents_prompt_size + skills_size + 1);
+  size_t wiki_size = wiki_prompt ? strlen(wiki_prompt) : 0;
+  char *combined = malloc(size + agents_prompt_size + skills_size + wiki_size + 1);
   if (combined) {
     size_t pos = 0;
     memcpy(combined + pos, data, size);
@@ -254,9 +294,14 @@ static void load_system_prompt(void) {
       memcpy(combined + pos, agents_prompt, agents_prompt_size);
       pos += agents_prompt_size;
     }
-    if (skills_size)
+    if (skills_size) {
       memcpy(combined + pos, skills_prompt, skills_size);
-    pos += skills_size;
+      pos += skills_size;
+    }
+    if (wiki_size) {
+      memcpy(combined + pos, wiki_prompt, wiki_size);
+      pos += wiki_size;
+    }
     combined[pos] = '\0';
     lua_pushlstring(L, combined, pos);
   } else {
@@ -268,6 +313,14 @@ static void load_system_prompt(void) {
   if (lua_istable(L, -1)) {
     lua_pushstring(L, skills_summary ? skills_summary : "No skills loaded.");
     lua_setfield(L, -2, "skills_summary");
+
+    lua_pushstring(L, wiki_summary ? wiki_summary : "Wiki is not configured.");
+    lua_setfield(L, -2, "wiki_summary");
+
+    if (wiki_path) {
+      lua_pushstring(L, wiki_path);
+      lua_setfield(L, -2, "wiki_path");
+    }
 
     lua_newtable(L);
     int skill_root_index = 1;
@@ -290,6 +343,8 @@ static void load_system_prompt(void) {
   free(combined);
   free(agents_prompt);
   free(agents_content);
+  free(wiki_summary);
+  free(wiki_prompt);
   free(skills_summary);
   free(skills_prompt);
   free(override);
@@ -369,6 +424,25 @@ static int l_capstan_realpath(lua_State *l) {
     return 2;
   }
   lua_pushstring(l, resolved);
+  return 1;
+}
+
+static int l_capstan_embedded_asset(lua_State *l) {
+  const char *path = luaL_checkstring(l, 1);
+  if (strncmp(path, "embedded:", 9) == 0)
+    path += 9;
+  if (!path[0]) {
+    lua_pushnil(l);
+    lua_pushstring(l, "missing embedded asset path");
+    return 2;
+  }
+  const EmbeddedAsset *asset = embedded_asset_find(path);
+  if (!asset) {
+    lua_pushnil(l);
+    lua_pushfstring(l, "missing embedded asset: %s", path);
+    return 2;
+  }
+  lua_pushlstring(l, asset->data, asset->size);
   return 1;
 }
 
@@ -477,6 +551,9 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
 
   lua_pushcfunction(L, l_capstan_realpath);
   lua_setfield(L, -2, "realpath");
+
+  lua_pushcfunction(L, l_capstan_embedded_asset);
+  lua_setfield(L, -2, "embedded_asset");
 
   lua_pushcfunction(L, l_capstan_secure_write_file);
   lua_setfield(L, -2, "secure_write_file");

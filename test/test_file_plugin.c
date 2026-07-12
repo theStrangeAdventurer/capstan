@@ -33,6 +33,17 @@ static int l_capstan_realpath(lua_State *L) {
   return 1;
 }
 
+static int l_capstan_embedded_asset(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+  if (strcmp(path, "skills/wiki-onboarding/SKILL.md") == 0) {
+    lua_pushstring(L, "---\nname: wiki-onboarding\n---\n\nGuide wiki setup.\n");
+    return 1;
+  }
+  lua_pushnil(L);
+  lua_pushfstring(L, "missing embedded asset: %s", path);
+  return 2;
+}
+
 static void load_file_plugin(lua_State *L) {
   int rc = luaL_dofile(L, "plugins/file.lua");
   munit_assert_int(rc, ==, LUA_OK);
@@ -59,6 +70,13 @@ static void set_capstan_workdir_and_skill_root(lua_State *L, const char *workdir
   lua_pushstring(L, skill_root);
   lua_rawseti(L, -2, 1);
   lua_setfield(L, -2, "skill_roots");
+  lua_setglobal(L, "capstan");
+}
+
+static void set_capstan_embedded_assets(lua_State *L) {
+  lua_newtable(L);
+  lua_pushcfunction(L, l_capstan_embedded_asset);
+  lua_setfield(L, -2, "embedded_asset");
   lua_setglobal(L, "capstan");
 }
 
@@ -242,6 +260,46 @@ static MunitResult test_directory_path_returns_listing(
   lua_close(L);
   unlink(child);
   rmdir(dir);
+  return MUNIT_OK;
+}
+
+static MunitResult test_embedded_skill_read(const MunitParameter params[],
+                                            void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_state();
+  set_capstan_embedded_assets(L);
+  load_file_plugin(L);
+  call_handler_tool(L, "embedded:skills/wiki-onboarding/SKILL.md");
+
+  const char *ui = lua_tostring(L, -2);
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(ui);
+  munit_assert_not_null(llm);
+  munit_assert_not_null(strstr(ui, "embedded:skills/wiki-onboarding/SKILL.md"));
+  munit_assert_not_null(strstr(llm, "name: wiki-onboarding"));
+  munit_assert_not_null(strstr(llm, "Guide wiki setup."));
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_missing_embedded_skill_read_returns_error(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_state();
+  set_capstan_embedded_assets(L);
+  load_file_plugin(L);
+  call_handler_tool(L, "embedded:skills/missing/SKILL.md");
+
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(llm);
+  munit_assert_not_null(strstr(llm, "missing embedded asset: skills/missing/SKILL.md"));
+
+  lua_close(L);
   return MUNIT_OK;
 }
 
@@ -487,6 +545,11 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/directory_path_returns_listing", test_directory_path_returns_listing,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/embedded_skill_read", test_embedded_skill_read, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/missing_embedded_skill_read_returns_error",
+     test_missing_embedded_skill_read_returns_error, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_read_rejects_symlink_escape",
      test_tool_read_rejects_symlink_escape, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},

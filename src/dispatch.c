@@ -5,6 +5,7 @@
 #include "finder.h"
 #include "http.h"
 #include "input.h"
+#include "input_history.h"
 #include "plugins.h"
 #include "popup.h"
 #include "scroll.h"
@@ -327,6 +328,8 @@ void dispatch_submit(void) {
   scroll_reset();
   char submitted[INPUT_BUFFER_SIZE];
   snprintf(submitted, sizeof(submitted), "%s", text);
+  if (submitted[0])
+    input_history_add(submitted);
 
   char command[MAX_COMMAND_LEN];
   size_t cmd_end;

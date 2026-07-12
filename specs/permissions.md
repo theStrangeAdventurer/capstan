@@ -34,6 +34,15 @@ The permit popup offers:
   shell commands in that workspace do not prompt again just because the command
   text changed.
 
+For `wiki_ingest`, any positive popup choice persists the `file_read` permission
+for the approved source path. This makes the user's explicit ingest consent
+stable for future wiki indexing and source-read workflows without changing the
+one-shot meaning of `Yes` for unrelated tools.
+
+`wiki_read` is permission-free because it is constrained to Capstan's effective
+wiki root, which defaults to internal application state. Reading an external
+Markdown root still requires the explicit `wiki_ingest` consent above.
+
 The selected choice can be changed with `k`, up arrow, `j`, or down arrow.
 `Enter` and `Tab` confirm the current choice. Mouse clicks on a choice select
 that choice; mouse clicks outside the permit popup are ignored.

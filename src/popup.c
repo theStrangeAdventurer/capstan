@@ -359,11 +359,17 @@ void popup_render_message(void) {
     last = line_count;
   int footer_w = popup_w - 4;
   if (footer_w > 0) {
-    if (max_scroll > 0)
-      mvwprintw(win, popup_h - 2, 2, "%.*s", footer_w,
-                "arrows/j/k scroll, Enter close");
+    const char *footer = NULL;
+    if (g_msgpopup.is_error)
+      footer = max_scroll > 0 ? "click/c copy, arrows/j/k scroll, Enter close"
+                              : "click/c copy, Enter close";
     else
-      mvwprintw(win, popup_h - 2, 2, "%.*s", footer_w, "Enter close");
+      footer = max_scroll > 0 ? "arrows/j/k scroll, Enter close"
+                              : "Enter close";
+    if (max_scroll > 0)
+      mvwprintw(win, popup_h - 2, 2, "%.*s", footer_w, footer);
+    else
+      mvwprintw(win, popup_h - 2, 2, "%.*s", footer_w, footer);
     /* Keep enough room for worst-case three int values; Linux GCC treats
        possible snprintf truncation as an error under -Werror. */
     enum { POS_BUF_SIZE = 64 };

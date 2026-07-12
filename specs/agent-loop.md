@@ -194,6 +194,11 @@ permission target, checks `permit`, calls the matching plugin handler with
 `ctx.tool_args`, and adds a tool result message back into the recursive
 conversation.
 
+Plugin model tools may return an expected failure through `ctx:error(ui, llm?)`.
+The runtime sends the supplied model result as the tool message but records and
+renders the call as failed. Existing `ctx:replace(ui, llm?)` handlers remain
+successful by default.
+
 Tool handler errors are contained inside the Lua runtime. A failing handler must
 produce a `{role="tool"}` diagnostic result with plugin id, source, arguments,
 and traceback; log the failure; and mark the visible tool row with a compact

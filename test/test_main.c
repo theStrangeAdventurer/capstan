@@ -5,6 +5,7 @@ extern MunitSuite app_config_suite;
 extern MunitSuite cli_args_suite;
 extern MunitSuite finder_suite;
 extern MunitSuite input_suite;
+extern MunitSuite input_history_suite;
 extern MunitSuite linemap_suite;
 extern MunitSuite mode_suite;
 extern MunitSuite permit_logic_suite;
@@ -17,6 +18,7 @@ extern MunitSuite skills_suite;
 extern MunitSuite usage_suite;
 extern MunitSuite utils_suite;
 extern MunitSuite visual_suite;
+extern MunitSuite wiki_suite;
 
 int main(int argc, char *argv[]) {
   MunitSuite suites[] = {
@@ -25,6 +27,7 @@ int main(int argc, char *argv[]) {
     cli_args_suite,
     finder_suite,
     input_suite,
+    input_history_suite,
     linemap_suite,
     mode_suite,
     permit_logic_suite,
@@ -37,6 +40,7 @@ int main(int argc, char *argv[]) {
     usage_suite,
     utils_suite,
     visual_suite,
+    wiki_suite,
     {NULL, NULL, NULL, 0, 0}
   };
   MunitSuite suite = {

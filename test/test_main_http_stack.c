@@ -14,6 +14,7 @@ extern MunitSuite models_plugin_suite;
 extern MunitSuite info_plugin_suite;
 extern MunitSuite provider_tools_suite;
 extern MunitSuite skills_plugin_suite;
+extern MunitSuite wiki_plugin_suite;
 extern MunitSuite auth_lua_suite;
 
 int main(int argc, char *argv[]) {
@@ -32,6 +33,7 @@ int main(int argc, char *argv[]) {
     info_plugin_suite,
     provider_tools_suite,
     skills_plugin_suite,
+    wiki_plugin_suite,
     auth_lua_suite,
     {NULL, NULL, NULL, 0, 0}
   };

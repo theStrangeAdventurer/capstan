@@ -14,6 +14,12 @@ Built-in plugins are embedded into the binary. User plugins live in:
 Each plugin file returns a Lua table. `id` is required. `command` and `handler`
 are required only for slash commands; hook-only plugins may omit them.
 
+Model-tool handlers return successful UI/model values with
+`ctx:replace(ui_value, model_value?)`. Expected operational failures should use
+`ctx:error(ui_value, model_value?)`; the runtime then preserves the supplied
+message while marking the tool row and runtime event as an error. Throwing is
+reserved for unexpected plugin defects and adds a traceback diagnostic.
+
 The built-in `self-improvement` skill, when explicitly enabled, instructs the
 agent to write durable extensions here instead of embedding plugin code inside
 `config.lua`.
