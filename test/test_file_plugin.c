@@ -117,6 +117,30 @@ static void call_handler_tool(lua_State *L, const char *path) {
   munit_assert_int(rc, ==, LUA_OK);
 }
 
+static void call_handler_tool_paths(lua_State *L, const char *first,
+                                    const char *second) {
+  lua_getfield(L, -1, "handler");
+
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_setfield(L, -2, "args");
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, first);
+  lua_rawseti(L, -2, 1);
+  lua_pushstring(L, second);
+  lua_rawseti(L, -2, 2);
+  lua_pushstring(L, first);
+  lua_rawseti(L, -2, 3);
+  lua_setfield(L, -2, "paths");
+  lua_setfield(L, -2, "tool_args");
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
 static void call_handler_tool_with_outside_permission(lua_State *L,
                                                       const char *path) {
   lua_getfield(L, -1, "handler");
@@ -193,6 +217,50 @@ static MunitResult test_relative_path_uses_capstan_workdir(
 
   lua_close(L);
   unlink(path);
+  rmdir(dir);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_paths_reads_multiple_files_once(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char dir[4096];
+  snprintf(dir, sizeof(dir), "/tmp/capstan-file-batch-%ld", (long)getpid());
+  rmdir(dir);
+  munit_assert_int(mkdir(dir, 0700), ==, 0);
+
+  char first[4096];
+  char second[4096];
+  snprintf(first, sizeof(first), "%s/FIRST.md", dir);
+  snprintf(second, sizeof(second), "%s/SECOND.md", dir);
+  FILE *first_file = fopen(first, "w");
+  FILE *second_file = fopen(second, "w");
+  munit_assert_not_null(first_file);
+  munit_assert_not_null(second_file);
+  fputs("first batch value", first_file);
+  fputs("second batch value", second_file);
+  fclose(first_file);
+  fclose(second_file);
+
+  lua_State *L = new_state();
+  set_capstan_workdir(L, dir);
+  load_file_plugin(L);
+
+  call_handler_tool_paths(L, "FIRST.md", "SECOND.md");
+  const char *ui = lua_tostring(L, -2);
+  const char *llm = lua_tostring(L, -1);
+  munit_assert_not_null(ui);
+  munit_assert_not_null(llm);
+  munit_assert_true(strstr(ui, "FIRST.md") != NULL);
+  munit_assert_true(strstr(ui, "SECOND.md") != NULL);
+  munit_assert_true(strstr(llm, "first batch value") != NULL);
+  munit_assert_true(strstr(llm, "second batch value") != NULL);
+
+  lua_close(L);
+  unlink(first);
+  unlink(second);
   rmdir(dir);
   return MUNIT_OK;
 }
@@ -539,6 +607,9 @@ static MunitTest tests[] = {
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/relative_path_uses_capstan_workdir",
      test_relative_path_uses_capstan_workdir, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_paths_reads_multiple_files_once",
+     test_tool_paths_reads_multiple_files_once, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/directory_listing_shell_quotes_path",
      test_directory_listing_shell_quotes_path, NULL, NULL,

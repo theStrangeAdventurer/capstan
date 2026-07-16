@@ -8,6 +8,7 @@ local profiles = require("agent.profiles")
 local stream = require("agent.stream")
 local tokens = require("agent.tokens")
 local tools_runtime = require("agent.tools")
+local workspace = require("agent.workspace")
 
 local M = provider_config.build()
 
@@ -81,6 +82,17 @@ local function build_messages(messages, profile)
     if profile and profile.prompt then
         system = system .. "\n\n" .. profile.prompt
     end
+    system = system .. string.format([[
+
+## Environment
+<env>
+  Working directory: %s
+  Workspace root: %s
+</env>
+
+Treat the working directory as the default location for relative file and shell
+operations. Stay inside the workspace root unless the user explicitly requests
+external access.]], workspace.configured_workdir(), workspace.configured_workspace_root())
     if system ~= "" then
         table.insert(msgs, {role = "system", content = system})
     end
@@ -216,6 +228,51 @@ local function agent_config_number(field, default)
     return value
 end
 
+local function agent_config_nonnegative(field, default)
+    local configured = config_table("agent")
+    local value = configured and tonumber(configured[field]) or nil
+    if value == nil or value < 0 then return default end
+    return value
+end
+
+local function agent_config_boolean(field)
+    local configured = config_table("agent")
+    local value = configured and configured[field]
+    if type(value) == "boolean" then return value end
+    return nil
+end
+
+local completion_review_instruction = [[
+Before finalizing, perform one bounded completion review of this implementation.
+Re-read the original request line by line. For every required behavior and each
+exact term, name, version, value, or scope, locate evidence in the changed source
+or a direct check at the boundary where consumers observe it. A related effect,
+default, label, visual approximation, or setting at another hierarchy level is
+not evidence. Fix any concrete gap and validate that distinct requirement;
+otherwise give the final answer. Do not repeat checks or add dependencies or an
+ad-hoc harness solely for this review.
+]]
+
+local function completion_review_enabled(opts, profile, run_depth)
+    if run_depth > 0 then return false end
+    if type(opts.completion_review) == "boolean" then return opts.completion_review end
+    local configured = agent_config_boolean("completion_review")
+    if configured ~= nil then return configured end
+    return profile and profile.completion_review == true
+end
+
+local function completion_review_warranted(state)
+    if not state or not state.workspace_mutated then return false end
+    if state.successful_validation then return true end
+    local targets = state.workspace_write_targets or {}
+    local count = 0
+    for _ in pairs(targets) do
+        count = count + 1
+        if count >= 2 then return true end
+    end
+    return false
+end
+
 local function now_ms()
     if _G.capstan and type(_G.capstan.now_ms) == "function" then
         return _G.capstan.now_ms()
@@ -230,7 +287,9 @@ local function make_guard(started_at)
         max_tool_calls = agent_config_number("max_tool_calls", 80),
         max_same_tool_call = agent_config_number("max_same_tool_call", 3),
         max_same_shell_command = agent_config_number("max_same_shell_command", 0),
+        max_generated_output_checks = agent_config_nonnegative("max_generated_output_checks", 1),
         total_tool_calls = 0,
+        generated_output_checks = 0,
         signatures = {},
         last_tool_signature = nil,
         same_tool_count = 0,
@@ -244,6 +303,14 @@ local function guard_duration_error(guard)
         return string.format("agent run exceeded %ds", math.floor(guard.max_duration_ms / 1000))
     end
     return nil
+end
+
+local function retryable_stream_error(message)
+    local value = tostring(message or ""):lower()
+    return value:find("connection error", 1, true) ~= nil or
+        value:find("timeout", 1, true) ~= nil or
+        value:find("temporar", 1, true) ~= nil or
+        value:match("http 5%d%d") ~= nil
 end
 
 -- Full agent run: build messages, stream LLM response, handle tool_calls recursively.
@@ -318,9 +385,19 @@ function M.run(opts, callbacks)
 
     local max_turns = tonumber(opts.max_turns) or agent_config_number("max_turns", 80)
     if max_turns <= 0 then max_turns = agent_config_number("max_turns", 80) end
+    local stream_timeout_sec = agent_config_number("stream_timeout_sec", 120)
+    if stream_timeout_sec < 0 then stream_timeout_sec = 0 end
+    local max_stream_retries = agent_config_nonnegative("max_stream_retries", 1)
     local turns = 0
     local started_at = now_ms()
     local guard = make_guard(started_at)
+    local run_state = {
+        workspace_mutated = false,
+        workspace_write_targets = {},
+        successful_validation = false,
+        completion_review_done = false,
+    }
+    local review_enabled = completion_review_enabled(opts, profile, run_depth)
     local permission_scope = opts.permission_scope or {allowed_tools = {}, full_control = false}
     if type(permission_scope.allowed_tools) ~= "table" then
         permission_scope.allowed_tools = {}
@@ -364,13 +441,29 @@ function M.run(opts, callbacks)
             return
         end
 
+        local deferred_text_chunks = {}
+        local defer_visible_text = review_enabled and run_state.workspace_mutated
+        local stream_attempt = 0
+        local stream_emitted_text = false
+        local start_stream
+
+        local function publish_text(text)
+            if text == "" then return end
+            if callbacks.on_text then
+                callbacks.on_text(text)
+            else
+                agent.append(text, "agent")
+            end
+        end
+
         local function on_result(result, is_done)
             if not is_done then
                 if result.type == "text" and result.content then
-                    if callbacks.on_text then
-                        callbacks.on_text(result.content)
+                    stream_emitted_text = true
+                    if defer_visible_text then
+                        table.insert(deferred_text_chunks, result.content)
                     else
-                        agent.append(result.content, "agent")
+                        publish_text(result.content)
                     end
                 end
                 return
@@ -378,7 +471,34 @@ function M.run(opts, callbacks)
 
             if result.ok == false then
                 local message = result.error or "agent stream failed"
+                if not stream_emitted_text and stream_attempt <= max_stream_retries and
+                    retryable_stream_error(message) then
+                    logging.runtime_log("agent", string.format(
+                        "stream failed before output; retrying attempt=%d/%d error=%s",
+                        stream_attempt + 1,
+                        max_stream_retries + 1,
+                        logging.compact(message, 500)
+                    ))
+                    start_stream()
+                    return
+                end
                 logging.runtime_log("agent", "stream failed error=" .. logging.compact(message, 500))
+                if run_state.completion_review_fallback then
+                    local fallback = run_state.completion_review_fallback
+                    logging.runtime_log("agent", "completion_review failed; preserving prior answer")
+                    publish_text(fallback.text)
+                    finished = true
+                    finish({
+                        ok = true,
+                        text = fallback.text,
+                        messages = fallback.messages,
+                        turns = turns,
+                        provider = provider_name,
+                        model = active.model,
+                        review_error = message,
+                    })
+                    return
+                end
                 if callbacks.on_error then callbacks.on_error(message) end
                 finished = true
                 finish({ok = false, error = message, text = result.text or ""})
@@ -386,6 +506,13 @@ function M.run(opts, callbacks)
             end
 
             if result.tool_calls and #result.tool_calls > 0 then
+                if (result.text or "") ~= "" then
+                    logging.runtime_log("agent", string.format(
+                        "continuing mixed response text_bytes=%d tool_calls=%d",
+                        #(result.text or ""),
+                        #result.tool_calls
+                    ), "warn")
+                end
                 tools_runtime.handle_tool_calls(current_msgs, tools, result.tool_calls, result.text, continue_agent_cycle, {
                     runtime = M,
                     provider = active,
@@ -398,10 +525,31 @@ function M.run(opts, callbacks)
                     permission_scope = permission_scope,
                     callbacks = callbacks,
                     guard = guard,
+                    state = run_state,
                     stop_run = stop_run,
                 })
             else
-                logging.runtime_log("agent", "stream done without tool calls text=" .. logging.compact(result.text, 500))
+                if (result.text or "") == "" then
+                    logging.runtime_log("agent", "stream completed with no text and no tool calls", "warn")
+                else
+                    logging.runtime_log("agent", "stream done without tool calls text=" .. logging.compact(result.text, 500))
+                end
+                if review_enabled and completion_review_warranted(run_state) and not run_state.completion_review_done then
+                    run_state.completion_review_done = true
+                    local draft = result.text or table.concat(deferred_text_chunks)
+                    run_state.completion_review_fallback = {
+                        text = draft,
+                        messages = current_msgs,
+                    }
+                    table.insert(current_msgs, {role = "assistant", content = draft})
+                    table.insert(current_msgs, {role = "user", content = completion_review_instruction})
+                    logging.runtime_log("agent", "completion_review started")
+                    continue_agent_cycle(current_msgs, tools)
+                    return
+                end
+                if defer_visible_text then
+                    publish_text(result.text or table.concat(deferred_text_chunks))
+                end
                 hooks.run("after_agent_turn", {
                     runtime = M,
                     provider = active,
@@ -484,8 +632,13 @@ function M.run(opts, callbacks)
             #tools
         ))
 
-        http.post_stream(endpoint, body, headers,
-            stream.stream(active, on_result, prompt_estimate, opts))
+        start_stream = function()
+            stream_attempt = stream_attempt + 1
+            http.post_stream(endpoint, body, headers,
+                stream.stream(active, on_result, prompt_estimate, opts),
+                stream_timeout_sec * 1000)
+        end
+        start_stream()
     end
 
     continue_agent_cycle(msgs, combined_tools)

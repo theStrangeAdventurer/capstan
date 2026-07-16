@@ -12,7 +12,7 @@ Ctrl-D/Ctrl-U, `g`, and `G`. Enter or Escape closes it.
 
 The popup includes:
 
-- current workspace directory
+- current working directory and workspace root
 - config directory and important config paths
 - skill directories and embedded skill sources loaded by the runtime
 - state directory, runtime state, permissions file, and current log file
@@ -38,6 +38,7 @@ The plugin reads paths through the `capstan` runtime table. C exposes:
 - `capstan.state_path(relative)`
 - `capstan.log_path()`
 - `capstan.workdir`
+- `capstan.workspace_root`
 
 The plugin reads model status through `capstan.models` and profile effort
 through `capstan.agent.reasoning_effort(profile)`. In the popup, `configured`

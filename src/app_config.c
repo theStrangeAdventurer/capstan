@@ -18,6 +18,7 @@ const char *APP_BANNER_TITLE = "◉ CAPSTAN";
 const char *APP_BANNER_TAGLINE = "pull context. hold course. ship code.";
 
 static char g_workdir[PATH_MAX] = "";
+static char g_workspace_root[PATH_MAX] = "";
 
 static int is_absolute_path(const char *path) {
   return path && path[0] == '/';
@@ -26,6 +27,21 @@ static int is_absolute_path(const char *path) {
 static int is_dir(const char *path) {
   struct stat st;
   return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static int path_exists(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0;
+}
+
+static int path_is_within(const char *path, const char *root) {
+  size_t root_len = strlen(root);
+  if (strcmp(path, root) == 0)
+    return 1;
+  if (strcmp(root, "/") == 0)
+    return path[0] == '/';
+  return root_len > 0 && strncmp(path, root, root_len) == 0 &&
+         root[root_len - 1] != '/' && path[root_len] == '/';
 }
 
 static int has_project_markers(const char *dir) {
@@ -41,7 +57,21 @@ static int has_project_markers(const char *dir) {
 static int set_workdir(const char *path) {
   if (!is_absolute_path(path) || !is_dir(path))
     return 0;
-  snprintf(g_workdir, sizeof(g_workdir), "%s", path);
+  char resolved[PATH_MAX];
+  const char *value = realpath(path, resolved) ? resolved : path;
+  snprintf(g_workdir, sizeof(g_workdir), "%s", value);
+  g_workspace_root[0] = '\0';
+  return 1;
+}
+
+static int set_workspace_root(const char *path) {
+  if (!is_absolute_path(path) || !is_dir(path))
+    return 0;
+  char resolved[PATH_MAX];
+  const char *value = realpath(path, resolved) ? resolved : path;
+  if (g_workdir[0] && !path_is_within(g_workdir, value))
+    return 0;
+  snprintf(g_workspace_root, sizeof(g_workspace_root), "%s", value);
   return 1;
 }
 
@@ -102,10 +132,6 @@ void app_workdir_init(const char *argv0) {
   if (set_workdir(env))
     return;
 
-  env = getenv("CAPSTAN_WORKSPACE");
-  if (set_workdir(env))
-    return;
-
   if (infer_workdir_from_binary(argv0))
     return;
 
@@ -127,6 +153,40 @@ const char *app_workdir(void) {
 }
 
 int app_workdir_set(const char *path) { return set_workdir(path); }
+
+static void workspace_root_init(void) {
+  if (g_workspace_root[0])
+    return;
+  if (!g_workdir[0])
+    app_workdir_init(NULL);
+
+  const char *env = getenv("CAPSTAN_WORKSPACE");
+  if (set_workspace_root(env))
+    return;
+
+  char candidate[PATH_MAX];
+  snprintf(candidate, sizeof(candidate), "%s", g_workdir);
+  while (candidate[0]) {
+    char marker[PATH_MAX];
+    int n = snprintf(marker, sizeof(marker), "%s/.git", candidate);
+    if (n > 0 && (size_t)n < sizeof(marker) && path_exists(marker)) {
+      set_workspace_root(candidate);
+      return;
+    }
+    if (strcmp(candidate, "/") == 0)
+      break;
+    dirname_in_place(candidate);
+  }
+
+  set_workspace_root(g_workdir);
+}
+
+int app_workspace_set(const char *path) { return set_workspace_root(path); }
+
+const char *app_workspace_root(void) {
+  workspace_root_init();
+  return g_workspace_root;
+}
 
 int app_config_dir(char *buf, size_t buf_size) {
   const char *home = getenv("HOME");

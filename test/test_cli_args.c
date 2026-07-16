@@ -16,9 +16,10 @@ static MunitResult test_run_options(const MunitParameter params[], void *data) {
   (void)data;
   char *argv[] = {"capstan",   "run",     "--prompt", "hello", "--provider",
                   "p",         "--model", "m",        "--reasoning-effort",
-                  "high",      "--workdir", "/tmp",   "--max-turns",
-                  "7",         "--profile", "implement", "--json"};
-  CliOptions opts = cli_parse(17, argv);
+                  "high",      "--workdir", "/tmp",   "--workspace",
+                  "/",         "--max-turns", "7",    "--profile",
+                  "implement", "--json"};
+  CliOptions opts = cli_parse(19, argv);
   munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
   munit_assert_string_equal(opts.prompt, "hello");
   munit_assert_string_equal(opts.provider, "p");
@@ -26,6 +27,7 @@ static MunitResult test_run_options(const MunitParameter params[], void *data) {
   munit_assert_string_equal(opts.profile, "implement");
   munit_assert_string_equal(opts.reasoning_effort, "high");
   munit_assert_string_equal(opts.workdir, "/tmp");
+  munit_assert_string_equal(opts.workspace, "/");
   munit_assert_int(opts.max_turns, ==, 7);
   munit_assert_int(opts.json, ==, 1);
   return MUNIT_OK;
@@ -80,11 +82,12 @@ static MunitResult test_explicit_headless_controls(const MunitParameter params[]
                                                    void *data) {
   (void)params;
   (void)data;
-  char *argv[] = {"capstan", "run", "--prompt", "hello", "--no-mcp",
-                  "--full-control"};
-  CliOptions opts = cli_parse(6, argv);
+  char *argv[] = {"capstan", "run",      "--prompt", "hello",
+                  "--no-mcp", "--no-wiki", "--full-control"};
+  CliOptions opts = cli_parse(7, argv);
   munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
   munit_assert_int(opts.no_mcp, ==, 1);
+  munit_assert_int(opts.no_wiki, ==, 1);
   munit_assert_int(opts.full_control, ==, 1);
   munit_assert_int(opts.benchmark, ==, 0);
   return MUNIT_OK;

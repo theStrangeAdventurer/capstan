@@ -84,15 +84,17 @@ function M.collect(opts)
     local tools = {}
     if _G.plugins then
         for _, p in pairs(_G.plugins) do
-            for _, tool in ipairs(plugin_tool_specs(p)) do
-                table.insert(tools, {
-                    type = "function",
-                    ["function"] = {
-                        name = tool.name,
-                        description = tool.description,
-                        parameters = tool.parameters,
-                    }
-                })
+            if workspace.wiki_enabled() or tostring(p.id or "") ~= "wiki" then
+                for _, tool in ipairs(plugin_tool_specs(p)) do
+                    table.insert(tools, {
+                        type = "function",
+                        ["function"] = {
+                            name = tool.name,
+                            description = tool.description,
+                            parameters = tool.parameters,
+                        }
+                    })
+                end
             end
         end
     end
@@ -182,6 +184,46 @@ local function subagent_max_attempts()
     return math.max(1, math.floor(subagent_config_number("max_attempts", 3)))
 end
 
+local function subagent_max_result_bytes()
+    return math.max(256, math.floor(subagent_config_number("max_result_bytes", 16384)))
+end
+
+local function safe_subagent_error(message)
+    return logging.safe_error(message or "subagent failed", 240)
+end
+
+local function bound_subagent_text(result, limit)
+    local text = redact.text(tostring(result.text or ""))
+    local original_bytes = tonumber(result.text_original_bytes) or #text
+    local was_truncated = result.text_truncated == true
+    if result.ok == false then
+        result.text = ""
+        result.text_truncated = nil
+        result.text_original_bytes = nil
+        return
+    end
+    local bounded, truncated = logging.truncate(text, limit,
+        "\n...<subagent output truncated>")
+    result.text = bounded
+    if truncated then
+        result.text_truncated = true
+        result.text_original_bytes = original_bytes
+    elseif was_truncated then
+        result.text_truncated = true
+        result.text_original_bytes = original_bytes
+    else
+        result.text_truncated = nil
+        result.text_original_bytes = nil
+    end
+end
+
+local function sanitize_subagent_result(result, max_result_bytes)
+    if type(result) ~= "table" then return end
+    result.id = logging.truncate(tostring(result.id or "task"), 128)
+    result.error = result.error ~= "" and safe_subagent_error(result.error) or ""
+    bound_subagent_text(result, max_result_bytes)
+end
+
 local function subagent_retryable_error(message)
     local text = tostring(message or "")
     local status = text:match("HTTP%s+(%d+)")
@@ -249,6 +291,41 @@ end
 local function shell_signature(args)
     args = args or {}
     return tostring(args.command or "") .. "\0" .. tostring(args.timeout or "")
+end
+
+local function is_generated_output_inspection(args)
+    local command = tostring(args and args.command or ""):lower()
+    if command == "" then return false end
+    local has_generated_path = command:find("dist/", 1, true) or
+        command:find("build/", 1, true) or
+        command:find("out/", 1, true) or
+        command:find("coverage/", 1, true)
+    if not has_generated_path then return false end
+
+    local padded = " " .. command
+    local inspectors = {
+        " grep ", " rg ", " cat ", " sed ", " head ", " tail ",
+        " wc ", " strings ", " find ", " ls ", " node -e ",
+        " python -c ", " python3 -c ",
+    }
+    for _, needle in ipairs(inspectors) do
+        if padded:find(needle, 1, true) then return true end
+    end
+    return false
+end
+
+local function generated_output_skip_reason(tool_name, args, run_ctx)
+    if tool_name ~= "shell" or not is_generated_output_inspection(args) then
+        return nil
+    end
+    local guard = run_ctx and run_ctx.guard
+    if not guard then return nil end
+    guard.generated_output_checks = (tonumber(guard.generated_output_checks) or 0) + 1
+    local limit = tonumber(guard.max_generated_output_checks)
+    if limit == nil or limit < 0 or guard.generated_output_checks <= limit then
+        return nil
+    end
+    return "Skipped redundant generated-output inspection. A primary validation already has a static inspection; inspect source, run a direct behavioral check, or report the requirement as unverified instead of probing the same generated artifacts again."
 end
 
 local function guard_duration_error(guard)
@@ -439,6 +516,7 @@ local function run_subagents(args, run_ctx)
     local next_index = 1
     local completed = 0
     local max_attempts = subagent_max_attempts()
+    local max_result_bytes = subagent_max_result_bytes()
 
     agent.append(string.format("\n⚙ subagents: running %d concurrent, %d total\n", max_concurrent, #args.tasks), "agent")
     for _, task in ipairs(args.tasks) do
@@ -487,7 +565,8 @@ local function run_subagents(args, run_ctx)
         ))
 
         local function retry_if_allowed(error_message)
-            if attempt >= max_attempts or not subagent_retryable_error(error_message) then
+            local safe_error = safe_subagent_error(error_message)
+            if attempt >= max_attempts or not subagent_retryable_error(safe_error) then
                 return false
             end
             logging.runtime_log("subagents", string.format(
@@ -496,13 +575,13 @@ local function run_subagents(args, run_ctx)
                 state.result.id,
                 attempt + 1,
                 max_attempts,
-                logging.compact(error_message or "", 240)
+                safe_error
             ))
             agent.append(string.format("  %s - retry %d/%d after %s\n",
                 state.result.id,
                 attempt + 1,
                 max_attempts,
-                tostring(error_message or "error")), "agent")
+                safe_error), "agent")
             start_one(index, attempt + 1)
             return true
         end
@@ -524,25 +603,28 @@ local function run_subagents(args, run_ctx)
                 table.insert(state.text_chunks, chunk)
             end,
             on_error = function(message)
-                state.result.error = tostring(message or "")
+                state.result.error = safe_subagent_error(message)
             end,
             on_done = function(result)
                 active = active - 1
                 local finished_at = now_ms()
                 local result_ok = result and result.ok ~= false
                 local error_message = result and result.error or state.result.error or ""
+                if error_message ~= "" then error_message = safe_subagent_error(error_message) end
                 if not result_ok and retry_if_allowed(error_message) then
                     return
                 end
                 state.done = true
                 completed = completed + 1
                 state.result.ok = result_ok
-                state.result.text = result and result.text or table.concat(state.text_chunks)
+                state.result.text = result_ok and
+                    (result and result.text or table.concat(state.text_chunks)) or ""
                 state.result.error = error_message
                 state.result.turns = result and result.turns or 0
                 state.result.started_at = result and result.started_at or started_at
                 state.result.finished_at = result and result.finished_at or finished_at
                 state.result.duration_ms = result and result.duration_ms or math.max(0, math.floor(finished_at - started_at))
+                sanitize_subagent_result(state.result, max_result_bytes)
             end,
         })
         if not ok then
@@ -555,7 +637,8 @@ local function run_subagents(args, run_ctx)
                 completed = completed + 1
             end
             state.result.ok = false
-            state.result.error = tostring(err)
+            state.result.error = safe_subagent_error(err)
+            state.result.text = ""
             state.result.finished_at = now_ms()
             state.result.duration_ms = math.max(0, math.floor(state.result.finished_at - started_at))
         end
@@ -625,6 +708,10 @@ local function run_subagents(args, run_ctx)
         run = run_ctx or {},
     })
     output = hook_ctx.result or output
+
+    for _, result in ipairs(output.results or {}) do
+        sanitize_subagent_result(result, max_result_bytes)
+    end
 
     return json.encode(output), true
 end
@@ -753,8 +840,8 @@ local function decode_tool_arguments(raw, run_ctx)
 end
 
 local function tool_call_target(tool_name, args)
-    if tool_name == "shell" and _G.capstan and type(_G.capstan.workdir) == "string" and _G.capstan.workdir ~= "" then
-        return _G.capstan.workdir
+    if tool_name == "shell" then
+        return workspace.configured_workspace_root()
     end
     return args.command or args.path or args.url or args.uri or tool_name
 end
@@ -764,6 +851,17 @@ local function normalize_permission_target(permission_tool, target)
         return workspace.normalize_path(target, workspace.runtime_workdir())
     end
     return target
+end
+
+-- Models occasionally select file_read after seeing an absolute Wiki path in
+-- context. The Wiki is Capstan-owned state and has its own permission-free,
+-- root-confined reader, so route that equivalent request to the canonical tool
+-- before permission handling. External paths remain ordinary file_read calls.
+local function route_internal_wiki_read(tool_name, args)
+    if tool_name ~= "file_read" or type(args) ~= "table" then return tool_name, args, false end
+    local relative = workspace.wiki_relative_path(args.path)
+    if not relative then return tool_name, args, false end
+    return "wiki_read", {path = relative}, true
 end
 
 local sensitive_headers = {
@@ -881,6 +979,16 @@ local function call_plugin_tool_redacted(tool_name, args, run_ctx, permission_ct
     return result, ok
 end
 
+local function tool_result_text(result)
+    if type(result) == "table" then return tostring(result.text or "") end
+    return tostring(result or "")
+end
+
+local function tool_result_images(result)
+    if type(result) ~= "table" or type(result.images) ~= "table" then return {} end
+    return result.images
+end
+
 local function tool_display_target(tool_name, args, target)
     if tool_name == "shell" then
         return "shell"
@@ -936,14 +1044,14 @@ local function scope_allows(scope, permission_tool)
     return type(scope.allowed_tools) == "table" and scope.allowed_tools[permission_tool] == true
 end
 
-local function path_is_within_workdir(path)
-    local workdir = workspace.configured_workdir()
-    if type(path) ~= "string" or path == "" or type(workdir) ~= "string" or workdir == "" then
+local function path_is_within_workspace(path)
+    local workspace_root = workspace.configured_workspace_root()
+    if type(path) ~= "string" or path == "" or type(workspace_root) ~= "string" or workspace_root == "" then
         return false
     end
-    local normalized_path = workspace.normalize_path(path):gsub("/+$", "")
-    local normalized_workdir = workspace.normalize_path(workdir):gsub("/+$", "")
-    return normalized_path == normalized_workdir or normalized_path:sub(1, #normalized_workdir + 1) == normalized_workdir .. "/"
+    local normalized_path = workspace.normalize_path(path)
+    local normalized_root = workspace.normalize_path(workspace_root)
+    return workspace.path_is_within(normalized_path, normalized_root)
 end
 
 local function scope_allows_target(scope, permission_tool, target)
@@ -953,11 +1061,11 @@ local function scope_allows_target(scope, permission_tool, target)
     end
     if not scope or not scope.workdir_only then return true end
     if permission_tool == "shell" then
-        local workdir = configured_workdir()
-        return type(workdir) == "string" and workdir ~= "" and target == workdir
+        local workspace_root = workspace.configured_workspace_root()
+        return type(workspace_root) == "string" and workspace_root ~= "" and target == workspace_root
     end
     if permission_tool == "file_read" or permission_tool == "file_write" then
-        return path_is_within_workdir(target)
+        return path_is_within_workspace(target)
     end
     return false
 end
@@ -990,17 +1098,49 @@ end
 local function tool_permission_context(permission_tool, target)
     if not permission_tool then return nil end
     local ctx = {tool = permission_tool, target = target}
-    if permission_tool == "file_read" and not path_is_within_workdir(target) then
+    if permission_tool == "file_read" and not path_is_within_workspace(target) then
         ctx.allow_outside_workspace = true
     end
     return ctx
+end
+
+local function mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
+    if not tool_ok or permission_tool ~= "file_write" then return end
+    if run_ctx and type(run_ctx.state) == "table" then
+        run_ctx.state.workspace_mutated = true
+        run_ctx.state.workspace_write_targets = run_ctx.state.workspace_write_targets or {}
+        run_ctx.state.workspace_write_targets[tostring(target or "")] = true
+    end
+end
+
+local function shell_command_is_validation(command)
+    local normalized = " " .. tostring(command or ""):lower() .. " "
+    local markers = {
+        " test", " lint", " typecheck", " tsc ", " build", " check",
+        " pytest", " vitest", " jest", " actionlint", " make test",
+    }
+    for _, marker in ipairs(markers) do
+        if normalized:find(marker, 1, true) then return true end
+    end
+    return false
+end
+
+local function mark_validation(run_ctx, tool_name, args, tool_ok)
+    if not tool_ok or tool_name ~= "shell" or not shell_command_is_validation(args and args.command) then return end
+    if run_ctx and type(run_ctx.state) == "table" and run_ctx.state.workspace_mutated then
+        run_ctx.state.successful_validation = true
+    end
 end
 
 -- Processes tool_calls from an LLM response: rejects unavailable tools, decodes
 -- arguments, checks permissions, executes handlers, appends results, then
 -- recurses via continue_fn.
 function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant_text, continue_fn, run_ctx)
-    logging.runtime_log("tools", string.format("received %d tool call(s)", #tool_calls))
+    logging.runtime_log("tools", string.format(
+        "received %d tool call(s) assistant_text_bytes=%d",
+        #tool_calls,
+        #(assistant_text or "")
+    ))
     local function append_status(text)
         if run_ctx and run_ctx.silent_tools then return end
         agent.append(text, "agent")
@@ -1023,6 +1163,8 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         content = (assistant_text ~= "" and assistant_text or nil),
         tool_calls = openai_tool_calls
     })
+
+    local pending_image_blocks = {}
 
     for _, tc in ipairs(tool_calls) do
         local result_content
@@ -1053,6 +1195,13 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 args = call_ctx.args or args
                 target = call_ctx.target or target
                 permission_tool = call_ctx.permission_tool or permission_tool
+
+                local routed
+                tool_name, args, routed = route_internal_wiki_read(tool_name, args)
+                if routed then
+                    target = tool_call_target(tool_name, args)
+                    permission_tool = tool_permission_name(tool_name)
+                end
 
                 if not tool_available(combined_tools, tool_name) then
                     result_content = "Tool " .. tostring(tool_name) .. " is not available in the active profile"
@@ -1085,60 +1234,83 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                         logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
                     end
 
-                    local permission_scope = run_ctx and run_ctx.permission_scope or nil
-                    local perm = "allow"
-                    if scope_allows_target(permission_scope, permission_tool, target) then
-                        logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
-                    elseif permission_tool then
-                        perm = permit.check(permission_tool, target)
-                        if (permission_tool == "file_read" or permission_tool == "file_write") and workspace.is_sensitive_path(target) and perm == "allow" then
-                            perm = "ask"
-                        end
-                        logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
-                    end
-
-                    if show_generic_status then
-                        append_status(tool_status_prefix(tool_name, display_target, display_command))
-                    end
-
-                    if perm == "deny" then
-                        result_content = "Permission denied for " .. tool_name .. " " .. target
-                        if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
-                    elseif perm == "ask" then
-                        local decision = permit.prompt(permission_tool, target)
-                        logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
-                        if decision == "deny" then
-                            result_content = "User denied " .. tool_name .. " " .. target
-                            if show_generic_status then append_status(tool_status_suffix("— denied by user", display_command)) end
-                        else
-                            if decision == "always" or should_persist_prompt_decision(tool_name, permission_tool, decision) then
-                                permit.grant(permission_tool, target, true)
-                                permit.save()
-                            end
-                            if not apply_prompt_decision(decision, permission_scope, permission_tool) then
-                                result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
-                                if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
-                            else
-                                local tool_ok
-                                result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx, tool_permission_context(permission_tool, target))
-                                if tool_ok then
-                                    logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
-                                    if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end
-                                else
-                                    logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
-                                    if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
-                                end
-                            end
+                    local skip_reason = generated_output_skip_reason(tool_name, args, run_ctx)
+                    if skip_reason then
+                        result_content = skip_reason
+                        logging.runtime_log("tool_guard", "generated_output_check_skipped command=" .. logging.compact(display_command or "", 300))
+                        if show_generic_status then
+                            append_status(tool_status_prefix(tool_name, display_target, display_command))
+                            append_status(tool_status_suffix("— skipped redundant generated-output inspection", display_command))
                         end
                     else
-                        local tool_ok
-                        result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx, tool_permission_context(permission_tool, target))
-                        if tool_ok then
-                            logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d", tool_name, target, #(result_content or "")))
-                            if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end
+                        local permission_scope = run_ctx and run_ctx.permission_scope or nil
+                        local perm = "allow"
+                        local shell_scope_ok = true
+                        local shell_scope_reason = nil
+                        if permission_tool == "shell" and permission_scope and permission_scope.workdir_only then
+                            shell_scope_ok, shell_scope_reason = workspace.shell_command_within_workspace(args.command)
+                        end
+                        if not shell_scope_ok then
+                            perm = "deny"
+                            logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=deny reason=%s", permission_tool, tool_name, target, tostring(shell_scope_reason)))
+                        elseif scope_allows_target(permission_scope, permission_tool, target) then
+                            logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
+                        elseif permission_tool then
+                            local explicit_allow
+                            perm, explicit_allow = permit.check(permission_tool, target)
+                            if (permission_tool == "file_read" or permission_tool == "file_write") and workspace.is_sensitive_path(target) and perm == "allow" and not explicit_allow then
+                                perm = "ask"
+                            end
+                            logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
+                        end
+
+                        if show_generic_status then
+                            append_status(tool_status_prefix(tool_name, display_target, display_command))
+                        end
+
+                        if perm == "deny" then
+                            result_content = shell_scope_reason or ("Permission denied for " .. tool_name .. " " .. target)
+                            if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
+                        elseif perm == "ask" then
+                            local decision = permit.prompt(permission_tool, target)
+                            logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
+                            if decision == "deny" then
+                                result_content = "User denied " .. tool_name .. " " .. target
+                                if show_generic_status then append_status(tool_status_suffix("— denied by user", display_command)) end
+                            else
+                                if decision == "always" or should_persist_prompt_decision(tool_name, permission_tool, decision) then
+                                    permit.grant(permission_tool, target, true)
+                                    permit.save()
+                                end
+                                if not apply_prompt_decision(decision, permission_scope, permission_tool) then
+                                    result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
+                                    if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                                else
+                                    local tool_ok
+                                    result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx, tool_permission_context(permission_tool, target))
+                                    mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
+                                    mark_validation(run_ctx, tool_name, args, tool_ok)
+                                    if tool_ok then
+                                        logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d images=%d", tool_name, target, #tool_result_text(result_content), #tool_result_images(result_content)))
+                                        if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end
+                                    else
+                                        logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(tool_result_text(result_content), 240)))
+                                        if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                                    end
+                                end
+                            end
                         else
-                            logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(result_content or "", 240)))
-                            if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                            local tool_ok
+                            result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx, tool_permission_context(permission_tool, target))
+                            mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
+                            mark_validation(run_ctx, tool_name, args, tool_ok)
+                            if tool_ok then
+                                logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d images=%d", tool_name, target, #tool_result_text(result_content), #tool_result_images(result_content)))
+                                if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end
+                            else
+                                logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(tool_result_text(result_content), 240)))
+                                if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                            end
                         end
                     end
                     local result_ctx = hooks.run("after_tool_call", {
@@ -1156,12 +1328,34 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         end
 
         if result_content then
+            local result_text = tool_result_text(result_content)
             table.insert(current_msgs, {
                 role = "tool",
                 tool_call_id = tc.id,
-                content = result_content
+                content = result_text ~= "" and result_text or "[image attached]"
             })
+            for _, image in ipairs(tool_result_images(result_content)) do
+                if type(image) == "table" and type(image.data) == "string" and
+                    type(image.mime_type) == "string" then
+                    table.insert(pending_image_blocks, {
+                        type = "image_url",
+                        image_url = {
+                            url = "data:" .. image.mime_type .. ";base64," .. image.data,
+                            detail = "auto",
+                        },
+                    })
+                end
+            end
         end
+    end
+
+    if #pending_image_blocks > 0 then
+        local content = {{
+            type = "text",
+            text = "Images returned by the preceding tool calls for visual inspection.",
+        }}
+        for _, block in ipairs(pending_image_blocks) do table.insert(content, block) end
+        table.insert(current_msgs, {role = "user", content = content})
     end
 
     logging.runtime_log("tools", "continuing with tool results")

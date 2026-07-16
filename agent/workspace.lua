@@ -28,6 +28,41 @@ function M.runtime_workdir()
     return nil
 end
 
+function M.configured_workspace_root()
+    if _G.capstan and type(_G.capstan.workspace_root) == "string" and
+        _G.capstan.workspace_root ~= "" and M.is_absolute_path(_G.capstan.workspace_root) then
+        return _G.capstan.workspace_root
+    end
+    return M.configured_workdir()
+end
+
+function M.wiki_enabled()
+    local options = _G.capstan and _G.capstan.runtime_options
+    return not (type(options) == "table" and options.disable_wiki == true)
+end
+
+function M.configured_wiki_path()
+    if not _G.capstan then return nil end
+    if not M.wiki_enabled() then return nil end
+    if type(_G.capstan.config) == "table" and type(_G.capstan.config.wiki) == "table" then
+        local path = _G.capstan.config.wiki.path
+        if type(path) == "string" and path ~= "" then return path end
+    end
+    if type(_G.capstan.wiki_path) == "string" and _G.capstan.wiki_path ~= "" then
+        return _G.capstan.wiki_path
+    end
+    if type(_G.capstan.state_path) == "function" then
+        return _G.capstan.state_path("wiki")
+    end
+    return nil
+end
+
+function M.configured_wiki_root()
+    local configured = M.configured_wiki_path()
+    if not configured then return nil end
+    return M.normalize_path(M.expand_home_path(configured))
+end
+
 function M.expand_home_path(path)
     if type(path) ~= "string" then return path end
     if path ~= "~" and path:sub(1, 2) ~= "~/" then return path end
@@ -55,8 +90,9 @@ function M.path_is_within(path, base)
     if type(path) ~= "string" or type(base) ~= "string" or path == "" or base == "" then
         return false
     end
-    path = path:gsub("/+$", "")
-    base = base:gsub("/+$", "")
+    if path ~= "/" then path = path:gsub("/+$", "") end
+    if base ~= "/" then base = base:gsub("/+$", "") end
+    if base == "/" then return path:sub(1, 1) == "/" end
     return path == base or path:sub(1, #base + 1) == base .. "/"
 end
 
@@ -74,12 +110,12 @@ local function nearest_existing_parent(path)
 end
 
 function M.real_workspace()
-    return M.realpath(M.configured_workdir())
+    return M.realpath(M.configured_workspace_root())
 end
 
 local function requested_path_is_within_workspace(path)
     local requested = M.normalize_path(path)
-    local configured = M.normalize_path(M.configured_workdir())
+    local configured = M.normalize_path(M.configured_workspace_root())
     return M.path_is_within(requested, configured)
 end
 
@@ -192,6 +228,81 @@ function M.normalize_path(path, workdir)
     end
 
     return "/" .. table.concat(parts, "/")
+end
+
+-- Returns the safe relative Wiki path for a local path, or nil when the path
+-- is not inside the configured Wiki. This lets the tool dispatcher preserve
+-- the Wiki's permission-free internal-read policy even if the model selected
+-- the generic file reader.
+function M.wiki_relative_path(path)
+    if type(path) ~= "string" or path == "" then return nil end
+    local root = M.configured_wiki_root()
+    if not root then return nil end
+    local full = M.normalize_path(path, M.runtime_workdir() or M.configured_workdir())
+    if not M.path_is_within(full, root) or full == root then return nil end
+
+    local root_real = M.realpath(root)
+    local full_real = M.realpath(full)
+    if root_real and full_real and not M.path_is_within(full_real, root_real) then
+        return nil
+    end
+
+    return full:sub(#root:gsub("/+$", "") + 2)
+end
+
+local function shell_path_candidate(token)
+    token = tostring(token or "")
+    token = token:gsub("^[%(%{]+", ""):gsub("[%)%},;]+$", "")
+    token = token:gsub("^%d*[<>]+", "")
+    token = token:gsub("^[\"']", ""):gsub("[\"']$", "")
+    local assigned = token:match("^[%w_]+=(.+)$")
+    if assigned then token = assigned end
+    if token == "/dev/null" then return nil end
+    if token:find("$HOME", 1, true) or token:find("${HOME}", 1, true) or
+        token:find("$(", 1, true) or token:find("`", 1, true) then
+        return false
+    end
+    if token:sub(1, 1) == "/" or token:sub(1, 2) == "~/" or
+        token == ".." or token:sub(1, 3) == "../" or
+        token:find("/../", 1, true) then
+        return token
+    end
+    return nil
+end
+
+function M.shell_command_within_workspace(command)
+    if type(command) ~= "string" or command == "" then
+        return false, "empty shell command"
+    end
+    local root = M.normalize_path(M.configured_workspace_root())
+    if root ~= "/" then root = root:gsub("/+$", "") end
+    local workdir = M.configured_workdir()
+    local command_position = true
+    for raw in command:gmatch("%S+") do
+        local token = raw
+        local leading = token:match("^([|;&]+)")
+        if leading then
+            command_position = true
+            token = token:sub(#leading + 1)
+        end
+        if token ~= "" then
+            local redirection_target = token:match("^%d*[<>]+") ~= nil
+            local candidate = shell_path_candidate(token)
+            if candidate == false then
+                return false, "dynamic home or command substitution is outside workspace policy"
+            end
+            if candidate and (redirection_target or not command_position) then
+                local resolved = M.normalize_path(candidate, workdir)
+                if resolved ~= "/" then resolved = resolved:gsub("/+$", "") end
+                if not M.path_is_within(resolved, root) then
+                    return false, "shell path escapes workspace: " .. resolved
+                end
+            end
+            command_position = false
+        end
+        if raw:match("[|;&]+$") then command_position = true end
+    end
+    return true
 end
 
 function M.collapse_home_path(path)

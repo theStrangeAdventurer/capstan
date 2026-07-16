@@ -11,15 +11,18 @@ capstan run --prompt "Inspect the build failure"
 capstan run --prompt-file task.md --provider openrouter --model anthropic/claude-sonnet-4
 capstan run --prompt-file task.md --reasoning-effort low
 capstan run --profile plan --prompt-file task.md
-capstan run --benchmark --prompt-file task.md --workdir /tmp/capstan-eval
+capstan run --benchmark --prompt-file task.md --workdir /tmp/repo/task --workspace /tmp/repo
+capstan run --no-wiki --prompt-file task.md --workdir /tmp/capstan-eval
 echo "Summarize this repo" | capstan run --json
 ```
 
 - `capstan` with no command still opens the TUI.
 - `capstan run` reads input from `--prompt`, `--prompt-file`, or stdin when
   stdin is not a TTY.
-- `--provider`, `--model`, and `--workdir` override only this process run.
+- `--provider`, `--model`, `--workdir`, and `--workspace` override only this process run.
   They do not update runtime state.
+- `--workdir` sets the base for relative file paths and shell commands.
+  `--workspace` sets the containing project/instruction/permission root.
 - `--profile` selects an agent workflow profile for this run. Accepted values
   are `fast`, `implement`, and `plan`. Profiles can set default reasoning
   effort, append profile-specific system instructions, and restrict available
@@ -33,6 +36,11 @@ echo "Summarize this repo" | capstan run --json
   takes precedence over profile defaults.
 - `--max-turns` caps model-tool continuation rounds; the default is `200`.
 - `--no-mcp` skips configured MCP server startup for this process run.
+- `--no-wiki` skips wiki initialization for this process run. Capstan does not
+  create the default wiki directory, read wiki files, add wiki metadata or
+  profile content to the system prompt, publish wiki runtime fields, or expose
+  wiki model tools. This is intended for isolated eval runs that must not
+  depend on owner wiki state.
 - `--full-control` grants workspace-scoped tool permissions for this run.
 - `--benchmark` is shorthand for `--no-mcp --full-control`.
 - Plain output writes the final assistant text to stdout.

@@ -3,8 +3,15 @@
 ## Behavior
 
 `/file <path...>` reads files or lists directories and adds the result to the
-conversation context. The agent tool `file_read` accepts `{ "path": "..." }`
-and uses the same path behavior.
+conversation context. The agent tool `file_read` accepts either
+`{ "path": "..." }` or `{ "paths": ["...", "..."] }` and uses the same
+path behavior.
+
+- `paths` batches ordinary workspace reads into one model tool call. Entries
+  are de-duplicated while preserving their order.
+- Batch reads deliberately reject sensitive paths and paths outside the
+  workspace. Use the singular `path` form for those paths so the existing
+  target-specific permission prompt remains in force.
 
 - Missing paths return `Usage: /file <filename...>`.
 - Absolute paths are used as provided.
@@ -23,6 +30,11 @@ and uses the same path behavior.
   returns no file content.
 - Directory listing shell arguments are single-quote escaped and passed after
   `--` so path text cannot become additional shell commands or options.
+- PNG, JPEG, GIF, and WebP files are detected from their file signatures and
+  returned to the agent as typed image content. Their raw bytes are never
+  inserted into a JSON text field.
+- Other binary files return a short size description instead of raw bytes, so
+  invalid UTF-8 cannot corrupt the next provider request.
 
 ## Finder Popup
 

@@ -2,7 +2,9 @@
 
 ## Behavior
 
-`/shell <command>` executes a local shell command in `capstan.workdir`.
+`/shell <command>` executes a local shell command in `capstan.workdir`. The
+workspace permission target remains `capstan.workspace_root`, which may be an
+ancestor of that working directory.
 
 Manual slash-command input treats everything after `/shell` as the command
 string. The user does not need to wrap the whole command in quotes:
@@ -23,6 +25,10 @@ Model tool calls use structured arguments:
 ```json
 { "command": "make test", "timeout": 60 }
 ```
+
+Timeouts terminate the whole shell process group, including pipeline children.
+Capstan first sends `SIGTERM`, then escalates to `SIGKILL`, and never waits
+indefinitely for inherited stdout/stderr descriptors to close.
 
 Shell stdout and stderr are returned to the model as tool results, but common
 credentials and HTTP headers are redacted first. Curl commands are summarized in
@@ -45,6 +51,15 @@ collapsing ordinary commands to placeholders.
 Manual slash commands bypass model-tool permission prompts because the user
 directly chose the command. Model-initiated shell tool calls still go through
 normal shell permissions.
+
+In workspace-scoped full-control runs, statically visible shell paths must stay
+inside the workspace. This includes redirection targets both before and after
+the command token, such as `</workspace/input command` and
+`command >/workspace/output`.
+
+The handler reports a successful tool result only when the process exits zero
+without timing out. Completion-review validation therefore ignores failed test,
+lint, typecheck, and build commands.
 
 The agent loop has a separate runaway guard for repeated shell commands. By
 default this shell-specific guard is disabled because normal coding workflows

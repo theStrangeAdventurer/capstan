@@ -116,7 +116,9 @@ function plugin.handler(ctx)
 		out = out .. "\nstderr:\n" .. redacted_stderr
 	end
 
-	return ctx:replace(string.format("Shell: %s (exit %d)", display_command, result.exit), out)
+	return string.format("Shell: %s (exit %d)", display_command, result.exit),
+		out,
+		result.exit == 0 and not result.timed_out
 end
 
 return plugin

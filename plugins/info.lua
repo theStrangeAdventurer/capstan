@@ -94,12 +94,14 @@ end
 
 function plugin.handler(ctx)
 	local workdir = tostring((capstan and capstan.workdir) or "(unavailable)")
+	local workspace_root = tostring((capstan and capstan.workspace_root) or workdir)
 	local home = os.getenv("HOME")
 	local lines = {
 		"Capstan runtime",
 		"",
 		"Workspace",
-		"  workdir: " .. workdir,
+		"  working directory: " .. workdir,
+		"  workspace root: " .. workspace_root,
 		"",
 		"Configuration",
 		"  config dir: " .. call_string(capstan and capstan.config_dir),
@@ -107,7 +109,7 @@ function plugin.handler(ctx)
 		"  plugins dir: " .. call_string(capstan and capstan.config_path, "plugins"),
 		"",
 		"Skills",
-		"  project skills: " .. join_path(workdir, ".agents/skills"),
+		"  project skills: " .. join_path(workspace_root, ".agents/skills"),
 		"  user config skills: " .. call_string(capstan and capstan.config_path, "skills"),
 		"  home skills: " .. (home and join_path(home, ".agents/skills") or "(unavailable)"),
 		"  builtin skills: embedded:skills",

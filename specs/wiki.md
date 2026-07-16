@@ -124,6 +124,11 @@ prompt choice persists that permission. `wiki_source_read` bypasses a second
 prompt because ingest is explicit consent for that source root, but validates
 every read against `wiki/index/<source-id>.json` and only reads indexed paths.
 
+If a model sends the generic `file_read` tool an absolute or workdir-relative
+path inside the configured wiki, Capstan routes it to `wiki_read` before
+permission handling. This preserves the internal-Wiki policy and never grants
+the generic file reader access outside the wiki root.
+
 ## Ingest index
 
 Each ingest source root owns one JSON file:

@@ -72,24 +72,11 @@ local function notify_error(message)
 end
 
 local function wiki_config()
-    if not capstan then return nil end
-    if type(capstan.config) == "table" and type(capstan.config.wiki) == "table" then
-        local path = capstan.config.wiki.path
-        if type(path) == "string" and path ~= "" then return path end
-    end
-    if type(capstan.wiki_path) == "string" and capstan.wiki_path ~= "" then
-        return capstan.wiki_path
-    end
-    if type(capstan.state_path) == "function" then
-        return capstan.state_path("wiki")
-    end
-    return nil
+    return workspace.configured_wiki_path()
 end
 
 local function wiki_root()
-    local configured = wiki_config()
-    if not configured then return nil end
-    return workspace.normalize_path(workspace.expand_home_path(configured))
+    return workspace.configured_wiki_root()
 end
 
 local function invalid_relative(path)
@@ -107,6 +94,11 @@ local function resolve_wiki_path(relative)
     local full = workspace.normalize_path(root .. "/" .. relative)
     if not workspace.path_is_within(full, root) then
         return nil, "wiki path escapes configured wiki directory"
+    end
+    local root_real = workspace.realpath(root)
+    local full_real = workspace.realpath(full)
+    if root_real and full_real and not workspace.path_is_within(full_real, root_real) then
+        return nil, "wiki path resolves outside configured wiki directory"
     end
     return full, nil, root
 end

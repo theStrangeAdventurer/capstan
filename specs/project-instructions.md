@@ -6,8 +6,8 @@ agent context.
 ## Behavior
 
 - At startup, Capstan looks for `AGENTS.md` in the active workspace root.
-- The active workspace root is `app_workdir()`, the same base used by file,
-  write, and shell plugins.
+- The active workspace root is `app_workspace_root()`. It may be an ancestor of
+  the current `app_workdir()` used for relative file and shell operations.
 - When the file exists, its full contents are appended to `system_prompt` under
   a `Project Instructions` section that includes the absolute file path.
 - If the file is missing or unreadable, startup continues without project

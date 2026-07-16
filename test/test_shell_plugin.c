@@ -7,6 +7,8 @@
 
 static char captured_shell_command[512];
 static int captured_shell_timeout = 0;
+static int simulated_shell_exit = 0;
+static int simulated_shell_timeout = 0;
 
 static int l_ctx_replace(lua_State *L) {
   const char *ui_val = luaL_checkstring(L, 2);
@@ -24,9 +26,9 @@ static int l_tools_shell(lua_State *L) {
   captured_shell_timeout = timeout;
 
   lua_newtable(L);
-  lua_pushinteger(L, 0);
+  lua_pushinteger(L, simulated_shell_exit);
   lua_setfield(L, -2, "exit");
-  lua_pushboolean(L, 0);
+  lua_pushboolean(L, simulated_shell_timeout);
   lua_setfield(L, -2, "timed_out");
   lua_pushstring(L,
                  "HTTP/1.1 200 OK\n"
@@ -49,6 +51,8 @@ static int l_tools_shell(lua_State *L) {
 }
 
 static lua_State *new_state(void) {
+  simulated_shell_exit = 0;
+  simulated_shell_timeout = 0;
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
 
@@ -84,7 +88,7 @@ static void call_handler(lua_State *L, const char *input, const char *args[],
   lua_pushcfunction(L, l_ctx_replace);
   lua_setfield(L, -2, "replace");
 
-  int rc = lua_pcall(L, 1, 2, 0);
+  int rc = lua_pcall(L, 1, 3, 0);
   munit_assert_int(rc, ==, LUA_OK);
 }
 
@@ -101,8 +105,8 @@ static MunitResult test_shell_redacts_ui_and_llm_results(
                "/shell curl -v -H 'Authorization: Bearer command-secret' https://example.test",
                args, 5);
 
-  const char *ui = lua_tostring(L, -2);
-  const char *llm = lua_tostring(L, -1);
+  const char *ui = lua_tostring(L, -3);
+  const char *llm = lua_tostring(L, -2);
   munit_assert_not_null(ui);
   munit_assert_not_null(llm);
 
@@ -127,6 +131,7 @@ static MunitResult test_shell_redacts_ui_and_llm_results(
   munit_assert_true(strstr(llm, "\"access_token\":\"[REDACTED]") != NULL);
   munit_assert_true(strstr(llm, "Cookie: [REDACTED]") != NULL);
   munit_assert_true(strstr(llm, "password=[REDACTED]") != NULL);
+  munit_assert_true(lua_toboolean(L, -1));
 
   lua_close(L);
   return MUNIT_OK;
@@ -171,7 +176,7 @@ static MunitResult test_shell_redaction_uses_config_extensions(
   const char *args[] = {"curl", "-s", "https://example.test"};
   call_handler(L, "/shell curl -s https://example.test", args, 3);
 
-  const char *llm = lua_tostring(L, -1);
+  const char *llm = lua_tostring(L, -2);
   munit_assert_not_null(llm);
   munit_assert_true(strstr(llm, "tenant-plain") == NULL);
   munit_assert_true(strstr(llm, "internal-plain") == NULL);
@@ -179,6 +184,26 @@ static MunitResult test_shell_redaction_uses_config_extensions(
   munit_assert_true(strstr(llm, "Tenant-Id: [REDACTED]") != NULL);
   munit_assert_true(strstr(llm, "X-Internal-Trace: [REDACTED]") != NULL);
 
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_shell_nonzero_exit_reports_failure(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_state();
+  simulated_shell_exit = 1;
+  load_shell_plugin(L);
+  const char *args[] = {"npm", "test"};
+  call_handler(L, "/shell npm test", args, 2);
+
+  munit_assert_true(strstr(lua_tostring(L, -3), "exit 1") != NULL);
+  munit_assert_true(strstr(lua_tostring(L, -2), "[exit 1]") != NULL);
+  munit_assert_false(lua_toboolean(L, -1));
+
+  simulated_shell_exit = 0;
   lua_close(L);
   return MUNIT_OK;
 }
@@ -192,6 +217,8 @@ static MunitTest tests[] = {
     {"/redaction_uses_config_extensions",
      test_shell_redaction_uses_config_extensions, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/nonzero_exit_reports_failure", test_shell_nonzero_exit_reports_failure,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite shell_plugin_suite = {"/shell_plugin", tests, NULL, 1,

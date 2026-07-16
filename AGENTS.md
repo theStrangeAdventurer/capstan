@@ -305,6 +305,7 @@ Feature specs:
 - [Wiki](specs/wiki.md)
   - Built-in `wiki-onboarding` skill guides first-time setup when `/wiki` is run without configured `wiki.path`.
 - [MCP client](specs/mcp-client.md)
+- [Multimodal images](specs/multimodal-images.md)
 
 ## Conventions
 

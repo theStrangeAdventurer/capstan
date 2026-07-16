@@ -2,25 +2,30 @@
 #include "dyn_arr.h"
 #include "log.h"
 #include "permit.h"
+#include "shell_process.h"
 #include "tui.h"
 #include "utils.h"
-#include <errno.h>
-#include <fcntl.h>
 #include <lauxlib.h>
 #include <lua.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 extern lua_State *L;
 
 static PermEntries g_entries = {0};
+
+static PermEntry *matching_entry(const char *tool, const char *target) {
+  for (int i = (int)g_entries.size - 1; i >= 0; i--) {
+    PermEntry *entry = g_entries.items[i];
+    if (strcmp(entry->tool, tool) == 0 &&
+        permit_pattern_match(entry->pattern, target))
+      return entry;
+  }
+  return NULL;
+}
 
 static long long now_ms(void) {
   struct timeval tv;
@@ -65,11 +70,9 @@ const char *permit_config_dir(void) {
 }
 
 PermState permit_check(const char *tool, const char *target) {
-  for (int i = (int)g_entries.size - 1; i >= 0; i--) {
-    PermEntry *e = g_entries.items[i];
-    if (strcmp(e->tool, tool) == 0 && permit_pattern_match(e->pattern, target))
-      return e->allow ? PERM_ALLOW : PERM_DENY;
-  }
+  PermEntry *entry = matching_entry(tool, target);
+  if (entry)
+    return entry->allow ? PERM_ALLOW : PERM_DENY;
 
   if (strcmp(tool, "shell") == 0)
     return PERM_ASK;
@@ -212,6 +215,7 @@ static void permit_load_config_permissions(lua_State *L) {
 static int l_permit_check(lua_State *L) {
   const char *tool = luaL_checkstring(L, 1);
   const char *target = luaL_checkstring(L, 2);
+  PermEntry *entry = matching_entry(tool, target);
   PermState s = permit_check(tool, target);
   switch (s) {
   case PERM_ALLOW:
@@ -224,7 +228,11 @@ static int l_permit_check(lua_State *L) {
     lua_pushstring(L, "ask");
     break;
   }
-  return 1;
+  /* A second value preserves the distinction between an explicit owner rule
+     and the permissive workspace-read default. Callers using one return value
+     remain compatible. */
+  lua_pushboolean(L, entry && entry->allow);
+  return 2;
 }
 
 static int l_permit_grant(lua_State *L) {
@@ -300,182 +308,37 @@ static int l_tools_shell(lua_State *L) {
   if (timeout <= 0)
     timeout = PERMIT_DEFAULT_SHELL_TIMEOUT;
 
-  int out_pipe[2], err_pipe[2];
-  if (pipe(out_pipe) < 0 || pipe(err_pipe) < 0) {
-    lua_newtable(L);
-    lua_pushinteger(L, -1);
-    lua_setfield(L, -2, "exit");
-    lua_pushstring(L, "pipe() failed");
-    lua_setfield(L, -2, "stdout");
-    lua_pushstring(L, "");
-    lua_setfield(L, -2, "stderr");
-    lua_pushboolean(L, 0);
-    lua_setfield(L, -2, "timed_out");
-    return 1;
-  }
-
-  pid_t pid = fork();
-  if (pid < 0) {
-    close(out_pipe[0]);
-    close(out_pipe[1]);
-    close(err_pipe[0]);
-    close(err_pipe[1]);
-    lua_newtable(L);
-    lua_pushinteger(L, -1);
-    lua_setfield(L, -2, "exit");
-    lua_pushstring(L, "fork() failed");
-    lua_setfield(L, -2, "stdout");
-    lua_pushstring(L, "");
-    lua_setfield(L, -2, "stderr");
-    lua_pushboolean(L, 0);
-    lua_setfield(L, -2, "timed_out");
-    return 1;
-  }
-
-  if (pid == 0) {
-    dup2(out_pipe[1], STDOUT_FILENO);
-    dup2(err_pipe[1], STDERR_FILENO);
-
-    int nullfd = open("/dev/null", O_RDONLY);
-    if (nullfd >= 0) {
-      dup2(nullfd, STDIN_FILENO);
-      close(nullfd);
-    }
-
-    close(out_pipe[0]);
-    close(out_pipe[1]);
-    close(err_pipe[0]);
-    close(err_pipe[1]);
-
-    chdir(app_workdir());
-    alarm(timeout);
-    execl("/bin/sh", "sh", "-c", command, (char *)NULL);
-    _exit(127);
-  }
-
-  close(out_pipe[1]);
-  close(err_pipe[1]);
-
-  char *out_buf = malloc(PERMIT_MAX_STDOUT + 1);
-  char *err_buf = malloc(PERMIT_MAX_STDERR + 1);
-  size_t out_len = 0, err_len = 0;
-  int timed_out = 0;
-  int out_open = 1;
-  int err_open = 1;
   long long started_ms = now_ms();
-  long long timeout_ms = (long long)timeout * 1000LL;
-
-  out_buf[0] = '\0';
-  err_buf[0] = '\0';
-
   log_shell_start(timeout, command);
-
-  while (out_open || err_open) {
-    long long elapsed_ms = now_ms() - started_ms;
-    if (!timed_out && elapsed_ms >= timeout_ms) {
-      timed_out = 1;
-      kill(pid, SIGKILL);
-    }
-
-    fd_set rfds;
-    FD_ZERO(&rfds);
-    int maxfd = -1;
-    if (out_open) {
-      FD_SET(out_pipe[0], &rfds);
-      if (out_pipe[0] > maxfd)
-        maxfd = out_pipe[0];
-    }
-    if (err_open) {
-      FD_SET(err_pipe[0], &rfds);
-      if (err_pipe[0] > maxfd)
-        maxfd = err_pipe[0];
-    }
-
-    struct timeval tv = {.tv_sec = 0, .tv_usec = 100000};
-    int n = select(maxfd + 1, &rfds, NULL, NULL, &tv);
-    if (n < 0) {
-      if (errno == EINTR)
-        continue;
-      break;
-    }
-    if (n == 0) {
-      tui_pump_blocking();
-      continue;
-    }
-
-    if (out_open && FD_ISSET(out_pipe[0], &rfds)) {
-      char tmp[4096];
-      ssize_t r = read(out_pipe[0], tmp, sizeof(tmp));
-      if (r <= 0) {
-        out_open = 0;
-      } else if (out_len + r < PERMIT_MAX_STDOUT) {
-        memcpy(out_buf + out_len, tmp, r);
-        out_len += r;
-        out_buf[out_len] = '\0';
-      }
-    }
-
-    if (err_open && FD_ISSET(err_pipe[0], &rfds)) {
-      char tmp[4096];
-      ssize_t r = read(err_pipe[0], tmp, sizeof(tmp));
-      if (r <= 0) {
-        err_open = 0;
-      } else if (err_len + r < PERMIT_MAX_STDERR) {
-        memcpy(err_buf + err_len, tmp, r);
-        err_len += r;
-        err_buf[err_len] = '\0';
-      }
-    }
-
-    tui_pump_blocking();
+  ShellProcessResult result;
+  if (!shell_process_run(command, app_workdir(), timeout, PERMIT_MAX_STDOUT,
+                         PERMIT_MAX_STDERR, tui_pump_blocking, &result)) {
+    lua_newtable(L);
+    lua_pushinteger(L, -1);
+    lua_setfield(L, -2, "exit");
+    lua_pushstring(L, "failed to start shell process");
+    lua_setfield(L, -2, "stdout");
+    lua_pushstring(L, "");
+    lua_setfield(L, -2, "stderr");
+    lua_pushboolean(L, 0);
+    lua_setfield(L, -2, "timed_out");
+    log_shell_done(-1, 0, now_ms() - started_ms, command);
+    return 1;
   }
-
-  int status = 0;
-  int exit_code = -1;
-  while (1) {
-    pid_t waited = waitpid(pid, &status, WNOHANG);
-    if (waited == pid)
-      break;
-    if (waited < 0) {
-      if (errno == EINTR)
-        continue;
-      break;
-    }
-
-    long long elapsed_ms = now_ms() - started_ms;
-    if (!timed_out && elapsed_ms >= timeout_ms) {
-      timed_out = 1;
-      kill(pid, SIGKILL);
-    }
-    tui_pump_blocking();
-    usleep(100000);
-  }
-
-  if (WIFEXITED(status))
-    exit_code = WEXITSTATUS(status);
-  else if (WIFSIGNALED(status)) {
-    if (WTERMSIG(status) == SIGALRM)
-      timed_out = 1;
-    exit_code = 128 + WTERMSIG(status);
-  }
-
-  close(out_pipe[0]);
-  close(err_pipe[0]);
 
   lua_newtable(L);
-  lua_pushinteger(L, exit_code);
+  lua_pushinteger(L, result.exit_code);
   lua_setfield(L, -2, "exit");
-  lua_pushstring(L, out_buf);
+  lua_pushstring(L, result.stdout_text);
   lua_setfield(L, -2, "stdout");
-  lua_pushstring(L, err_buf);
+  lua_pushstring(L, result.stderr_text);
   lua_setfield(L, -2, "stderr");
-  lua_pushboolean(L, timed_out);
+  lua_pushboolean(L, result.timed_out);
   lua_setfield(L, -2, "timed_out");
 
-  free(out_buf);
-  free(err_buf);
-
-  log_shell_done(exit_code, timed_out, now_ms() - started_ms, command);
+  log_shell_done(result.exit_code, result.timed_out, now_ms() - started_ms,
+                 command);
+  shell_process_result_free(&result);
 
   return 1;
 }

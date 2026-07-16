@@ -266,7 +266,7 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
 }
 
 /*
- * http.post_stream(url, body, headers, callback)
+ * http.post_stream(url, body, headers, callback[, timeout_ms])
  * callback(raw_chunk, is_done) is invoked for every received chunk.
  * Returns async_id.
  */
@@ -280,6 +280,7 @@ static int l_http_post_stream(lua_State *L) {
   }
 
   struct curl_slist *headers = parse_headers(L, 3);
+  lua_Integer timeout_ms = luaL_optinteger(L, 5, 0);
 
   luaL_checktype(L, 4, LUA_TFUNCTION);
   lua_pushvalue(L, 4);
@@ -307,6 +308,8 @@ static int l_http_post_stream(lua_State *L) {
 
   configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
+  if (timeout_ms > 0)
+    curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
   if (body) {
     ctx->body = malloc(body_len + 1);
     if (!ctx->body) {
