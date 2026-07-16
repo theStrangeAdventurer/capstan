@@ -20,5 +20,7 @@ int app_state_ensure_dir(void);
 void app_workdir_init(const char *argv0);
 int app_workdir_set(const char *path);
 const char *app_workdir(void);
+int app_workspace_set(const char *path);
+const char *app_workspace_root(void);
 
 #endif

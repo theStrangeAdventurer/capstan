@@ -1,5 +1,6 @@
 local json = require("vendor.rxi.json")
 local logging = require("agent.logging")
+local image_runtime = require("agent.images")
 
 --[[
   MCP client — connects to MCP servers over stdio, discovers tools,
@@ -822,7 +823,8 @@ function M.is_mcp_tool(tool_name)
 end
 
 --- Call an MCP tool by its exposed provider-safe name.
---- Returns: result_text (string), ok (boolean)
+--- Returns a string for text-only results or {text, images} for multimodal
+--- results, followed by ok (boolean).
 function M.call(tool_name, args)
   local server_name, tool_method = resolve_exposed_tool(tool_name)
   if not server_name or not tool_method then
@@ -861,14 +863,24 @@ function M.call(tool_name, args)
     return "MCP tool call failed: " .. tostring(err), false
   end
 
-  -- Extract text from content array
+  -- Extract typed content without logging or flattening image payloads.
   local parts = {}
+  local result_images = {}
   if type(result.content) == "table" then
     for _, item in ipairs(result.content) do
       if item.type == "text" and item.text then
         table.insert(parts, normalize_relative_paths(item.text))
       elseif item.type == "image" then
-        table.insert(parts, "[image data omitted]")
+        local image, image_err = image_runtime.from_mcp(item)
+        if image then
+          table.insert(result_images, image)
+          table.insert(parts, string.format("[image attached: %s, %d bytes]",
+            image.mime_type, image.bytes))
+        elseif image_err == "too_large" then
+          table.insert(parts, "[image omitted: exceeds 10 MiB limit]")
+        else
+          table.insert(parts, "[image omitted: invalid MCP image content]")
+        end
       elseif item.type == "resource" then
         if item.resource and item.resource.text then
           table.insert(parts, item.resource.text)
@@ -885,7 +897,11 @@ function M.call(tool_name, args)
     return text, false
   end
 
-  log("tool " .. tool_name .. " ok: " .. compact_json(result))
+  log(string.format("tool %s ok: text_bytes=%d images=%d",
+    tool_name, #text, #result_images))
+  if #result_images > 0 then
+    return {text = text, images = result_images}, true
+  end
   return text, true
 end
 

@@ -97,6 +97,8 @@ static lua_State *new_state(void) {
   lua_newtable(L);
   lua_pushstring(L, "/work/project");
   lua_setfield(L, -2, "workdir");
+  lua_pushstring(L, "/work");
+  lua_setfield(L, -2, "workspace_root");
   set_const_string(L, "config_dir", "/home/me/.config/capstan");
   set_const_string(L, "state_dir", "/home/me/.local/state/capstan");
   set_const_string(L, "log_path",
@@ -177,10 +179,11 @@ static MunitResult test_info_includes_runtime_paths(const MunitParameter params[
   const char *llm = lua_tostring(L, -1);
   munit_assert_not_null(ui);
   munit_assert_string_equal(ui, llm);
-  munit_assert_true(strstr(ui, "workdir: /work/project") != NULL);
+  munit_assert_true(strstr(ui, "working directory: /work/project") != NULL);
+  munit_assert_true(strstr(ui, "workspace root: /work") != NULL);
   munit_assert_true(strstr(ui, "config dir: /home/me/.config/capstan") != NULL);
   munit_assert_true(strstr(ui, "config file: /home/me/.config/capstan/config.lua") != NULL);
-  munit_assert_true(strstr(ui, "project skills: /work/project/.agents/skills") != NULL);
+  munit_assert_true(strstr(ui, "project skills: /work/.agents/skills") != NULL);
   munit_assert_true(strstr(ui, "user config skills: /home/me/.config/capstan/skills") != NULL);
   munit_assert_true(strstr(ui, "builtin skills: embedded:skills") != NULL);
   munit_assert_true(strstr(ui, "permissions: /home/me/.local/state/capstan/permissions.lua") != NULL);

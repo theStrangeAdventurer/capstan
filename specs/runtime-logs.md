@@ -59,11 +59,15 @@ checks should print only boolean/status information.
 - API stream request: endpoint, message count, tool count
 - Stream summary: SSE event count, raw byte count, chunk counters, final tool
   call count, text/reasoning byte counts
+- Warnings for empty or reasoning-only responses, incomplete tool calls, and
+  responses that combine assistant text with tool calls. These diagnostics log
+  byte counts and call counts without duplicating the full assistant text.
 - Tool-call stream deltas at `debug` level: index, id, accumulated name, and
   accumulated argument byte count
 - Final reconstructed tool calls with id, name, and compact arguments
 - Assistant text when the stream completes without tool calls
-- Tool calls received from the model
+- Tool calls received from the model, including the byte count of any assistant
+  text carried beside them
 - Tool call name, permission target, and raw JSON arguments
 - Shell tool calls log a redacted `display` label, redacted JSON arguments, and
   the full redacted command string used for execution. Curl commands may be

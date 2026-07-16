@@ -55,4 +55,32 @@ function M.raw_logging_enabled()
     return M.enabled("trace")
 end
 
+local function utf8_prefix(value, limit)
+    if #value <= limit then return value end
+    local cut = math.max(0, limit)
+    while cut > 0 do
+        local next_byte = value:byte(cut + 1)
+        if not next_byte or next_byte < 0x80 or next_byte >= 0xC0 then break end
+        cut = cut - 1
+    end
+    return value:sub(1, cut)
+end
+
+function M.truncate(value, limit, suffix)
+    local s = tostring(value or "")
+    limit = math.max(0, math.floor(tonumber(limit) or 0))
+    if #s <= limit then return s, false end
+    suffix = tostring(suffix or "...<truncated>")
+    local prefix_limit = math.max(0, limit - #suffix)
+    return utf8_prefix(s, prefix_limit) .. suffix, true
+end
+
+function M.safe_error(value, limit)
+    local s = redact.text(tostring(value or "error"))
+    s = s:match("^[^\r\n]*") or ""
+    s = s:gsub("%s+", " "):match("^%s*(.-)%s*$")
+    if s == "" then s = "error" end
+    return M.truncate(s, limit or 240)
+end
+
 return M

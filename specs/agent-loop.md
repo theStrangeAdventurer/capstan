@@ -125,17 +125,42 @@ The runtime:
 6. Appends text chunks to the current agent placeholder.
 7. If the final stream result contains tool calls, executes tools and recurses
    with appended `{role="tool"}` messages.
+8. After a meaningful implementation phase in the `implement` profile, starts
+   one bounded completion-review continuation before exposing the final answer.
+   A phase is meaningful after writes to multiple targets or a successful
+   validation following a write. The review re-checks the original request,
+   source changes, and validation evidence; it may fix a concrete issue, but
+   cannot trigger another review.
 
 Headless `capstan run` builds the same message shape and calls
 `capstan.agent.run` directly, with callbacks that buffer final stdout instead of
 appending to the TUI message list.
 
-The embedded system prompt treats coding runs as implementation-first work:
-read the relevant source/tests, stay inside the requested scope, make the
-smallest correct edit, validate once with the project-appropriate command, and
-finish with a compact summary. It also requires product-level verification for
-specified output files, exact formats, numerical thresholds, and suspiciously
-empty command output. This is agent policy, not benchmark-mode behavior;
+The embedded system prompt treats coding runs as implementation-first,
+contract-first work. Before editing, the agent derives a private acceptance
+checklist from explicit requirements, project instructions, and affected
+interfaces. The checklist includes preservation and negative constraints,
+exact semantics, user-visible behavior, and meaningful API success/error
+values. The agent inspects neighboring patterns, declared dependencies, and
+actual project test commands before introducing a library or validation
+harness, then makes the smallest correct edit within scope.
+
+Validation should use the highest-signal available check;
+overlapping searches or generated-output inspections must not be used to
+re-prove a property already covered by a successful check. Additional checks
+must cover a distinct requirement, follow a new edit, or investigate a concrete
+failure. After a successful primary build or test, at most one static generated-
+output inspection may cover remaining facts; an inconclusive inspection must
+lead to source inspection, direct behavioral validation, or an explicit
+unverified report rather than command variants against the same artifact.
+Build, typecheck, and lint results count only as evidence for the properties
+they directly cover, not as proof of runtime behavior, accessibility, exact
+configuration semantics, or negative constraints. Dependencies and manifests
+must not be changed solely to construct an ad-hoc validation harness.
+
+Before finishing, the agent reconciles each acceptance item with source
+evidence or one direct check, re-reads the original request, and reports any
+unverified or unresolved item. This is agent policy, not benchmark-mode behavior;
 `--benchmark` must not change model instructions beyond the normal run-mode
 permissions/runtime options.
 
@@ -169,6 +194,20 @@ the `agent.max_*` fields in `config.lua`. When the guard trips, the runtime
 appends a visible `[stopped: ...]` marker, logs `tool_guard`, calls the run error
 callback, and finishes the run with `ok = false`. The guard runs before
 permission checks and before tool execution.
+
+Each streaming model request is separately bounded to 120 seconds by default.
+If a transient transport or server failure occurs before producing text, the
+runtime retries it once; a stream that has already produced visible text is
+never retried automatically. This transport policy is independent of benchmark
+mode and prevents provider heartbeats or stalled streams from bypassing the
+agent-loop guard indefinitely.
+
+Generated-output inspection has a separate soft guard. By default the first
+static shell inspection of `dist/`, `build/`, `out/`, or `coverage/` is allowed;
+later inspection variants are skipped and returned to the model as guidance to
+inspect source, run a behavioral check, or report the requirement as unverified.
+This does not fail the run. `agent.max_generated_output_checks` configures the
+limit, and zero disables it.
 
 Synchronous tool work runs on the UI thread. Any blocking C helper used by a
 tool must periodically yield through the TUI pump so the screen can repaint and

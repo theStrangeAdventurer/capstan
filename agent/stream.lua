@@ -288,10 +288,10 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
         if err then
             finished = true
             if reasoning_active and not provider.suppress_agent_state then agent.set_thinking(false) end
-            local msg = err
-            if body and body ~= "" then
-                msg = err .. "\n" .. body
-            end
+            -- The body can be the beginning of a partially received SSE stream,
+            -- including arbitrary model output. It is diagnostic transport data,
+            -- not a safe model-visible error message.
+            local msg = logging.safe_error(err, 240)
             if not provider.suppress_agent_state then
                 popup.error("API Error", msg)
             end
@@ -327,6 +327,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             end
 
             local final_calls = {}
+            local incomplete_calls = 0
             for _, tc in pairs(tool_calls_accum) do
                 if tc.id ~= "" and tc.name ~= "" and tc.arguments ~= "" then
                     tc.name = tc.name:match("^%s*(.-)%s*$")
@@ -338,17 +339,43 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                         logging.compact(loggable_tool_arguments(tc.name, tc.arguments), 260)
                     ))
                 else
+                    incomplete_calls = incomplete_calls + 1
                     logging.runtime_log("stream", string.format(
                         "tool_incomplete id=%s name=%s args_bytes=%d",
                         logging.compact(tc.id, 80),
                         logging.compact(tc.name, 80),
                         #(tc.arguments or "")
-                    ))
+                    ), "warn")
                 end
             end
 
             if tool_delta_chunks > 0 and #final_calls == 0 then
                 logging.runtime_log("stream", "tool_deltas_without_final_calls", "warn")
+            end
+            if accumulated_text ~= "" and #final_calls > 0 then
+                logging.runtime_log("stream", string.format(
+                    "mixed_text_and_tool_calls text_bytes=%d final_tool_calls=%d",
+                    #accumulated_text,
+                    #final_calls
+                ), "warn")
+            end
+            if accumulated_text ~= "" and incomplete_calls > 0 then
+                logging.runtime_log("stream", string.format(
+                    "text_with_dropped_tool_calls text_bytes=%d incomplete_tool_calls=%d final_tool_calls=%d",
+                    #accumulated_text,
+                    incomplete_calls,
+                    #final_calls
+                ), "warn")
+            end
+            if accumulated_text == "" and #final_calls == 0 then
+                local kind = accumulated_reasoning ~= "" and "reasoning_only_response" or "empty_response"
+                logging.runtime_log("stream", string.format(
+                    "%s events=%d raw_bytes=%d incomplete_tool_calls=%d",
+                    kind,
+                    event_count,
+                    raw_bytes,
+                    incomplete_calls
+                ), "warn")
             end
             local protocol_error = minimax_text_tool_protocol_error(provider, accumulated_text)
             if #final_calls == 0 and protocol_error then

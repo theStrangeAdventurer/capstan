@@ -95,6 +95,10 @@ CliOptions cli_parse(int argc, char **argv) {
       opts.workdir = next_value(argc, argv, &i);
       if (!opts.workdir)
         opts.error = "--workdir requires a value";
+    } else if (is_flag(arg, "--workspace")) {
+      opts.workspace = next_value(argc, argv, &i);
+      if (!opts.workspace)
+        opts.error = "--workspace requires a value";
     } else if (is_flag(arg, "--max-turns")) {
       const char *value = next_value(argc, argv, &i);
       if (!value) {
@@ -121,6 +125,8 @@ CliOptions cli_parse(int argc, char **argv) {
       opts.json = 1;
     } else if (is_flag(arg, "--no-mcp")) {
       opts.no_mcp = 1;
+    } else if (is_flag(arg, "--no-wiki")) {
+      opts.no_wiki = 1;
     } else if (is_flag(arg, "--full-control")) {
       opts.full_control = 1;
     } else if (is_flag(arg, "--benchmark")) {

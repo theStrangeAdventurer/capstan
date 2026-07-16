@@ -5,6 +5,7 @@ local profiles = {
         name = "fast",
         label = "Fast",
         reasoning_effort = "low",
+        completion_review = false,
         prompt = [[
 ## Active Profile: Fast
 Move quickly and keep tool use lean. Use the smallest amount of exploration that
@@ -16,6 +17,7 @@ a terse result.
         name = "implement",
         label = "Implement",
         reasoning_effort = "medium",
+        completion_review = true,
         prompt = [[
 ## Active Profile: Implement
 Make focused, correct changes. Read relevant files before editing, keep scope
@@ -28,6 +30,7 @@ appropriate command before finishing.
         label = "Plan",
         reasoning_effort = "high",
         readonly = true,
+        completion_review = false,
         allowed_tools = {
             fetch = true,
             file_read = true,

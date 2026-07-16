@@ -3,7 +3,7 @@ local json = require("vendor.rxi.json")
 local M = {}
 
 function M.estimate_text_tokens(text)
-    if not text or text == "" then return 0 end
+    if type(text) ~= "string" or text == "" then return 0 end
     local chars = 0
     for i = 1, #text do
         local b = text:byte(i)
@@ -14,12 +14,30 @@ function M.estimate_text_tokens(text)
     return math.max(1, math.floor(chars / 4 + 0.5))
 end
 
+local function estimate_content_tokens(content)
+    if type(content) == "string" then return M.estimate_text_tokens(content) end
+    if type(content) ~= "table" then return 0 end
+    local total = 0
+    for _, block in ipairs(content) do
+        if type(block) == "table" then
+            if block.type == "text" then
+                total = total + M.estimate_text_tokens(block.text)
+            elseif block.type == "image_url" then
+                -- Image tokenization is model-specific. Use a bounded planning
+                -- estimate and never count or log the base64 payload as text.
+                total = total + 1024
+            end
+        end
+    end
+    return total
+end
+
 function M.estimate_messages_tokens(messages, tools)
     local total = 0
     for _, message in ipairs(messages or {}) do
         total = total + 4
         total = total + M.estimate_text_tokens(message.role)
-        total = total + M.estimate_text_tokens(message.content)
+        total = total + estimate_content_tokens(message.content)
         if message.tool_calls then
             total = total + M.estimate_text_tokens(json.encode(message.tool_calls))
         end

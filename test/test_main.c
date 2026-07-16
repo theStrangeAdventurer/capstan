@@ -13,6 +13,7 @@ extern MunitSuite permit_prompt_suite;
 extern MunitSuite popup_suite;
 extern MunitSuite redact_suite;
 extern MunitSuite scroll_suite;
+extern MunitSuite shell_process_suite;
 extern MunitSuite start_screen_suite;
 extern MunitSuite skills_suite;
 extern MunitSuite usage_suite;
@@ -35,6 +36,7 @@ int main(int argc, char *argv[]) {
     popup_suite,
     redact_suite,
     scroll_suite,
+    shell_process_suite,
     start_screen_suite,
     skills_suite,
     usage_suite,

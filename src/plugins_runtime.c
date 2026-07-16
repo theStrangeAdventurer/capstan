@@ -90,6 +90,7 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.workspace", "agent/workspace.lua");
   preload_embedded_asset(L, "agent.redact", "agent/redact.lua");
   preload_embedded_asset(L, "agent.tokens", "agent/tokens.lua");
+  preload_embedded_asset(L, "agent.images", "agent/images.lua");
   preload_embedded_asset(L, "agent.logging", "agent/logging.lua");
   preload_embedded_asset(L, "agent.hooks", "agent/hooks.lua");
   preload_embedded_asset(L, "agent.state", "agent/state.lua");
@@ -147,7 +148,8 @@ static void cleanup_materialized_builtin_skills(void) {
 }
 
 static size_t collect_builtin_skills(BuiltinSkill *builtin_skills,
-                                     size_t builtin_skill_capacity) {
+                                     size_t builtin_skill_capacity,
+                                     int disable_wiki) {
   size_t count = 0;
   if (self_improvement_allowed() && count < builtin_skill_capacity) {
     const EmbeddedAsset *asset =
@@ -162,7 +164,7 @@ static size_t collect_builtin_skills(BuiltinSkill *builtin_skills,
     }
   }
 
-  if (count < builtin_skill_capacity) {
+  if (!disable_wiki && count < builtin_skill_capacity) {
     const EmbeddedAsset *asset =
         embedded_asset_find("skills/wiki-onboarding/SKILL.md");
     if (asset) {
@@ -178,7 +180,7 @@ static size_t collect_builtin_skills(BuiltinSkill *builtin_skills,
   return count;
 }
 
-static void load_system_prompt(void) {
+static void load_system_prompt(const PluginsInitOptions *options) {
   const EmbeddedAsset *asset = embedded_asset_find("ai/system_prompt.txt");
   const char *data = asset ? asset->data : "";
   size_t size = asset ? asset->size : 0;
@@ -195,12 +197,14 @@ static void load_system_prompt(void) {
   char user_skills[512];
   char common_skills[512];
   BuiltinSkill builtin_skills[2];
+  int disable_wiki = options && options->disable_wiki;
   cleanup_materialized_builtin_skills();
   size_t builtin_skill_count =
       collect_builtin_skills(builtin_skills,
-                             sizeof(builtin_skills) / sizeof(builtin_skills[0]));
+                             sizeof(builtin_skills) / sizeof(builtin_skills[0]),
+                             disable_wiki);
   int n = snprintf(project_skills, sizeof(project_skills), "%s/.agents/skills",
-                   app_workdir());
+                   app_workspace_root());
   const char *project_skills_dir =
       n > 0 && (size_t)n < sizeof(project_skills) ? project_skills : NULL;
   const char *user_skills_dir =
@@ -226,36 +230,40 @@ static void load_system_prompt(void) {
   const char *wiki_path = NULL;
   char default_wiki_path[512];
   default_wiki_path[0] = '\0';
-  lua_getglobal(L, "capstan");
-  if (lua_istable(L, -1)) {
-    lua_getfield(L, -1, "config");
+  if (!disable_wiki) {
+    lua_getglobal(L, "capstan");
     if (lua_istable(L, -1)) {
-      lua_getfield(L, -1, "wiki");
+      lua_getfield(L, -1, "config");
       if (lua_istable(L, -1)) {
-        lua_getfield(L, -1, "path");
-        if (lua_isstring(L, -1))
-          wiki_path = lua_tostring(L, -1);
+        lua_getfield(L, -1, "wiki");
+        if (lua_istable(L, -1)) {
+          lua_getfield(L, -1, "path");
+          if (lua_isstring(L, -1))
+            wiki_path = lua_tostring(L, -1);
+          lua_pop(L, 1);
+        }
         lua_pop(L, 1);
       }
       lua_pop(L, 1);
     }
     lua_pop(L, 1);
+    if (!wiki_path &&
+        app_state_path(default_wiki_path, sizeof(default_wiki_path), "wiki") ==
+            0) {
+      if (app_state_ensure_dir() == 0)
+        mkdir(default_wiki_path, 0755);
+      wiki_path = default_wiki_path;
+    }
   }
-  lua_pop(L, 1);
-  if (!wiki_path &&
-      app_state_path(default_wiki_path, sizeof(default_wiki_path), "wiki") == 0) {
-    if (app_state_ensure_dir() == 0)
-      mkdir(default_wiki_path, 0755);
-    wiki_path = default_wiki_path;
-  }
-  char *wiki_prompt = wiki_build_prompt(wiki_path);
-  char *wiki_summary = wiki_build_summary(wiki_path);
+  char *wiki_prompt = disable_wiki ? NULL : wiki_build_prompt(wiki_path);
+  char *wiki_summary = disable_wiki ? NULL : wiki_build_summary(wiki_path);
 
   char agents_path[512];
   char *agents_content = NULL;
   size_t agents_content_size = 0;
   int agents_n =
-      snprintf(agents_path, sizeof(agents_path), "%s/AGENTS.md", app_workdir());
+      snprintf(agents_path, sizeof(agents_path), "%s/AGENTS.md",
+               app_workspace_root());
   if (agents_n > 0 && (size_t)agents_n < sizeof(agents_path))
     agents_content = plugins_read_file(agents_path, &agents_content_size);
 
@@ -314,10 +322,12 @@ static void load_system_prompt(void) {
     lua_pushstring(L, skills_summary ? skills_summary : "No skills loaded.");
     lua_setfield(L, -2, "skills_summary");
 
-    lua_pushstring(L, wiki_summary ? wiki_summary : "Wiki is not configured.");
-    lua_setfield(L, -2, "wiki_summary");
+    if (!disable_wiki && wiki_summary) {
+      lua_pushstring(L, wiki_summary);
+      lua_setfield(L, -2, "wiki_summary");
+    }
 
-    if (wiki_path) {
+    if (!disable_wiki && wiki_path) {
       lua_pushstring(L, wiki_path);
       lua_setfield(L, -2, "wiki_path");
     }
@@ -531,6 +541,9 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_pushstring(L, app_workdir());
   lua_setfield(L, -2, "workdir");
 
+  lua_pushstring(L, app_workspace_root());
+  lua_setfield(L, -2, "workspace_root");
+
   lua_pushcfunction(L, l_capstan_state_path);
   lua_setfield(L, -2, "state_path");
 
@@ -561,6 +574,8 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_newtable(L);
   lua_pushboolean(L, options && options->disable_mcp);
   lua_setfield(L, -2, "disable_mcp");
+  lua_pushboolean(L, options && options->disable_wiki);
+  lua_setfield(L, -2, "disable_wiki");
   lua_setfield(L, -2, "runtime_options");
 
   lua_setglobal(L, "capstan");
@@ -665,7 +680,7 @@ void plugins_init_with_options(const PluginsInitOptions *options) {
   lua_setfield(L, -2, "error");
   lua_setglobal(L, "popup");
 
-  load_system_prompt();
+  load_system_prompt(options);
 
   if (lua_doasset_or_file(L, "agent/runtime.lua", NULL) != LUA_OK) {
     popup_show_message("Startup Error", lua_tostring(L, -1), 1);

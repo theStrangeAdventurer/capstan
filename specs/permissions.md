@@ -30,7 +30,7 @@ The permit popup offers:
 - `Tool run`: temporarily allow this permission tool for the current run scope.
 - `Full run`: temporarily allow all permissioned tools for the current run scope.
 - `Always allow`: allow this call and persist an exact rule for future calls.
-  For `shell`, the persisted target is the active workspace directory, so later
+  For `shell`, the persisted target is the active workspace root, so later
   shell commands in that workspace do not prompt again just because the command
   text changed.
 
@@ -98,9 +98,11 @@ all subagent tasks in that batch, so approving `Tool run` or `Full run` once
 applies across the sibling subagents without writing persistent rules.
 
 Headless `capstan run --full-control` creates a non-persisted run scope without
-showing prompts. It is workdir-only: `shell` is allowed in the active workspace,
-and `file_read` / `file_write` are allowed only for normalized paths inside the
-active workspace. `--benchmark` enables this mode and also skips MCP startup.
+showing prompts. It is workspace-only: file tools are allowed only for paths
+inside the workspace root. Shell commands run from the working directory and
+are denied when their statically visible path arguments escape the workspace
+root or use dynamic home/command substitution that cannot be bounded safely.
+`--benchmark` enables this mode and also skips MCP startup.
 
 ## Default Policy
 
@@ -113,7 +115,9 @@ If no configured or persisted rule matches:
   workspace directory.
 - Sensitive local filenames such as `.env`, `.env.*`, or names containing
   `secret`, `token`, or `credential` force an `ask` decision for model-initiated
-  file tools even when the path is inside the workspace.
+  file tools when access is permitted only by the default workspace-read
+  policy. An explicit matching `allow = true` rule is intentional owner consent
+  and runs without a popup.
 - All other tools return `ask`.
 
 The `subagents` model tool does not use a permission pattern. It is exposed by
@@ -145,7 +149,7 @@ UI saves the exact target, not a wildcard.
 
 `agent/tools.lua` first rejects unavailable model tool calls, then applies
 permissions while processing available tool calls that require permission. For
-`shell`, it uses `capstan.workdir` as the target. Other permissioned tools
+`shell`, it uses `capstan.workspace_root` as the target. Other permissioned tools
 derive the target from common tool arguments (`command`, `path`, `url`, `uri`)
 or fall back to the tool name. Local file permission targets (`file_read` and
 `file_write`) are normalized before matching: relative paths resolve against
@@ -162,14 +166,17 @@ of explicit absolute paths outside the workspace are allowed only after the
 normal permission decision allows that external target.
 
 `src/permit.c` owns rule loading, saving, matching, config-rule import, and the
-Lua-facing `permit` table. `src/tui.c` renders the blocking permit confirmation
-popup.
+Lua-facing `permit` table. `permit.check` also returns whether its allow result
+comes from an explicit matching owner rule, so `agent/tools.lua` can retain the
+sensitive-file default without overriding deliberate grants. `src/tui.c`
+renders the blocking permit confirmation popup.
 
 The permit popup itself is a synchronous modal prompt. After the user confirms a
 tool call, any C-side blocking work must periodically pump the TUI instead of
 waiting in a raw blocking syscall. In particular, `tools.shell` keeps rendering
-and handles safe scroll/resize-style input while waiting for the subprocess to
-finish, then logs the shell duration and timeout status.
+and handles safe scroll/resize-style input while waiting. Its timeout terminates
+the entire subprocess group, escalates from `SIGTERM` to `SIGKILL`, and bounds
+pipe draining so descendants cannot leave Capstan waiting forever for EOF.
 
 Plugin metadata may declare a `permission` field to share permission policy
 between related tools. For example, `file_edit` uses `file_write` permission

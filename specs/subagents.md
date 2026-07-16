@@ -26,6 +26,7 @@ return {
     max_attempts = 3,
     max_turns = 6,
     max_turns_cap = 200,
+    max_result_bytes = 16384,
   },
 }
 ```
@@ -83,6 +84,13 @@ HTTP `408`, `429`, `500`, `502`, `503`, or `504`. Client/auth/request-shape
 errors such as `400`, `401`, and `403` are not retried automatically; they
 require an orchestrator repair/analyze step before another request would be
 useful.
+
+Model-visible subagent errors contain only a short, single-line transport
+reason. Raw HTTP response bodies and partial SSE streams are never copied into
+the parent tool result or UI message. Failed children return an empty `text`
+field. Successful child text is redacted and bounded by
+`subagents.max_result_bytes` (16 KiB by default); truncated results include
+`text_truncated = true` and `text_original_bytes` metadata.
 
 ## Runtime Contract
 

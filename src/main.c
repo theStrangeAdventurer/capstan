@@ -313,9 +313,11 @@ static void print_help(void) {
   printf("  --profile NAME      Agent profile: fast, implement, plan\n");
   printf("  --reasoning-effort LEVEL\n");
   printf("                      Reasoning effort: none, minimal, low, medium, high, xhigh, max\n");
-  printf("  --workdir PATH      Override workspace directory\n");
+  printf("  --workdir PATH      Override command and relative-file directory\n");
+  printf("  --workspace PATH    Override workspace root and permission boundary\n");
   printf("  --max-turns N       Limit agent continuation rounds (default: 200)\n");
   printf("  --no-mcp           Do not start configured MCP servers for this run\n");
+  printf("  --no-wiki          Do not load or initialize wiki context for this run\n");
   printf("  --full-control     Allow workspace-scoped tools for this run\n");
   printf("  --benchmark        Alias for --no-mcp --full-control\n");
   printf("  --json              Print structured JSON result\n");
@@ -483,10 +485,16 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
     free(owned_prompt);
     return 1;
   }
+  if (opts->workspace && !app_workspace_set(opts->workspace)) {
+    fprintf(stderr, "capstan: invalid --workspace: %s\n", opts->workspace);
+    free(owned_prompt);
+    return 1;
+  }
 
   setlocale(LC_ALL, "");
   http_set_headless(1);
-  PluginsInitOptions plugin_options = {.disable_mcp = opts->no_mcp};
+  PluginsInitOptions plugin_options = {.disable_mcp = opts->no_mcp,
+                                       .disable_wiki = opts->no_wiki};
   plugins_init_with_options(&plugin_options);
   load_embedded_plugins();
   char global_plugins[512];

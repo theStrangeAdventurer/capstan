@@ -58,7 +58,7 @@ LLM calls "mcp__browser__browser_navigate"
       → fill missing arguments from tool schema defaults
       → MCP transport: send tools/call request
       → read response (blocking with timeout)
-      → extract content[1].text from result
+      → preserve text and validated image content from result
     → return text to LLM as tool result
 ```
 
@@ -93,6 +93,10 @@ LLM calls "mcp__browser__browser_navigate"
   paths like `./page.png`, are rewritten against `capstan.workdir` before they
   are sent back to the model. This makes final answers point to the real file
   path instead of an ambiguous server-relative path.
+- MCP `ImageContent` is retained as typed multimodal content rather than
+  flattened into text. Invalid images and decoded payloads over 10 MiB are
+  omitted with a textual explanation; image base64 is never written to runtime
+  logs.
 
 ## Configuration
 

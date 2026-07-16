@@ -33,15 +33,20 @@ return {
     reasoning_effort = "medium",
     max_turns = 80,
     max_duration_sec = 900,
+    stream_timeout_sec = 120,
+    max_stream_retries = 1,
     max_tool_calls = 80,
     max_same_tool_call = 3,
     max_same_shell_command = 0,
+    max_generated_output_checks = 1,
+    completion_review = true,
   },
   subagents = {
     max_concurrent = 3,
     max_tasks = 8,
     max_turns = 6,
     max_turns_cap = 200,
+    max_result_bytes = 16384,
   },
   finder = {
     ignore_files = { ".gitignore", ".ignore" },
@@ -82,11 +87,25 @@ return {
   [self-improvement skill](self-improvement.md). It is disabled by default.
 - `capabilities.subagents = false` hides the model tool described in
   [Subagents](subagents.md). It is enabled by default when the field is omitted.
-- `agent.max_turns`, `max_duration_sec`, `max_tool_calls`,
-  `max_same_tool_call`, and `max_same_shell_command` limit runaway agent/tool
-  loops. Missing values fall back to the built-in defaults.
+- `agent.max_turns`, `max_duration_sec`, `stream_timeout_sec`,
+  `max_stream_retries`, `max_tool_calls`,
+  `max_same_tool_call`, `max_same_shell_command`, and
+  `max_generated_output_checks` limit runaway agent/tool loops. Missing values
+  fall back to the built-in defaults.
   `max_same_shell_command = 0` disables the shell-specific repeated-command
-  guard.
+  guard. `max_generated_output_checks = 0` disables the soft generated-output
+  inspection limit; its default is one inspection per agent run.
+  `stream_timeout_sec` bounds one streaming model request (zero disables this
+  per-request limit); `max_stream_retries` retries a transient transport or
+  server failure only before it has emitted text, so a stalled transport cannot
+  leave an agent run waiting indefinitely or duplicate a visible answer. Their
+  defaults are 120 seconds and one retry.
+- `agent.completion_review` controls one final, bounded review pass after a
+  meaningful implementation phase. It defaults to enabled for the `implement`
+  profile and disabled for `fast` and `plan`. A phase is meaningful when it
+  changes more than one file, or when a successful project validation follows a
+  workspace write. The review shares the same conversation and tools, runs at
+  most once per root agent run, and is not run for subagents.
 - `agent.profile` sets the default workflow profile. Accepted values are
   `fast`, `implement`, and `plan`. Profiles may append system instructions,
   set a default reasoning effort, and restrict model tools. Slash commands
@@ -106,10 +125,13 @@ return {
   `reasoning_max_tokens`, or `reasoning_exclude`; these are copied into the
   OpenAI-compatible request body as a `reasoning` object. The run-level effort
   override takes precedence over provider defaults.
-- `subagents.max_concurrent`, `max_tasks`, `max_turns`, and `max_turns_cap`
+- `subagents.max_concurrent`, `max_tasks`, `max_turns`, `max_turns_cap`, and
+  `max_result_bytes`
   limit delegated internal runs. `max_turns` is the default per-task turn budget
   when a subagent task omits its own value; explicit task budgets are respected
-  up to `max_turns_cap`.
+  up to `max_turns_cap`. `max_result_bytes` bounds each successful child result
+  before it is inserted into the parent model context; failed child output is
+  discarded and only a short single-line error is retained.
 - `redaction.names` is a case-insensitive list of field or header names whose
   values should be masked.
 - `redaction.name_patterns` is a list of Lua patterns matched against the

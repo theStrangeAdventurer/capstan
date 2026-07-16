@@ -18,9 +18,11 @@ typedef struct {
   const char *profile;
   const char *reasoning_effort;
   const char *workdir;
+  const char *workspace;
   int max_turns;
   int json;
   int no_mcp;
+  int no_wiki;
   int full_control;
   int benchmark;
   const char *error;
