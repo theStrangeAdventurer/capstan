@@ -33,7 +33,7 @@ return {
     reasoning_effort = "medium",
     max_turns = 80,
     max_duration_sec = 900,
-    stream_timeout_sec = 120,
+    stream_timeout_sec = 300,
     max_stream_retries = 1,
     max_tool_calls = 80,
     max_same_tool_call = 3,
@@ -99,7 +99,7 @@ return {
   per-request limit); `max_stream_retries` retries a transient transport or
   server failure only before it has emitted text, so a stalled transport cannot
   leave an agent run waiting indefinitely or duplicate a visible answer. Their
-  defaults are 120 seconds and one retry.
+  defaults are 300 seconds and one retry.
 - `agent.completion_review` controls one final, bounded review pass after a
   meaningful implementation phase. It defaults to enabled for the `implement`
   profile and disabled for `fast` and `plan`. A phase is meaningful when it

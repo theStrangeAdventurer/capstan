@@ -332,10 +332,29 @@ local function guard_duration_error(guard)
     if not guard or not guard.max_duration_ms or guard.max_duration_ms <= 0 then
         return nil
     end
-    if now_ms() - guard.started_at > guard.max_duration_ms then
+    local elapsed_ms = type(guard.elapsed_ms) == "function" and
+        guard.elapsed_ms() or (now_ms() - guard.started_at)
+    if elapsed_ms > guard.max_duration_ms then
         return string.format("agent run exceeded %ds", math.floor(guard.max_duration_ms / 1000))
     end
     return nil
+end
+
+local function permission_prompt(run_ctx, permission_tool, target)
+    local guard = run_ctx and run_ctx.guard or nil
+    if guard and type(guard.pause) == "function" then guard.pause() end
+    local prompt_started_at = now_ms()
+    local ok, decision = pcall(permit.prompt, permission_tool, target)
+    local paused_ms = math.max(0, now_ms() - prompt_started_at)
+    if guard and type(guard.resume) == "function" then
+        paused_ms = guard.resume()
+    end
+    logging.runtime_log("permit", string.format(
+        "tool=%s target=%s prompt_wait_ms=%d",
+        tostring(permission_tool), tostring(target), math.floor(paused_ms)
+    ))
+    if not ok then error(decision, 0) end
+    return decision
 end
 
 local function guard_before_tool(tool_name, args, run_ctx)
@@ -1003,11 +1022,26 @@ local function tool_display_command(tool_name, args)
     return nil
 end
 
-local function tool_status_prefix(tool_name, display_target, display_command)
-    if display_command then
-        return string.format("\n⚙ %s\n  $ %s ", tool_name, display_command)
+local shell_command_is_validation
+
+local function tool_phase(tool_name, display_command)
+    if tool_name == "file_read" then return "Reading" end
+    if tool_name == "file_edit" or tool_name == "file_write" then return "Editing" end
+    if tool_name == "fetch" then return "Fetching" end
+    if tool_name == "logs" then return "Inspecting logs" end
+    if tool_name == "shell" then
+        if shell_command_is_validation(display_command) then return "Validating" end
+        return "Running command"
     end
-    return string.format("\n⚙ %s: %s ", tool_name, display_target)
+    return "Using tool"
+end
+
+local function tool_status_prefix(tool_name, display_target, display_command)
+    local phase = tool_phase(tool_name, display_command)
+    if display_command then
+        return string.format("\n⚙ %s\n  %s\n  $ %s ", tool_name, phase, display_command)
+    end
+    return string.format("\n⚙ %s\n  %s: %s ", tool_name, phase, display_target)
 end
 
 local function tool_status_suffix(status, _display_command)
@@ -1113,7 +1147,7 @@ local function mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok
     end
 end
 
-local function shell_command_is_validation(command)
+shell_command_is_validation = function(command)
     local normalized = " " .. tostring(command or ""):lower() .. " "
     local markers = {
         " test", " lint", " typecheck", " tsc ", " build", " check",
@@ -1272,7 +1306,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             result_content = shell_scope_reason or ("Permission denied for " .. tool_name .. " " .. target)
                             if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
                         elseif perm == "ask" then
-                            local decision = permit.prompt(permission_tool, target)
+                            local decision = permission_prompt(run_ctx, permission_tool, target)
                             logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
                             if decision == "deny" then
                                 result_content = "User denied " .. tool_name .. " " .. target
