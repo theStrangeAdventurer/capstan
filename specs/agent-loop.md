@@ -158,6 +158,20 @@ they directly cover, not as proof of runtime behavior, accessibility, exact
 configuration semantics, or negative constraints. Dependencies and manifests
 must not be changed solely to construct an ad-hoc validation harness.
 
+For user-visible progress, the model gives one short intent line before a
+non-trivial tool batch or phase change. Text accompanying tool calls is shown
+immediately, including after workspace mutations; only a no-tool draft that is
+about to enter completion review remains deferred. Tool status blocks also use
+deterministic phase labels such as `Reading`, `Editing`, and `Validating` when
+the model emits no annotation.
+
+A successful provider response with neither text nor tool calls is not a valid
+terminal result. The runtime adds one synthetic continuation asking the model
+to either take the next necessary action or finalize concisely. A second empty
+terminal response fails the run visibly instead of leaving an empty assistant
+placeholder. The retry policy is owned by the common agent loop and therefore
+applies consistently across providers and TUI/headless entry points.
+
 Before finishing, the agent reconciles each acceptance item with source
 evidence or one direct check, re-reads the original request, and reports any
 unverified or unresolved item. This is agent policy, not benchmark-mode behavior;
@@ -195,12 +209,23 @@ appends a visible `[stopped: ...]` marker, logs `tool_guard`, calls the run erro
 callback, and finishes the run with `ok = false`. The guard runs before
 permission checks and before tool execution.
 
-Each streaming model request is separately bounded to 120 seconds by default.
+Each streaming model request is separately bounded to 300 seconds by default.
 If a transient transport or server failure occurs before producing text, the
 runtime retries it once; a stream that has already produced visible text is
 never retried automatically. This transport policy is independent of benchmark
 mode and prevents provider heartbeats or stalled streams from bypassing the
 agent-loop guard indefinitely.
+
+The overall `max_duration_sec` guard counts active agent time. It pauses only
+while the blocking permission prompt is waiting for a user decision and resumes
+immediately after allow or deny. Provider waits, tool execution, ordinary
+popups, and all other agent work continue to count toward the limit. The guard
+is owned by `agent/runtime.lua`; the tool permission path only signals pause and
+resume around `permit.prompt`, including when the prompt raises an error.
+
+When the paths of several independent files are already known, the base system
+prompt directs the model to batch them through `file_read.paths`. Sequential
+reads remain appropriate when one result determines which file to inspect next.
 
 Generated-output inspection has a separate soft guard. By default the first
 static shell inspection of `dist/`, `build/`, `out/`, or `coverage/` is allowed;

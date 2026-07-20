@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 static int stream_callback_ref = LUA_NOREF;
-static char captured_body[8192];
+static char captured_body[32768];
 static char captured_get_url[512];
 static char captured_permit_tool[128];
 static char captured_permit_target[512];
@@ -30,6 +30,7 @@ static int permit_prompt_calls;
 static int permit_check_calls;
 static int permit_save_calls;
 static int permit_explicit_allow;
+static int permit_prompt_advance_ms;
 static int mock_models_success;
 static int post_stream_calls;
 static lua_Integer captured_stream_timeout_ms;
@@ -94,8 +95,14 @@ static int l_permit_check(lua_State *L) {
 }
 
 static int l_permit_prompt(lua_State *L) {
-  (void)L;
   permit_prompt_calls++;
+  if (permit_prompt_advance_ms > 0) {
+    lua_getglobal(L, "MOCK_NOW_MS");
+    lua_Integer now = lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    lua_pushinteger(L, now + permit_prompt_advance_ms);
+    lua_setglobal(L, "MOCK_NOW_MS");
+  }
   lua_pushstring(L, permit_prompt_decision);
   return 1;
 }
@@ -350,6 +357,7 @@ static void reset_captures(lua_State *L) {
   permit_check_calls = 0;
   permit_save_calls = 0;
   permit_explicit_allow = 0;
+  permit_prompt_advance_ms = 0;
   mock_models_success = 0;
   post_stream_calls = 0;
   captured_stream_timeout_ms = 0;
@@ -881,6 +889,7 @@ static void call_agent_run_with_profile_and_model(lua_State *L,
 
 static void send_tool_call(lua_State *L, const char *call_id,
                            const char *name, const char *arguments);
+static void send_text_delta(lua_State *L, const char *text);
 static void send_text_done(lua_State *L, const char *text);
 
 static MunitResult test_request_enables_auto_tool_choice(
@@ -2625,6 +2634,45 @@ static MunitResult test_logs_empty_stream_completion(
   munit_assert_true(strstr(captured_logs, "[stream] empty_response") != NULL);
   munit_assert_true(strstr(captured_logs,
                            "[agent] stream completed with no text and no tool calls") != NULL);
+  munit_assert_int(post_stream_calls, ==, 2);
+  munit_assert_true(strstr(captured_logs,
+                           "requesting finalization attempt=1/1") != NULL);
+  munit_assert_true(strstr(captured_body, "return an empty response") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "Finalizing response") != NULL);
+
+  send_text_done(L, "finalized response");
+  munit_assert_true(strstr(captured_agent_appends, "finalized response") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "[error:") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_repeated_empty_terminal_response_fails_visibly(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  for (int i = 0; i < 2; i++) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+    lua_pushnil(L);
+    lua_pushboolean(L, 1);
+    rc = lua_pcall(L, 2, 0, 0);
+    munit_assert_int(rc, ==, LUA_OK);
+  }
+
+  munit_assert_int(post_stream_calls, ==, 2);
+  munit_assert_true(strstr(captured_logs, "finalization failed") != NULL);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "Provider returned an empty terminal response twice") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -2674,7 +2722,7 @@ static MunitResult test_transient_stream_error_retries_before_output(
 
   call_agent_entry(L);
   munit_assert_int(post_stream_calls, ==, 1);
-  munit_assert_int64(captured_stream_timeout_ms, ==, 120000);
+  munit_assert_int64(captured_stream_timeout_ms, ==, 300000);
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
   lua_pushnil(L);
@@ -3082,8 +3130,14 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
   munit_assert_true(strstr(captured_agent_appends, "-beta") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "+BETA") != NULL);
 
+  send_text_delta(L, "Running the focused validation before finalizing.");
+  munit_assert_true(strstr(captured_agent_appends,
+                           "Running the focused validation") == NULL);
   send_tool_call(L, "call_validate", "shell",
                  "{\\\"command\\\":\\\"npm test\\\"}");
+  munit_assert_true(strstr(captured_agent_appends,
+                           "Running the focused validation") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "Validating") != NULL);
   send_text_done(L, "draft answer");
   munit_assert_true(strstr(captured_body, "bounded completion review") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "draft answer") == NULL);
@@ -3421,6 +3475,19 @@ static void send_tool_call(lua_State *L, const char *call_id,
   }
 }
 
+static void send_text_delta(lua_State *L, const char *text) {
+  char event[2048];
+  snprintf(event, sizeof(event),
+           "data: {\"choices\":[{\"delta\":{\"content\":\"%s\"}}]}\n\n",
+           text);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L, event);
+  lua_pushboolean(L, 0);
+  int rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
 static void send_text_done(lua_State *L, const char *text) {
   char event[2048];
   snprintf(event, sizeof(event),
@@ -3701,6 +3768,47 @@ static MunitResult test_tool_guard_stops_duration_before_tool_execution(
                            "[stopped: agent run exceeded 1s") != NULL);
   munit_assert_true(strstr(captured_logs,
                            "[tool_guard] agent run exceeded 1s") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_guard_pauses_during_permission_prompt(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("ask");
+  set_permit_prompt_decision("allow");
+  set_agent_config_number(L, "max_duration_sec", 1);
+  install_mock_now_ms(L, 0);
+  permit_prompt_advance_ms = 5000;
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  set_mock_now_ms(L, 500);
+  send_tool_call(L, "call_permission_wait", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+
+  munit_assert_int(permit_prompt_calls, ==, 1);
+  munit_assert_int(post_stream_calls, ==, 2);
+  munit_assert_true(strstr(captured_agent_appends, "[stopped:") == NULL);
+  munit_assert_true(strstr(captured_logs, "prompt_wait_ms=5000") != NULL);
+
+  permit_prompt_advance_ms = 0;
+  set_mock_now_ms(L, 6101);
+  send_tool_call(L, "call_after_permission_wait", "shell",
+                 "{\\\"command\\\":\\\"ls\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "[stopped: agent run exceeded 1s") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -4770,6 +4878,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/logs_empty_stream_completion", test_logs_empty_stream_completion, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/repeated_empty_terminal_response_fails_visibly",
+     test_repeated_empty_terminal_response_fails_visibly, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/stream_error_finishes_with_error",
      test_stream_error_finishes_with_error, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
@@ -4844,6 +4955,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_guard_stops_duration_before_tool_execution",
      test_tool_guard_stops_duration_before_tool_execution, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_pauses_during_permission_prompt",
+     test_tool_guard_pauses_during_permission_prompt, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_guard_stops_max_turns_before_continuation_request",
      test_tool_guard_stops_max_turns_before_continuation_request, NULL, NULL,

@@ -253,6 +253,13 @@ otherwise give the final answer. Do not repeat checks or add dependencies or an
 ad-hoc harness solely for this review.
 ]]
 
+local empty_terminal_instruction = [[
+Continue from the available tool results. If the task is complete, provide a
+concise final result and validation summary. Otherwise perform the next
+necessary action. Mention any blocker or remaining uncertainty, and never
+return an empty response.
+]]
+
 local function completion_review_enabled(opts, profile, run_depth)
     if run_depth > 0 then return false end
     if type(opts.completion_review) == "boolean" then return opts.completion_review end
@@ -281,7 +288,7 @@ local function now_ms()
 end
 
 local function make_guard(started_at)
-    return {
+    local guard = {
         started_at = started_at,
         max_duration_ms = agent_config_number("max_duration_sec", 900) * 1000,
         max_tool_calls = agent_config_number("max_tool_calls", 80),
@@ -295,11 +302,40 @@ local function make_guard(started_at)
         same_tool_count = 0,
         last_shell_signature = nil,
         same_shell_count = 0,
+        paused_at = nil,
+        paused_duration_ms = 0,
+        pause_depth = 0,
     }
+    guard.elapsed_ms = function()
+        local paused_duration_ms = guard.paused_duration_ms
+        if guard.paused_at then
+            paused_duration_ms = paused_duration_ms + math.max(0, now_ms() - guard.paused_at)
+        end
+        return math.max(0, now_ms() - guard.started_at - paused_duration_ms)
+    end
+    guard.pause = function()
+        guard.pause_depth = guard.pause_depth + 1
+        if guard.pause_depth == 1 then
+            guard.paused_at = now_ms()
+        end
+    end
+    guard.resume = function()
+        if guard.pause_depth <= 0 then return 0 end
+        guard.pause_depth = guard.pause_depth - 1
+        if guard.pause_depth > 0 then return 0 end
+        local resumed_at = now_ms()
+        local paused_ms = math.max(0, resumed_at - (guard.paused_at or resumed_at))
+        guard.paused_duration_ms = guard.paused_duration_ms + paused_ms
+        guard.paused_at = nil
+        return paused_ms
+    end
+    return guard
 end
 
 local function guard_duration_error(guard)
-    if guard.max_duration_ms > 0 and now_ms() - guard.started_at > guard.max_duration_ms then
+    local elapsed_ms = type(guard.elapsed_ms) == "function" and
+        guard.elapsed_ms() or (now_ms() - guard.started_at)
+    if guard.max_duration_ms > 0 and elapsed_ms > guard.max_duration_ms then
         return string.format("agent run exceeded %ds", math.floor(guard.max_duration_ms / 1000))
     end
     return nil
@@ -385,7 +421,7 @@ function M.run(opts, callbacks)
 
     local max_turns = tonumber(opts.max_turns) or agent_config_number("max_turns", 80)
     if max_turns <= 0 then max_turns = agent_config_number("max_turns", 80) end
-    local stream_timeout_sec = agent_config_number("stream_timeout_sec", 120)
+    local stream_timeout_sec = agent_config_number("stream_timeout_sec", 300)
     if stream_timeout_sec < 0 then stream_timeout_sec = 0 end
     local max_stream_retries = agent_config_nonnegative("max_stream_retries", 1)
     local turns = 0
@@ -396,6 +432,7 @@ function M.run(opts, callbacks)
         workspace_write_targets = {},
         successful_validation = false,
         completion_review_done = false,
+        empty_terminal_retries = 0,
     }
     local review_enabled = completion_review_enabled(opts, profile, run_depth)
     local permission_scope = opts.permission_scope or {allowed_tools = {}, full_control = false}
@@ -456,6 +493,13 @@ function M.run(opts, callbacks)
             end
         end
 
+        local function publish_status(text)
+            if opts.silent_tools == true or text == "" then return end
+            if agent and type(agent.append) == "function" then
+                agent.append(text, "agent")
+            end
+        end
+
         local function on_result(result, is_done)
             if not is_done then
                 if result.type == "text" and result.content then
@@ -506,6 +550,10 @@ function M.run(opts, callbacks)
             end
 
             if result.tool_calls and #result.tool_calls > 0 then
+                if defer_visible_text and #deferred_text_chunks > 0 then
+                    publish_text(table.concat(deferred_text_chunks))
+                    deferred_text_chunks = {}
+                end
                 if (result.text or "") ~= "" then
                     logging.runtime_log("agent", string.format(
                         "continuing mixed response text_bytes=%d tool_calls=%d",
@@ -529,14 +577,38 @@ function M.run(opts, callbacks)
                     stop_run = stop_run,
                 })
             else
-                if (result.text or "") == "" then
+                local final_text = result.text or table.concat(deferred_text_chunks)
+                if final_text == "" then
                     logging.runtime_log("agent", "stream completed with no text and no tool calls", "warn")
+                    if run_state.empty_terminal_retries < 1 then
+                        run_state.empty_terminal_retries = run_state.empty_terminal_retries + 1
+                        table.insert(current_msgs, {role = "user", content = empty_terminal_instruction})
+                        logging.runtime_log("agent", "empty terminal response; requesting finalization attempt=1/1", "warn")
+                        publish_status("\n⚙ Finalizing response\n\n")
+                        continue_agent_cycle(current_msgs, tools)
+                        return
+                    end
+                    local message = "Provider returned an empty terminal response twice"
+                    logging.runtime_log("agent", "empty terminal response; finalization failed", "error")
+                    publish_status("\n[error: " .. message .. "]\n")
+                    if callbacks.on_error then callbacks.on_error(message) end
+                    finished = true
+                    finish({
+                        ok = false,
+                        error = message,
+                        text = "",
+                        messages = current_msgs,
+                        turns = turns,
+                        provider = provider_name,
+                        model = active.model,
+                    })
+                    return
                 else
-                    logging.runtime_log("agent", "stream done without tool calls text=" .. logging.compact(result.text, 500))
+                    logging.runtime_log("agent", "stream done without tool calls text=" .. logging.compact(final_text, 500))
                 end
                 if review_enabled and completion_review_warranted(run_state) and not run_state.completion_review_done then
                     run_state.completion_review_done = true
-                    local draft = result.text or table.concat(deferred_text_chunks)
+                    local draft = final_text
                     run_state.completion_review_fallback = {
                         text = draft,
                         messages = current_msgs,
@@ -544,11 +616,12 @@ function M.run(opts, callbacks)
                     table.insert(current_msgs, {role = "assistant", content = draft})
                     table.insert(current_msgs, {role = "user", content = completion_review_instruction})
                     logging.runtime_log("agent", "completion_review started")
+                    publish_status("\n⚙ Completion review\n\n")
                     continue_agent_cycle(current_msgs, tools)
                     return
                 end
                 if defer_visible_text then
-                    publish_text(result.text or table.concat(deferred_text_chunks))
+                    publish_text(final_text)
                 end
                 hooks.run("after_agent_turn", {
                     runtime = M,
@@ -556,13 +629,13 @@ function M.run(opts, callbacks)
                     provider_name = provider_name,
                     messages = current_msgs,
                     tools = tools,
-                    text = result.text or "",
+                    text = final_text,
                     run = opts,
                 })
                 finished = true
                 finish({
                     ok = true,
-                    text = result.text or "",
+                    text = final_text,
                     messages = current_msgs,
                     turns = turns,
                     provider = provider_name,
