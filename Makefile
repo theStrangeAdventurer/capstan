@@ -37,6 +37,9 @@ test: $(TEST_TARGET)
 test-build: $(TARGET)
 	sh test/test_build_smoke.sh $(TARGET)
 
+test-openrouter-vision:
+	sh test/test_openrouter_vision.sh
+
 $(TEST_TARGET): $(TEST_SRCS)
 	mkdir -p build
 	$(CC) $(TEST_CFLAGS) $(TEST_SRCS) -o $(TEST_TARGET)

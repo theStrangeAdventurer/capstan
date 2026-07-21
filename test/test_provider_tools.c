@@ -11,7 +11,8 @@
 #include <unistd.h>
 
 static int stream_callback_ref = LUA_NOREF;
-static char captured_body[32768];
+#define CAPTURED_BODY_SIZE (2 * 1024 * 1024)
+static char captured_body[CAPTURED_BODY_SIZE];
 static char captured_get_url[512];
 static char captured_permit_tool[128];
 static char captured_permit_target[512];
@@ -3200,12 +3201,11 @@ static MunitResult test_file_read_image_becomes_multimodal_message(
   (void)data;
 
   char workdir[4096];
-  make_tmp_dir(workdir, sizeof(workdir), "provider-file-read-image");
-  char path[4096];
-  snprintf(path, sizeof(path), "%s/review.png", workdir);
-  const unsigned char png[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
-                               'a',  'b', 'c'};
-  write_file_bytes(path, png, sizeof(png));
+  munit_assert_not_null(getcwd(workdir, sizeof(workdir)));
+  const char *fixture = "test/fixtures/vision-shapes.png";
+  struct stat st;
+  munit_assert_int(stat(fixture, &st), ==, 0);
+  munit_assert_size((size_t)st.st_size, >, 1000);
 
   lua_State *L = new_provider_state();
   reset_captures(L);
@@ -3219,18 +3219,41 @@ static MunitResult test_file_read_image_becomes_multimodal_message(
 
   call_agent_entry(L);
   send_tool_call(L, "call_file_image", "file_read",
-                 "{\\\"path\\\":\\\"review.png\\\"}");
+                 "{\\\"path\\\":\\\"test/fixtures/vision-shapes.png\\\"}");
 
-  munit_assert_true(strstr(captured_body, "\"role\":\"tool\"") != NULL);
-  munit_assert_true(strstr(captured_body, "\"type\":\"image_url\"") != NULL);
-  munit_assert_true(strstr(captured_body,
-                           "data:image/png;base64,iVBORw0KGgphYmM=") != NULL);
-  munit_assert_true(strstr(captured_logs, "iVBORw0KGgphYmM=") == NULL);
+  lua_pushlstring(L, captured_body, strlen(captured_body));
+  lua_setglobal(L, "CAPTURED_REQUEST_BODY");
+  rc = luaL_dostring(
+      L,
+      "local json = require('vendor.rxi.json')\n"
+      "local request = json.decode(CAPTURED_REQUEST_BODY)\n"
+      "local tool_index\n"
+      "for i, message in ipairs(request.messages or {}) do\n"
+      "  if message.role == 'tool' and "
+      "message.tool_call_id == 'call_file_image' then\n"
+      "    tool_index = i\n"
+      "    break\n"
+      "  end\n"
+      "end\n"
+      "local vision = tool_index and request.messages[tool_index + 1]\n"
+      "local content = vision and vision.content\n"
+      "local text = type(content) == 'table' and content[1]\n"
+      "local image = type(content) == 'table' and content[2]\n"
+      "local image_url = image and image.image_url\n"
+      "VISION_REQUEST_OK = vision and vision.role == 'user' and\n"
+      "  text and text.type == 'text' and\n"
+      "  image and image.type == 'image_url' and\n"
+      "  image_url and image_url.detail == 'auto' and\n"
+      "  type(image_url.url) == 'string' and\n"
+      "  image_url.url:match('^data:image/png;base64,iVBORw0KGgo') ~= nil\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "VISION_REQUEST_OK");
+  munit_assert_true(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  munit_assert_true(strstr(captured_logs, "iVBORw0KGgo") == NULL);
 
   reset_captures(L);
   lua_close(L);
-  unlink(path);
-  rmdir(workdir);
   return MUNIT_OK;
 }
 

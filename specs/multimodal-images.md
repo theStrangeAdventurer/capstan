@@ -47,3 +47,22 @@ Provider-tool integration tests cover MCP and local-file image conversion,
 message ordering, default image detail, base64 omission from logs, binary-file
 safety, and preservation of the text-only path. Embedded-asset smoke testing
 verifies the updated runtime is present in the standalone binary.
+
+The local-file integration test uses `test/fixtures/vision-shapes.png`, a real
+PNG containing a blue square on the left and a red triangle on the right. It
+asserts that the canonical Chat Completions request keeps the textual tool
+result, then appends a user content array whose text block precedes a PNG
+`image_url` data URL with `detail = "auto"`.
+
+An opt-in live smoke test verifies the same fixture against OpenRouter's
+`/api/v1/chat/completions` endpoint and requires the selected vision model to
+identify both shapes:
+
+```sh
+OPENROUTER_API_KEY=... make test-openrouter-vision
+```
+
+The default live model is `minimax/minimax-m3`. Set
+`OPENROUTER_VISION_MODEL` to test another OpenRouter model with image input.
+The live target is deliberately excluded from `make test` because it requires
+network access, credentials, and incurs provider usage.
