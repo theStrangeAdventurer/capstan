@@ -318,8 +318,10 @@ static void print_help(void) {
   printf("  --max-turns N       Limit agent continuation rounds (default: 200)\n");
   printf("  --no-mcp           Do not start configured MCP servers for this run\n");
   printf("  --no-wiki          Do not load or initialize wiki context for this run\n");
+  printf("  --no-preserve-reasoning\n");
+  printf("                      Do not return prior reasoning with tool results\n");
   printf("  --full-control     Allow workspace-scoped tools for this run\n");
-  printf("  --benchmark        Alias for --no-mcp --full-control\n");
+  printf("  --benchmark        Isolated eval mode: --no-mcp --no-wiki --full-control\n");
   printf("  --json              Print structured JSON result\n");
 }
 
@@ -494,11 +496,13 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   setlocale(LC_ALL, "");
   http_set_headless(1);
   PluginsInitOptions plugin_options = {.disable_mcp = opts->no_mcp,
-                                       .disable_wiki = opts->no_wiki};
+                                       .disable_wiki = opts->no_wiki,
+                                       .isolated = opts->benchmark};
   plugins_init_with_options(&plugin_options);
   load_embedded_plugins();
   char global_plugins[512];
-  if (app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
+  if (!opts->benchmark &&
+      app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
     load_plugins_from(global_plugins);
 
   lua_getglobal(L, "capstan");
@@ -529,6 +533,10 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   if (opts->reasoning_effort) {
     lua_pushstring(L, opts->reasoning_effort);
     lua_setfield(L, -2, "reasoning_effort");
+  }
+  if (opts->no_preserve_reasoning) {
+    lua_pushboolean(L, 0);
+    lua_setfield(L, -2, "preserve_reasoning");
   }
   lua_pushinteger(L, opts->max_turns);
   lua_setfield(L, -2, "max_turns");

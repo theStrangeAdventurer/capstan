@@ -8,6 +8,8 @@ local redact = require("agent.redact")
 local M = {}
 
 local function config_table(name)
+    if _G.capstan and type(_G.capstan.runtime_options) == "table" and
+       _G.capstan.runtime_options.isolated then return nil end
     if not _G.capstan or type(_G.capstan.config) ~= "table" then return nil end
     local value = _G.capstan.config[name]
     return type(value) == "table" and value or nil
@@ -1142,6 +1144,7 @@ local function mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok
     if not tool_ok or permission_tool ~= "file_write" then return end
     if run_ctx and type(run_ctx.state) == "table" then
         run_ctx.state.workspace_mutated = true
+        run_ctx.state.successful_validation = false
         run_ctx.state.workspace_write_targets = run_ctx.state.workspace_write_targets or {}
         run_ctx.state.workspace_write_targets[tostring(target or "")] = true
     end
@@ -1192,11 +1195,21 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         })
     end
 
-    table.insert(current_msgs, {
+    local assistant_message = {
         role = "assistant",
         content = (assistant_text ~= "" and assistant_text or nil),
         tool_calls = openai_tool_calls
-    })
+    }
+    if run_ctx and type(run_ctx.assistant_reasoning_details) == "table" and
+       #run_ctx.assistant_reasoning_details > 0 then
+        assistant_message.reasoning_details = run_ctx.assistant_reasoning_details
+    elseif run_ctx and type(run_ctx.assistant_reasoning) == "string" and
+           run_ctx.assistant_reasoning ~= "" then
+        local field = run_ctx.assistant_reasoning_field == "reasoning_content" and
+            "reasoning_content" or "reasoning"
+        assistant_message[field] = run_ctx.assistant_reasoning
+    end
+    table.insert(current_msgs, assistant_message)
 
     local pending_image_blocks = {}
 

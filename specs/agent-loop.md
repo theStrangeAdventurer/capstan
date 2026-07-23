@@ -125,12 +125,12 @@ The runtime:
 6. Appends text chunks to the current agent placeholder.
 7. If the final stream result contains tool calls, executes tools and recurses
    with appended `{role="tool"}` messages.
-8. After a meaningful implementation phase in the `implement` profile, starts
-   one bounded completion-review continuation before exposing the final answer.
-   A phase is meaningful after writes to multiple targets or a successful
-   validation following a write. The review re-checks the original request,
-   source changes, and validation evidence; it may fix a concrete issue, but
-   cannot trigger another review.
+8. After an unvalidated multi-file implementation phase in the `implement`
+   profile, starts one bounded completion-review continuation before exposing
+   the final answer. Successful validation suppresses the redundant pass. The
+   suppression is cleared by any later workspace write. The review re-checks
+   the original request, source changes, and available evidence; it may fix a
+   concrete issue, but cannot trigger another review.
 
 Headless `capstan run` builds the same message shape and calls
 `capstan.agent.run` directly, with callbacks that buffer final stdout instead of
@@ -172,19 +172,32 @@ terminal response fails the run visibly instead of leaving an empty assistant
 placeholder. The retry policy is owned by the common agent loop and therefore
 applies consistently across providers and TUI/headless entry points.
 
-Before finishing, the agent reconciles each acceptance item with source
-evidence or one direct check, re-reads the original request, and reports any
-unverified or unresolved item. This is agent policy, not benchmark-mode behavior;
-`--benchmark` must not change model instructions beyond the normal run-mode
-permissions/runtime options.
+The base prompt favors an operational loop: read the relevant implementation
+and nearby tests, implement a visibly missing requirement before broad
+validation, run the narrowest meaningful check, and stop after it succeeds.
+Independent calls belong in one model response and use batch-capable tools when
+available. Benchmark mode keeps this embedded policy but excludes machine- and
+project-specific prompt additions so evals do not inherit unrelated skills,
+`AGENTS.md`, prompt overrides, or config/plugin hooks.
 
 Reasoning effort is an explicit run/config policy. `agent.reasoning_effort` and
 `capstan run --reasoning-effort` accept the common provider vocabulary
 `none|minimal|low|medium|high|xhigh|max`. This is a model/request control, not
-an agent workflow mode: the runtime sends `request.reasoning.effort` when set
-and does not add extra system prompt text for it. Provider configs can also
-define `reasoning`, `reasoning_effort`, `reasoning_max_tokens`, and
-`reasoning_exclude` for gateway-specific controls.
+an agent workflow mode. The runtime uses the provider's configured wire field:
+OpenRouter keeps `reasoning.effort`, while direct DeepSeek uses top-level
+`reasoning_effort`. It does not add extra system prompt text for the setting.
+Provider configs can also define `reasoning`, `reasoning_effort_field`,
+`reasoning_max_tokens`, and `reasoning_exclude` for gateway-specific controls.
+
+Reasoning continuity is enabled by default for tool continuations. The stream
+adapter preserves `reasoning_details` in provider order and attaches the whole
+sequence to the assistant tool-call message; plaintext `reasoning` is used only
+when structured details are absent. Direct DeepSeek chat requests adapt that
+fallback to `reasoning_content`; Responses-style providers own their native
+reasoning-item continuation in their provider adapter. These fields remain
+model-only history and are not rendered as assistant text.
+`agent.preserve_reasoning = false` or `--no-preserve-reasoning` disables the
+behavior.
 
 Profiles are workflow policy. `agent.profile`, `capstan run --profile`, and the
 TUI slash commands `/fast`, `/implement`, and `/plan` select named profiles.

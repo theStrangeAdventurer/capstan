@@ -11,7 +11,15 @@ static char selected_weak_provider[128];
 static char selected_profile[128];
 static char selected_profile_model[128];
 static char selected_profile_provider[128];
+static char selected_reasoning_effort[128];
 static char active_profile[128];
+
+static void capture_optional_effort(lua_State *L, int index) {
+  const char *effort = luaL_optstring(L, index, "");
+  strncpy(selected_reasoning_effort, effort,
+          sizeof(selected_reasoning_effort) - 1);
+  selected_reasoning_effort[sizeof(selected_reasoning_effort) - 1] = '\0';
+}
 
 static int l_ctx_replace(lua_State *L) {
   const char *ui_val = luaL_checkstring(L, 2);
@@ -56,6 +64,38 @@ static int l_models_list_all(lua_State *L) {
   lua_pushstring(L, "deepseek/deepseek-chat");
   lua_setfield(L, -2, "text");
   lua_rawseti(L, -2, 2);
+  lua_newtable(L);
+  lua_pushstring(L, "deepseek");
+  lua_setfield(L, -2, "provider");
+  lua_pushstring(L, "deepseek-v4-pro");
+  lua_setfield(L, -2, "id");
+  lua_pushstring(L, "deepseek/deepseek-v4-pro");
+  lua_setfield(L, -2, "text");
+  lua_newtable(L);
+  lua_pushstring(L, "minimal");
+  lua_rawseti(L, -2, 1);
+  lua_pushstring(L, "medium");
+  lua_rawseti(L, -2, 2);
+  lua_pushstring(L, "high");
+  lua_rawseti(L, -2, 3);
+  lua_setfield(L, -2, "reasoning_efforts");
+  lua_rawseti(L, -2, 3);
+  return 1;
+}
+
+static int l_models_reasoning_efforts(lua_State *L) {
+  const char *provider = luaL_checkstring(L, 1);
+  const char *model = luaL_checkstring(L, 2);
+  lua_newtable(L);
+  if (strcmp(provider, "deepseek") == 0 &&
+      strcmp(model, "deepseek-v4-pro") == 0) {
+    lua_pushstring(L, "minimal");
+    lua_rawseti(L, -2, 1);
+    lua_pushstring(L, "medium");
+    lua_rawseti(L, -2, 2);
+    lua_pushstring(L, "high");
+    lua_rawseti(L, -2, 3);
+  }
   return 1;
 }
 
@@ -63,6 +103,7 @@ static int l_models_set(lua_State *L) {
   const char *model = luaL_checkstring(L, 1);
   strncpy(selected_model, model, sizeof(selected_model) - 1);
   selected_model[sizeof(selected_model) - 1] = '\0';
+  capture_optional_effort(L, 2);
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -74,6 +115,7 @@ static int l_models_set_for(lua_State *L) {
   selected_provider[sizeof(selected_provider) - 1] = '\0';
   strncpy(selected_model, model, sizeof(selected_model) - 1);
   selected_model[sizeof(selected_model) - 1] = '\0';
+  capture_optional_effort(L, 3);
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -85,6 +127,7 @@ static int l_models_set_weak(lua_State *L) {
   selected_weak_provider[sizeof(selected_weak_provider) - 1] = '\0';
   strncpy(selected_weak_model, model, sizeof(selected_weak_model) - 1);
   selected_weak_model[sizeof(selected_weak_model) - 1] = '\0';
+  capture_optional_effort(L, 3);
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -100,6 +143,7 @@ static int l_models_set_profile(lua_State *L) {
   selected_profile_provider[sizeof(selected_profile_provider) - 1] = '\0';
   strncpy(selected_profile_model, model, sizeof(selected_profile_model) - 1);
   selected_profile_model[sizeof(selected_profile_model) - 1] = '\0';
+  capture_optional_effort(L, 4);
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -127,6 +171,7 @@ static lua_State *new_state(void) {
   selected_profile[0] = '\0';
   selected_profile_model[0] = '\0';
   selected_profile_provider[0] = '\0';
+  selected_reasoning_effort[0] = '\0';
   strcpy(active_profile, "plan");
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
@@ -137,6 +182,8 @@ static lua_State *new_state(void) {
   lua_setfield(L, -2, "list");
   lua_pushcfunction(L, l_models_list_all);
   lua_setfield(L, -2, "list_all");
+  lua_pushcfunction(L, l_models_reasoning_efforts);
+  lua_setfield(L, -2, "reasoning_efforts");
   lua_pushcfunction(L, l_models_set);
   lua_setfield(L, -2, "set");
   lua_pushcfunction(L, l_models_set_for);
@@ -178,7 +225,7 @@ static MunitResult test_autocomplete_lists_runtime_models(
   int rc = lua_pcall(L, 1, 1, 0);
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_true(lua_istable(L, -1));
-  munit_assert_int((int)lua_rawlen(L, -1), ==, 2);
+  munit_assert_int((int)lua_rawlen(L, -1), ==, 3);
   lua_rawgeti(L, -1, 2);
   lua_getfield(L, -1, "text");
   lua_getfield(L, -2, "value");
@@ -186,6 +233,46 @@ static MunitResult test_autocomplete_lists_runtime_models(
                             "plan  deepseek/deepseek-chat");
   munit_assert_string_equal(lua_tostring(L, -1),
                             "profile\tplan\tdeepseek\tdeepseek-chat");
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_autocomplete_requires_reasoning_effort_step(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_state();
+  load_models_plugin(L);
+
+  lua_getfield(L, -1, "autocomplete");
+  lua_getfield(L, -1, "fetch");
+  lua_newtable(L);
+  int rc = lua_pcall(L, 1, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_rawgeti(L, -1, 3);
+  lua_getfield(L, -1, "value");
+  const char *drill = lua_tostring(L, -1);
+  munit_assert_not_null(drill);
+  munit_assert_true(strstr(drill,
+                           "efforts\tprofile\tplan\tdeepseek\tdeepseek-v4-pro\t") ==
+                    drill);
+  munit_assert_char(drill[strlen(drill) - 1], ==, '/');
+
+  lua_getfield(L, -4, "fetch");
+  lua_newtable(L);
+  lua_pushstring(L, drill);
+  lua_rawseti(L, -2, 1);
+  rc = lua_pcall(L, 1, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int((int)lua_rawlen(L, -1), ==, 4);
+  lua_rawgeti(L, -1, 1);
+  lua_getfield(L, -1, "text");
+  lua_getfield(L, -2, "value");
+  munit_assert_string_equal(lua_tostring(L, -2), "Reasoning · Default");
+  munit_assert_true(strstr(lua_tostring(L, -1),
+                           "choice\tprofile\tplan\tdeepseek\tdeepseek-v4-pro\tdefault") !=
+                    NULL);
 
   lua_close(L);
   return MUNIT_OK;
@@ -299,6 +386,63 @@ static MunitResult test_handler_sets_provider_model(
   return MUNIT_OK;
 }
 
+static MunitResult test_handler_sets_reasoning_effort_choice(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_state();
+  load_models_plugin(L);
+
+  lua_getfield(L, -1, "handler");
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(
+      L, "choice\tprofile\tplan\tdeepseek\tdeepseek-v4-pro\tmedium");
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "args");
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_string_equal(selected_profile, "plan");
+  munit_assert_string_equal(selected_profile_provider, "deepseek");
+  munit_assert_string_equal(selected_profile_model, "deepseek-v4-pro");
+  munit_assert_string_equal(selected_reasoning_effort, "medium");
+  munit_assert_true(strstr(lua_tostring(L, -2), "reasoning: medium") != NULL);
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_handler_rejects_missing_required_reasoning_effort(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_state();
+  load_models_plugin(L);
+
+  lua_getfield(L, -1, "handler");
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "deepseek");
+  lua_rawseti(L, -2, 1);
+  lua_pushstring(L, "deepseek-v4-pro");
+  lua_rawseti(L, -2, 2);
+  lua_setfield(L, -2, "args");
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_string_equal(selected_model, "");
+  munit_assert_true(strstr(lua_tostring(L, -2),
+                           "Reasoning effort is required: default") != NULL);
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_handler_sets_weak_model(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -382,6 +526,9 @@ static MunitResult test_models_plugin_is_no_history_command(
 static MunitTest tests[] = {
     {"/autocomplete_lists_runtime_models", test_autocomplete_lists_runtime_models,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/autocomplete_requires_reasoning_effort_step",
+     test_autocomplete_requires_reasoning_effort_step, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/autocomplete_marks_weak_mode", test_autocomplete_marks_weak_mode, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/autocomplete_marks_profile_mode", test_autocomplete_marks_profile_mode,
@@ -391,6 +538,12 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/handler_sets_provider_model", test_handler_sets_provider_model, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/handler_sets_reasoning_effort_choice",
+     test_handler_sets_reasoning_effort_choice, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/handler_rejects_missing_required_reasoning_effort",
+     test_handler_rejects_missing_required_reasoning_effort, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/handler_sets_weak_model", test_handler_sets_weak_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/handler_sets_profile_model", test_handler_sets_profile_model, NULL, NULL,

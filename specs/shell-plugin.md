@@ -55,7 +55,10 @@ normal shell permissions.
 In workspace-scoped full-control runs, statically visible shell paths must stay
 inside the workspace. This includes redirection targets both before and after
 the command token, such as `</workspace/input command` and
-`command >/workspace/output`.
+`command >/workspace/output`. Static `cd` targets update the effective working
+directory used to validate later command segments, so paths such as `cmake ..`
+are resolved from the nested directory. Missing or dynamic `cd` targets fail
+closed because their resulting directory cannot be proven to stay in scope.
 
 The handler reports a successful tool result only when the process exits zero
 without timing out. Completion-review validation therefore ignores failed test,

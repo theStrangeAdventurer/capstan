@@ -104,10 +104,21 @@ function M.parse_sse_event(raw_event)
         logging.runtime_log("stream", "finish_reason=" .. tostring(finish_reason))
     end
     if delta.reasoning_content and delta.reasoning_content ~= "" then
-        return {type = "reasoning", content = delta.reasoning_content}
+        return {
+            type = "reasoning",
+            content = delta.reasoning_content,
+            reasoning_details = delta.reasoning_details,
+        }
     end
     if delta.reasoning and delta.reasoning ~= "" then
-        return {type = "reasoning", content = delta.reasoning}
+        return {
+            type = "reasoning",
+            content = delta.reasoning,
+            reasoning_details = delta.reasoning_details,
+        }
+    end
+    if type(delta.reasoning_details) == "table" then
+        return {type = "reasoning", content = "", reasoning_details = delta.reasoning_details}
     end
     if delta.tool_calls then
         return {type = "tool_calls", tool_calls = delta.tool_calls}
@@ -126,6 +137,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local buf = ""
     local accumulated_text = ""
     local accumulated_reasoning = ""
+    local accumulated_reasoning_details = {}
     local reasoning_active = false
     local leaked_think_pending = ""
     local leaked_think_active = false
@@ -206,8 +218,12 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local function process_chunk(chunk)
         if chunk.type == "reasoning" then
             reasoning_chunks = reasoning_chunks + 1
-            accumulated_reasoning = accumulated_reasoning .. chunk.content
-            reasoning_token_estimate = reasoning_token_estimate + tokens.estimate_text_tokens(chunk.content)
+            local reasoning_content = chunk.content or ""
+            accumulated_reasoning = accumulated_reasoning .. reasoning_content
+            reasoning_token_estimate = reasoning_token_estimate + tokens.estimate_text_tokens(reasoning_content)
+            for _, detail in ipairs(chunk.reasoning_details or {}) do
+                table.insert(accumulated_reasoning_details, detail)
+            end
             if not provider.suppress_agent_state and provider.context_limit and provider.context_limit > 0 then
                 local completion_estimate = text_token_estimate + reasoning_token_estimate
                 agent.set_usage(
@@ -404,7 +420,10 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             end
             on_result({
                 text = accumulated_text,
-                tool_calls = #final_calls > 0 and final_calls or nil
+                tool_calls = #final_calls > 0 and final_calls or nil,
+                reasoning = accumulated_reasoning ~= "" and accumulated_reasoning or nil,
+                reasoning_details = #accumulated_reasoning_details > 0 and
+                    accumulated_reasoning_details or nil,
             }, true)
             return
         end

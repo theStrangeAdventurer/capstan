@@ -46,7 +46,8 @@ static int l_http_get(lua_State *L) {
                    "{\"data\":["
                    "{\"id\":\"model/z\",\"name\":\"Model Z\","
                    "\"context_length\":12345},"
-                   "{\"id\":\"model/a\",\"name\":\"Model A\"}"
+                   "{\"id\":\"model/a\",\"name\":\"Model A\","
+                   "\"supported_parameters\":[\"reasoning\"]}"
                    "]}");
     return 2;
   }
@@ -890,6 +891,8 @@ static void call_agent_run_with_profile_and_model(lua_State *L,
 
 static void send_tool_call(lua_State *L, const char *call_id,
                            const char *name, const char *arguments);
+static void send_reasoning_delta(lua_State *L, const char *reasoning,
+                                 int include_details);
 static void send_text_delta(lua_State *L, const char *text);
 static void send_text_done(lua_State *L, const char *text);
 
@@ -942,8 +945,115 @@ static MunitResult test_request_applies_reasoning_effort(
 
   call_agent_run_with_reasoning_effort(L, "low");
 
-  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"low\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"low\"") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\"") == NULL);
   munit_assert_true(strstr(captured_body, "Reasoning effort: low") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_openrouter_keeps_nested_reasoning_effort(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  call_agent_run_with_reasoning_effort(L, "low");
+
+  munit_assert_true(strstr(captured_body,
+                           "\"reasoning\":{\"effort\":\"low\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning_effort\"") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_reasoning_details_preserved_for_tool_continuation(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  send_reasoning_delta(L, "inspect files", 1);
+  send_tool_call(L, "call_reasoning_details", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  munit_assert_true(strstr(captured_body, "\"reasoning_details\":[{") != NULL);
+  munit_assert_true(strstr(captured_body, "\"text\":\"inspect files\"") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning\":\"inspect files\"") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_reasoning_plaintext_preserved_and_config_can_disable(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  call_agent_entry(L);
+  send_reasoning_delta(L, "continue thought", 0);
+  send_tool_call(L, "call_reasoning_text", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+  munit_assert_true(strstr(captured_body,
+                           "\"reasoning\":\"continue thought\"") != NULL);
+  reset_captures(L);
+  lua_close(L);
+
+  L = new_provider_state();
+  reset_captures(L);
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  call_agent_entry(L);
+  send_reasoning_delta(L, "deepseek thought", 0);
+  send_tool_call(L, "call_deepseek_reasoning", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+  munit_assert_true(strstr(captured_body,
+                           "\"reasoning_content\":\"deepseek thought\"") != NULL);
+  munit_assert_true(strstr(captured_body,
+                           "\"reasoning\":\"deepseek thought\"") == NULL);
+  reset_captures(L);
+  lua_close(L);
+
+  L = new_provider_state();
+  reset_captures(L);
+  rc = luaL_dostring(
+      L,
+      "capstan.config = capstan.config or {} "
+      "capstan.config.agent = {preserve_reasoning = false}");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  call_agent_entry(L);
+  send_reasoning_delta(L, "disabled thought", 1);
+  send_tool_call(L, "call_reasoning_disabled", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+  munit_assert_true(strstr(captured_body, "disabled thought") == NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning_details\":[{") == NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -972,7 +1082,7 @@ static MunitResult test_config_applies_reasoning_effort(
 
   call_agent_entry(L);
 
-  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"minimal\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"minimal\"") != NULL);
   munit_assert_true(strstr(captured_body, "Reasoning effort: minimal") == NULL);
 
   reset_captures(L);
@@ -1027,7 +1137,7 @@ static MunitResult test_default_profile_is_implement(
   call_agent_entry(L);
 
   munit_assert_true(strstr(captured_body, "Active Profile: Implement") != NULL);
-  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"medium\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"medium\"") != NULL);
   munit_assert_true(strstr(captured_logs, "[agent] profile=implement") != NULL);
 
   reset_captures(L);
@@ -1211,7 +1321,7 @@ static MunitResult test_plan_profile_filters_tools_and_prompt(
   call_agent_run_with_profile(L, "plan");
 
   munit_assert_true(strstr(captured_body, "Active Profile: Plan") != NULL);
-  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"high\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"high\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"name\":\"fetch\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"name\":\"file_read\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"name\":\"shell\"") == NULL);
@@ -1276,7 +1386,7 @@ static MunitResult test_fast_profile_applies_reasoning_and_prompt(
   call_agent_run_with_profile(L, "fast");
 
   munit_assert_true(strstr(captured_body, "Active Profile: Fast") != NULL);
-  munit_assert_true(strstr(captured_body, "\"reasoning\":{\"effort\":\"low\"}") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"low\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"name\":\"shell\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"name\":\"subagents\"") != NULL);
   munit_assert_true(strstr(captured_logs, "[agent] profile=fast") != NULL);
@@ -2066,8 +2176,9 @@ static MunitResult test_provider_models_set_for_persists_active_provider(
   lua_getfield(L, -1, "models");
   lua_getfield(L, -1, "set_for");
   lua_pushstring(L, "deepseek");
-  lua_pushstring(L, "deepseek-chat");
-  rc = lua_pcall(L, 2, 2, 0);
+  lua_pushstring(L, "deepseek-v4-pro");
+  lua_pushstring(L, "high");
+  rc = lua_pcall(L, 3, 2, 0);
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_true(lua_toboolean(L, -2));
 
@@ -2079,7 +2190,14 @@ static MunitResult test_provider_models_set_for_persists_active_provider(
   char contents[768];
   read_file(temp_state_path, contents, sizeof(contents));
   munit_assert_true(strstr(contents, "provider = \"deepseek\"") != NULL);
-  munit_assert_true(strstr(contents, "[\"deepseek\"] = \"deepseek-chat\"") != NULL);
+  munit_assert_true(strstr(contents,
+                           "[\"deepseek\"] = \"deepseek-v4-pro\"") != NULL);
+  munit_assert_true(strstr(contents,
+                           "[\"deepseek\"] = \"high\"") != NULL);
+
+  call_agent_entry(L);
+  munit_assert_true(strstr(captured_body, "\"model\":\"deepseek-v4-pro\"") != NULL);
+  munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"high\"") != NULL);
 
   unlink(temp_state_path);
   reset_captures(L);
@@ -2103,13 +2221,19 @@ static MunitResult test_provider_models_set_persists_state_file(
   lua_getfield(L, -1, "models");
   lua_getfield(L, -1, "set");
   lua_pushstring(L, "persisted/model");
-  rc = lua_pcall(L, 1, 2, 0);
+  lua_pushstring(L, "default");
+  rc = lua_pcall(L, 2, 2, 0);
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_true(lua_toboolean(L, -2));
 
   char contents[512];
   read_file(temp_state_path, contents, sizeof(contents));
   munit_assert_true(strstr(contents, "[\"openrouter\"] = \"persisted/model\"") != NULL);
+  munit_assert_true(strstr(contents,
+                           "[\"openrouter\"] = \"default\"") != NULL);
+
+  call_agent_entry(L);
+  munit_assert_true(strstr(captured_body, "\"reasoning\":") == NULL);
 
   unlink(temp_state_path);
   reset_captures(L);
@@ -2191,7 +2315,8 @@ static MunitResult test_provider_models_set_weak_persists_state_file(
   lua_getfield(L, -1, "set_weak");
   lua_pushstring(L, "openrouter");
   lua_pushstring(L, "persisted/weak");
-  rc = lua_pcall(L, 2, 2, 0);
+  lua_pushstring(L, "low");
+  rc = lua_pcall(L, 3, 2, 0);
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_true(lua_toboolean(L, -2));
 
@@ -2200,6 +2325,7 @@ static MunitResult test_provider_models_set_weak_persists_state_file(
   munit_assert_true(strstr(contents, "weak_model = {") != NULL);
   munit_assert_true(strstr(contents, "provider = \"openrouter\"") != NULL);
   munit_assert_true(strstr(contents, "model = \"persisted/weak\"") != NULL);
+  munit_assert_true(strstr(contents, "reasoning_effort = \"low\"") != NULL);
 
   unlink(temp_state_path);
   reset_captures(L);
@@ -2225,7 +2351,8 @@ static MunitResult test_provider_models_set_profile_persists_state_file(
   lua_pushstring(L, "plan");
   lua_pushstring(L, "openrouter");
   lua_pushstring(L, "persisted/plan");
-  rc = lua_pcall(L, 3, 2, 0);
+  lua_pushstring(L, "medium");
+  rc = lua_pcall(L, 4, 2, 0);
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_true(lua_toboolean(L, -2));
 
@@ -2235,6 +2362,8 @@ static MunitResult test_provider_models_set_profile_persists_state_file(
   munit_assert_true(strstr(contents, "[\"plan\"] = {") != NULL);
   munit_assert_true(strstr(contents, "provider = \"openrouter\"") != NULL);
   munit_assert_true(strstr(contents, "model = \"persisted/plan\"") != NULL);
+  munit_assert_true(strstr(contents,
+                           "reasoning_effort = \"medium\"") != NULL);
 
   unlink(temp_state_path);
   reset_captures(L);
@@ -2316,6 +2445,12 @@ static MunitResult test_provider_models_list_uses_api_response(
   lua_getfield(L, -2, "text");
   munit_assert_string_equal(lua_tostring(L, -2), "model/a");
   munit_assert_string_equal(lua_tostring(L, -1), "model/a  Model A");
+  lua_pop(L, 2);
+  lua_getfield(L, -1, "reasoning_efforts");
+  munit_assert_true(lua_istable(L, -1));
+  munit_assert_int((int)lua_rawlen(L, -1), ==, 3);
+  lua_rawgeti(L, -1, 2);
+  munit_assert_string_equal(lua_tostring(L, -1), "medium");
 
   reset_captures(L);
   lua_close(L);
@@ -3140,17 +3275,106 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
                            "Running the focused validation") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "Validating") != NULL);
   send_text_done(L, "draft answer");
+  munit_assert_true(strstr(captured_body, "bounded completion review") == NULL);
+  munit_assert_true(strstr(captured_agent_appends, "draft answer") != NULL);
+  munit_assert_true(strstr(captured_logs, "completion_review started") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  unlink(path);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
+static MunitResult test_unvalidated_multi_file_write_starts_completion_review(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "provider-multi-edit");
+  char first_path[4096];
+  char second_path[4096];
+  snprintf(first_path, sizeof(first_path), "%s/one.txt", workdir);
+  snprintf(second_path, sizeof(second_path), "%s/two.txt", workdir);
+  write_file(first_path, "old-one\n");
+  write_file(second_path, "old-two\n");
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, workdir);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  load_real_file_edit_plugin(L);
+
+  call_agent_entry(L);
+  send_tool_call(L, "write-one", "file_edit",
+                 "{\\\"path\\\":\\\"one.txt\\\",\\\"old_text\\\":\\\"old-one\\\",\\\"new_text\\\":\\\"new-one\\\"}");
+  send_tool_call(L, "write-two", "file_edit",
+                 "{\\\"path\\\":\\\"two.txt\\\",\\\"old_text\\\":\\\"old-two\\\",\\\"new_text\\\":\\\"new-two\\\"}");
+  send_text_done(L, "draft answer");
+
   munit_assert_true(strstr(captured_body, "bounded completion review") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "draft answer") == NULL);
   munit_assert_true(strstr(captured_logs, "completion_review started") != NULL);
 
   send_text_done(L, "reviewed answer");
   munit_assert_true(strstr(captured_agent_appends, "reviewed answer") != NULL);
-  munit_assert_true(strstr(captured_agent_appends, "draft answer") == NULL);
 
   reset_captures(L);
   lua_close(L);
-  unlink(path);
+  unlink(first_path);
+  unlink(second_path);
+  rmdir(workdir);
+  return MUNIT_OK;
+}
+
+static MunitResult test_write_after_validation_restores_completion_review(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char workdir[4096];
+  make_tmp_dir(workdir, sizeof(workdir), "provider-post-validation-edit");
+  char first_path[4096];
+  char second_path[4096];
+  snprintf(first_path, sizeof(first_path), "%s/one.txt", workdir);
+  snprintf(second_path, sizeof(second_path), "%s/two.txt", workdir);
+  write_file(first_path, "old-one\n");
+  write_file(second_path, "old-two\n");
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_capstan_workdir(L, workdir);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  load_real_file_edit_plugin(L);
+
+  call_agent_entry(L);
+  send_tool_call(L, "write-one", "file_edit",
+                 "{\\\"path\\\":\\\"one.txt\\\",\\\"old_text\\\":\\\"old-one\\\",\\\"new_text\\\":\\\"new-one\\\"}");
+  send_tool_call(L, "validate", "shell",
+                 "{\\\"command\\\":\\\"npm test\\\"}");
+  send_tool_call(L, "write-two", "file_edit",
+                 "{\\\"path\\\":\\\"two.txt\\\",\\\"old_text\\\":\\\"old-two\\\",\\\"new_text\\\":\\\"new-two\\\"}");
+  send_text_done(L, "draft answer");
+
+  munit_assert_true(strstr(captured_body, "bounded completion review") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "draft answer") == NULL);
+
+  send_text_done(L, "reviewed answer");
+  munit_assert_true(strstr(captured_agent_appends, "reviewed answer") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  unlink(first_path);
+  unlink(second_path);
   rmdir(workdir);
   return MUNIT_OK;
 }
@@ -3496,6 +3720,29 @@ static void send_tool_call(lua_State *L, const char *call_id,
   if (rc != LUA_OK) {
     munit_errorf("stream done callback failed: %s", lua_tostring(L, -1));
   }
+}
+
+static void send_reasoning_delta(lua_State *L, const char *reasoning,
+                                 int include_details) {
+  char event[4096];
+  if (include_details) {
+    snprintf(event, sizeof(event),
+             "data: {\"choices\":[{\"delta\":{\"reasoning\":\"%s\","
+             "\"reasoning_details\":[{\"type\":\"reasoning.text\","
+             "\"text\":\"%s\",\"id\":\"reasoning-1\","
+             "\"format\":\"unknown\",\"index\":0}]}}]}\n\n",
+             reasoning, reasoning);
+  } else {
+    snprintf(event, sizeof(event),
+             "data: {\"choices\":[{\"delta\":{\"reasoning\":\"%s\"}}]}\n\n",
+             reasoning);
+  }
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L, event);
+  lua_pushboolean(L, 0);
+  int rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
 }
 
 static void send_text_delta(lua_State *L, const char *text) {
@@ -4195,6 +4442,48 @@ static MunitResult test_workdir_only_full_control_denies_outside_shell_path(
   return MUNIT_OK;
 }
 
+static MunitResult test_workdir_only_tracks_nested_shell_cd(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_workdir(L, "/repo/project");
+  set_capstan_workspace_root(L, "/repo/project");
+
+  int rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "local available = tools.collect()\n"
+      "local scope = {allowed_tools = {}, full_control = true, workdir_only = true}\n"
+      "nested_cd_result = ''\n"
+      "nested_escape_result = ''\n"
+      "missing_cd_result = ''\n"
+      "tools.handle_tool_calls({}, available, {{id='nested-cd', name='shell', arguments='{\"command\":\"mkdir -p build && cd build && cmake ..\"}'}}, '', function(msgs) nested_cd_result = msgs[#msgs].content end, {tools = available, silent_tools = true, permission_scope = scope})\n"
+      "tools.handle_tool_calls({}, available, {{id='nested-escape', name='shell', arguments='{\"command\":\"cd build && cat ../../outside\"}'}}, '', function(msgs) nested_escape_result = msgs[#msgs].content end, {tools = available, silent_tools = true, permission_scope = scope})\n"
+      "tools.handle_tool_calls({}, available, {{id='missing-cd', name='shell', arguments='{\"command\":\"cd && cat project.txt\"}'}}, '', function(msgs) missing_cd_result = msgs[#msgs].content end, {tools = available, silent_tools = true, permission_scope = scope})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int(permit_check_calls, ==, 0);
+  munit_assert_int(permit_prompt_calls, ==, 0);
+
+  lua_getglobal(L, "nested_cd_result");
+  munit_assert_true(strstr(lua_tostring(L, -1), "shell llm:") != NULL);
+  lua_pop(L, 1);
+  lua_getglobal(L, "nested_escape_result");
+  munit_assert_true(strstr(lua_tostring(L, -1),
+                           "shell path escapes workspace: /repo/outside") != NULL);
+  lua_pop(L, 1);
+  lua_getglobal(L, "missing_cd_result");
+  munit_assert_true(strstr(lua_tostring(L, -1),
+                           "cd requires a static workspace path") != NULL);
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_workdir_only_checks_leading_redirection_paths(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -4590,6 +4879,39 @@ static MunitResult test_config_before_request_hook_mutates_body(
   return MUNIT_OK;
 }
 
+static MunitResult test_isolated_runtime_ignores_config_agent_and_hooks(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int rc = luaL_dostring(
+      L,
+      "capstan.config = capstan.config or {} "
+      "capstan.config.agent = {reasoning_effort = 'high'} "
+      "capstan.config.hooks = {before_request = function(ctx) "
+      "ctx.request.metadata = {tag = 'must-not-run'} return ctx end} "
+      "capstan.runtime_options = {isolated = true, disable_mcp = true, "
+      "disable_wiki = true}");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  call_agent_entry(L);
+
+  munit_assert_true(strstr(captured_body, "must-not-run") == NULL);
+  munit_assert_true(strstr(captured_body,
+                           "\"reasoning_effort\":\"medium\"") != NULL);
+  munit_assert_true(strstr(captured_body,
+                           "\"reasoning_effort\":\"high\"") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_plugin_before_tools_hook_filters_tool_list(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -4766,6 +5088,15 @@ static MunitTest tests[] = {
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/request_applies_reasoning_effort", test_request_applies_reasoning_effort,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/openrouter_keeps_nested_reasoning_effort",
+     test_openrouter_keeps_nested_reasoning_effort, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/reasoning_details_preserved_for_tool_continuation",
+     test_reasoning_details_preserved_for_tool_continuation, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/reasoning_plaintext_preserved_and_config_can_disable",
+     test_reasoning_plaintext_preserved_and_config_can_disable, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/config_applies_reasoning_effort", test_config_applies_reasoning_effort,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/agent_reasoning_effort_accessor", test_agent_reasoning_effort_accessor,
@@ -4934,6 +5265,12 @@ static MunitTest tests[] = {
     {"/streamed_file_edit_tool_edits_file",
      test_streamed_file_edit_tool_edits_file, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/unvalidated_multi_file_write_starts_completion_review",
+     test_unvalidated_multi_file_write_starts_completion_review, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/write_after_validation_restores_completion_review",
+     test_write_after_validation_restores_completion_review, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_read_tool_uses_tool_args_path",
      test_file_read_tool_uses_tool_args_path, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -5015,6 +5352,9 @@ static MunitTest tests[] = {
     {"/workdir_only_full_control_denies_outside_shell_path",
      test_workdir_only_full_control_denies_outside_shell_path, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/workdir_only_tracks_nested_shell_cd",
+     test_workdir_only_tracks_nested_shell_cd, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/workdir_only_checks_leading_redirection_paths",
      test_workdir_only_checks_leading_redirection_paths, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -5047,6 +5387,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/config_before_request_hook_mutates_body",
      test_config_before_request_hook_mutates_body, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/isolated_runtime_ignores_config_agent_and_hooks",
+     test_isolated_runtime_ignores_config_agent_and_hooks, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/plugin_before_tools_hook_filters_tool_list",
      test_plugin_before_tools_hook_filters_tool_list, NULL, NULL,

@@ -56,6 +56,7 @@ Plugin *plugin_registry_at(int index);
 typedef struct {
   int disable_mcp;
   int disable_wiki;
+  int isolated;
 } PluginsInitOptions;
 
 void plugins_init(void);

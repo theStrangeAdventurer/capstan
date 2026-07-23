@@ -250,13 +250,18 @@ function M.wiki_relative_path(path)
     return full:sub(#root:gsub("/+$", "") + 2)
 end
 
-local function shell_path_candidate(token)
+local function shell_token_value(token)
     token = tostring(token or "")
     token = token:gsub("^[%(%{]+", ""):gsub("[%)%},;]+$", "")
     token = token:gsub("^%d*[<>]+", "")
     token = token:gsub("^[\"']", ""):gsub("[\"']$", "")
     local assigned = token:match("^[%w_]+=(.+)$")
     if assigned then token = assigned end
+    return token
+end
+
+local function shell_path_candidate(token)
+    token = shell_token_value(token)
     if token == "/dev/null" then return nil end
     if token:find("$HOME", 1, true) or token:find("${HOME}", 1, true) or
         token:find("$(", 1, true) or token:find("`", 1, true) then
@@ -276,13 +281,26 @@ function M.shell_command_within_workspace(command)
     end
     local root = M.normalize_path(M.configured_workspace_root())
     if root ~= "/" then root = root:gsub("/+$", "") end
-    local workdir = M.configured_workdir()
+    local workdir = M.normalize_path(M.configured_workdir())
+    local current_dir = workdir
     local command_position = true
+    local command_name = nil
+    local cd_target_seen = false
+    local function finish_command()
+        if command_name == "cd" and not cd_target_seen then
+            return false, "cd requires a static workspace path"
+        end
+        command_position = true
+        command_name = nil
+        cd_target_seen = false
+        return true
+    end
     for raw in command:gmatch("%S+") do
         local token = raw
         local leading = token:match("^([|;&]+)")
         if leading then
-            command_position = true
+            local ok, err = finish_command()
+            if not ok then return false, err end
             token = token:sub(#leading + 1)
         end
         if token ~= "" then
@@ -291,17 +309,47 @@ function M.shell_command_within_workspace(command)
             if candidate == false then
                 return false, "dynamic home or command substitution is outside workspace policy"
             end
-            if candidate and (redirection_target or not command_position) then
-                local resolved = M.normalize_path(candidate, workdir)
+            if redirection_target and candidate then
+                local resolved = M.normalize_path(candidate, current_dir)
+                if resolved ~= "/" then resolved = resolved:gsub("/+$", "") end
+                if not M.path_is_within(resolved, root) then
+                    return false, "shell path escapes workspace: " .. resolved
+                end
+            elseif command_position then
+                command_name = shell_token_value(token)
+                command_position = false
+            elseif command_name == "cd" and not cd_target_seen then
+                local target = shell_token_value(token)
+                if target == "--" or target:match("^%-[eLP]+$") then
+                    -- cd options precede the statically visible target.
+                elseif target == "-" or target == "" or target:find("$", 1, true) or
+                    target:find("`", 1, true) or target:find("*", 1, true) or
+                    target:find("?", 1, true) then
+                    return false, "dynamic cd target is outside workspace policy"
+                else
+                    local resolved = M.normalize_path(target, current_dir)
+                    if resolved ~= "/" then resolved = resolved:gsub("/+$", "") end
+                    if not M.path_is_within(resolved, root) then
+                        return false, "shell path escapes workspace: " .. resolved
+                    end
+                    current_dir = resolved
+                    cd_target_seen = true
+                end
+            elseif candidate then
+                local resolved = M.normalize_path(candidate, current_dir)
                 if resolved ~= "/" then resolved = resolved:gsub("/+$", "") end
                 if not M.path_is_within(resolved, root) then
                     return false, "shell path escapes workspace: " .. resolved
                 end
             end
-            command_position = false
         end
-        if raw:match("[|;&]+$") then command_position = true end
+        if raw:match("[|;&]+$") then
+            local ok, err = finish_command()
+            if not ok then return false, err end
+        end
     end
+    local ok, err = finish_command()
+    if not ok then return false, err end
     return true
 end
 
