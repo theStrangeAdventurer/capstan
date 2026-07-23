@@ -27,12 +27,19 @@ function M.build()
                 api_key = os.getenv("DEEPSEEK_API_KEY"),
                 endpoint = "https://api.deepseek.com/v1/chat/completions",
                 model = "deepseek-chat",
+                reasoning_effort_field = "reasoning_effort",
+                reasoning_history_field = "reasoning_content",
+                reasoning_efforts = {
+                    ["deepseek-v4-flash"] = {"minimal", "low", "medium", "high", "max"},
+                    ["deepseek-v4-pro"] = {"minimal", "low", "medium", "high", "max"},
+                },
                 context_limit = env_context_limit("DEEPSEEK_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT"),
             },
             openrouter = {
                 api_key = os.getenv("OPENROUTER_API_KEY"),
                 endpoint = "https://openrouter.ai/api/v1/chat/completions",
                 model = env_openrouter_model or "minimax/minimax-m3",
+                default_reasoning_efforts = {"low", "medium", "high"},
                 context_limit = env_context_limit("OPENROUTER_CONTEXT_LIMIT", "AI_CONTEXT_LIMIT"),
             },
         },
@@ -64,6 +71,8 @@ function M.build()
                 runtime.profile_models[normalized] = {
                     provider = value.provider,
                     model = value.model,
+                    reasoning_effort = type(value.reasoning_effort) == "string" and
+                        value.reasoning_effort or nil,
                 }
             end
         end
@@ -82,6 +91,9 @@ function M.build()
         if saved_model then
             provider.model = saved_model
         end
+        if not runtime.env_model_overrides[name] then
+            provider.selected_reasoning_effort = state.model_reasoning_effort(name)
+        end
     end
 
     local configured_weak = config.weak_model
@@ -91,6 +103,8 @@ function M.build()
         runtime.weak_model = {
             provider = configured_weak.provider,
             model = configured_weak.model,
+            reasoning_effort = type(configured_weak.reasoning_effort) == "string" and
+                configured_weak.reasoning_effort or nil,
         }
     end
 

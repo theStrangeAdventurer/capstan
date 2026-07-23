@@ -15,7 +15,10 @@ with built-in defaults.
 return {
   provider = "openrouter",
   providers = {
-    openrouter = { model = "minimax/minimax-m3" },
+    openrouter = {
+      model = "minimax/minimax-m3",
+      default_reasoning_efforts = { "low", "medium", "high" },
+    },
   },
   permissions = {
     { tool = "file_read", pattern = "/repo *", allow = true },
@@ -101,11 +104,11 @@ return {
   leave an agent run waiting indefinitely or duplicate a visible answer. Their
   defaults are 300 seconds and one retry.
 - `agent.completion_review` controls one final, bounded review pass after a
-  meaningful implementation phase. It defaults to enabled for the `implement`
-  profile and disabled for `fast` and `plan`. A phase is meaningful when it
-  changes more than one file, or when a successful project validation follows a
-  workspace write. The review shares the same conversation and tools, runs at
-  most once per root agent run, and is not run for subagents.
+  multi-file implementation phase without successful validation. It defaults
+  to enabled for the `implement` profile and disabled for `fast` and `plan`.
+  Successful validation suppresses the redundant pass until another workspace
+  write invalidates that evidence. The review shares the same conversation and
+  tools, runs at most once per root agent run, and is not run for subagents.
 - `agent.profile` sets the default workflow profile. Accepted values are
   `fast`, `implement`, and `plan`. Profiles may append system instructions,
   set a default reasoning effort, and restrict model tools. Slash commands
@@ -121,10 +124,27 @@ return {
   `max`. Run options such as `capstan run --reasoning-effort low` override this
   for one process. Explicit reasoning effort takes precedence over profile
   defaults.
+- `agent.preserve_reasoning` defaults to `true`. When enabled, Capstan returns
+  provider-native `reasoning_details` with assistant tool calls, falling back
+  to plaintext `reasoning` only when structured details are absent. Set it to
+  `false`, or use `capstan run --no-preserve-reasoning`, to omit that context.
+  Disabling it is diagnostic: providers that require signed, encrypted, or
+  plaintext reasoning continuity may reject the next request or repeat work.
 - Provider entries may set `reasoning = { ... }`, `reasoning_effort`,
-  `reasoning_max_tokens`, or `reasoning_exclude`; these are copied into the
-  OpenAI-compatible request body as a `reasoning` object. The run-level effort
-  override takes precedence over provider defaults.
+  `reasoning_max_tokens`, or `reasoning_exclude`; these normally form the
+  OpenAI-compatible `reasoning` request object. `reasoning_effort_field` moves
+  the effort to a provider-specific top-level field such as direct DeepSeek's
+  `reasoning_effort`. The run-level effort override takes precedence over
+  provider defaults.
+- `reasoning_efforts[model_id]` declares the ordered effort choices for a known
+  model. For model APIs that expose `supported_parameters`, the provider's
+  `default_reasoning_efforts` supplies the ordered choices after reasoning
+  support is detected. These fields drive the mandatory second `/models`
+  selection step; they are capability metadata, not prompt instructions.
+- A direct chat-completions provider that requires plaintext history under
+  `reasoning_content` may set `reasoning_history_field = "reasoning_content"`;
+  other providers default to `reasoning` when no structured details are
+  returned.
 - `subagents.max_concurrent`, `max_tasks`, `max_turns`, `max_turns_cap`, and
   `max_result_bytes`
   limit delegated internal runs. `max_turns` is the default per-task turn budget

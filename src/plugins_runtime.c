@@ -187,7 +187,8 @@ static void load_system_prompt(const PluginsInitOptions *options) {
   char *override = NULL;
 
   char path[512];
-  if (app_config_path(path, sizeof(path), "system_prompt.txt") == 0) {
+  int isolated = options && options->isolated;
+  if (!isolated && app_config_path(path, sizeof(path), "system_prompt.txt") == 0) {
     override = plugins_read_file(path, &size);
     if (override)
       data = override;
@@ -199,21 +200,21 @@ static void load_system_prompt(const PluginsInitOptions *options) {
   BuiltinSkill builtin_skills[2];
   int disable_wiki = options && options->disable_wiki;
   cleanup_materialized_builtin_skills();
-  size_t builtin_skill_count =
+  size_t builtin_skill_count = isolated ? 0 :
       collect_builtin_skills(builtin_skills,
                              sizeof(builtin_skills) / sizeof(builtin_skills[0]),
                              disable_wiki);
   int n = snprintf(project_skills, sizeof(project_skills), "%s/.agents/skills",
                    app_workspace_root());
-  const char *project_skills_dir =
+  const char *project_skills_dir = !isolated &&
       n > 0 && (size_t)n < sizeof(project_skills) ? project_skills : NULL;
-  const char *user_skills_dir =
+  const char *user_skills_dir = !isolated &&
       app_config_path(user_skills, sizeof(user_skills), "skills") == 0
           ? user_skills
           : NULL;
   const char *home = getenv("HOME");
   const char *common_skills_dir = NULL;
-  if (home) {
+  if (!isolated && home) {
     int common_n = snprintf(common_skills, sizeof(common_skills),
                             "%s/.agents/skills", home);
     if (common_n > 0 && (size_t)common_n < sizeof(common_skills))
@@ -264,7 +265,7 @@ static void load_system_prompt(const PluginsInitOptions *options) {
   int agents_n =
       snprintf(agents_path, sizeof(agents_path), "%s/AGENTS.md",
                app_workspace_root());
-  if (agents_n > 0 && (size_t)agents_n < sizeof(agents_path))
+  if (!isolated && agents_n > 0 && (size_t)agents_n < sizeof(agents_path))
     agents_content = plugins_read_file(agents_path, &agents_content_size);
 
   char *agents_prompt = NULL;
@@ -576,6 +577,8 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_setfield(L, -2, "disable_mcp");
   lua_pushboolean(L, options && options->disable_wiki);
   lua_setfield(L, -2, "disable_wiki");
+  lua_pushboolean(L, options && options->isolated);
+  lua_setfield(L, -2, "isolated");
   lua_setfield(L, -2, "runtime_options");
 
   lua_setglobal(L, "capstan");

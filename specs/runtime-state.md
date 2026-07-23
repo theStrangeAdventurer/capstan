@@ -29,7 +29,8 @@ The runtime exposes these helpers to Lua:
 rewrite `config.lua`.
 
 Currently persisted runtime state includes the active provider, selected
-provider models, optional profile models, and an optional weak model:
+provider models, optional profile models, an optional weak model, and the
+reasoning-effort choice made with each model selection:
 
 ```lua
 return {
@@ -37,14 +38,19 @@ return {
   models = {
     openrouter = "openai/gpt-4.1",
   },
+  model_reasoning_efforts = {
+    openrouter = "default",
+  },
   weak_model = {
     provider = "openrouter",
     model = "minimax/minimax-m3",
+    reasoning_effort = "low",
   },
   profile_models = {
     plan = {
       provider = "openrouter",
       model = "anthropic/claude-sonnet-4",
+      reasoning_effort = "medium",
     },
   },
 }
@@ -63,6 +69,11 @@ Model precedence is:
 2. persisted runtime state;
 3. `config.lua`;
 4. built-in provider default.
+
+For a reasoning-capable model, a persisted effort selected alongside that
+model takes precedence over config and profile defaults. The literal
+`"default"` intentionally suppresses those overrides so the provider/model
+chooses its own default.
 
 Weak model precedence is:
 

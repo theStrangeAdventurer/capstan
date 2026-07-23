@@ -23,6 +23,7 @@ typedef struct {
   int json;
   int no_mcp;
   int no_wiki;
+  int no_preserve_reasoning;
   int full_control;
   int benchmark;
   const char *error;

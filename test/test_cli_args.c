@@ -74,6 +74,7 @@ static MunitResult test_benchmark_sets_presets(const MunitParameter params[],
   munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
   munit_assert_int(opts.benchmark, ==, 1);
   munit_assert_int(opts.no_mcp, ==, 1);
+  munit_assert_int(opts.no_wiki, ==, 1);
   munit_assert_int(opts.full_control, ==, 1);
   return MUNIT_OK;
 }
@@ -83,11 +84,13 @@ static MunitResult test_explicit_headless_controls(const MunitParameter params[]
   (void)params;
   (void)data;
   char *argv[] = {"capstan", "run",      "--prompt", "hello",
-                  "--no-mcp", "--no-wiki", "--full-control"};
-  CliOptions opts = cli_parse(7, argv);
+                  "--no-mcp", "--no-wiki", "--no-preserve-reasoning",
+                  "--full-control"};
+  CliOptions opts = cli_parse(8, argv);
   munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
   munit_assert_int(opts.no_mcp, ==, 1);
   munit_assert_int(opts.no_wiki, ==, 1);
+  munit_assert_int(opts.no_preserve_reasoning, ==, 1);
   munit_assert_int(opts.full_control, ==, 1);
   munit_assert_int(opts.benchmark, ==, 0);
   return MUNIT_OK;

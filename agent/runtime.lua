@@ -11,12 +11,14 @@ local tools_runtime = require("agent.tools")
 local workspace = require("agent.workspace")
 
 local M = provider_config.build()
+local runtime_options = (_G.capstan and _G.capstan.runtime_options) or {}
 
 M.parse_sse_event = stream.parse_sse_event
-hooks.install_config((_G.capstan and _G.capstan.config) or {})
-hooks.install_existing_plugins(_G.plugins)
+if not runtime_options.isolated then
+    hooks.install_config((_G.capstan and _G.capstan.config) or {})
+    hooks.install_existing_plugins(_G.plugins)
+end
 
-local runtime_options = (_G.capstan and _G.capstan.runtime_options) or {}
 -- MCP initialization is lazy. Startup must not block the TUI/input path;
 -- agent.mcp initializes before tools are collected for the first request.
 if runtime_options.disable_mcp then
@@ -31,16 +33,16 @@ function M.list_all_models()
     return models.list_all(M)
 end
 
-function M.set_model(provider_name, model)
-    return models.set(M, provider_name or M.provider, model)
+function M.set_model(provider_name, model, reasoning_effort)
+    return models.set(M, provider_name or M.provider, model, reasoning_effort)
 end
 
-function M.set_weak_model(provider_name, model)
-    return models.set_weak(M, provider_name, model)
+function M.set_weak_model(provider_name, model, reasoning_effort)
+    return models.set_weak(M, provider_name, model, reasoning_effort)
 end
 
-function M.set_profile_model(profile_name, provider_name, model)
-    return models.set_profile(M, profile_name, provider_name, model)
+function M.set_profile_model(profile_name, provider_name, model, reasoning_effort)
+    return models.set_profile(M, profile_name, provider_name, model, reasoning_effort)
 end
 
 function M.get_weak_model()
@@ -56,6 +58,7 @@ end
 models.install_runtime_api(M)
 
 local function config_table(name)
+    if runtime_options.isolated then return nil end
     if not _G.capstan or type(_G.capstan.config) ~= "table" then return nil end
     local value = _G.capstan.config[name]
     return type(value) == "table" and value or nil
@@ -128,7 +131,12 @@ local function configured_reasoning_effort()
 end
 
 local function effective_reasoning_effort(provider, opts, profile)
-    return normalize_reasoning_effort(opts and opts.reasoning_effort) or
+    local explicit = normalize_reasoning_effort(opts and opts.reasoning_effort)
+    if explicit then return explicit end
+    if opts and opts.reasoning_effort_default then return nil end
+    local selected = provider and provider.selected_reasoning_effort
+    if selected == "default" then return nil end
+    return normalize_reasoning_effort(selected) or
         configured_reasoning_effort() or
         normalize_reasoning_effort(profile and profile.reasoning_effort) or
         normalize_reasoning_effort(provider and provider.reasoning_effort)
@@ -155,6 +163,20 @@ local function request_reasoning(provider, effort)
     return next(reasoning) and reasoning or nil
 end
 
+local function apply_request_reasoning(request, provider, effort)
+    local reasoning = request_reasoning(provider, effort)
+    if not reasoning then return end
+
+    local effort_field = provider and provider.reasoning_effort_field
+    if type(effort_field) == "string" and effort_field ~= "" and reasoning.effort then
+        request[effort_field] = reasoning.effort
+        reasoning.effort = nil
+    end
+    if next(reasoning) then
+        request.reasoning = reasoning
+    end
+end
+
 -- Resolves and clones provider config for a request (profile model, model override,
 -- suppress flags). Runtime profile model choices do not mutate the global
 -- provider selection.
@@ -176,6 +198,7 @@ local function prepare_provider(opts, profile)
         local copy = {}
         for k, v in pairs(active) do copy[k] = v end
         copy.model = profile_model.model
+        copy.selected_reasoning_effort = profile_model.reasoning_effort
         copy.context_limit = 0
         active = copy
     end
@@ -183,6 +206,7 @@ local function prepare_provider(opts, profile)
         local copy = {}
         for k, v in pairs(active) do copy[k] = v end
         copy.model = opts.model
+        copy.selected_reasoning_effort = nil
         copy.context_limit = 0
         active = copy
     end
@@ -268,9 +292,18 @@ local function completion_review_enabled(opts, profile, run_depth)
     return profile and profile.completion_review == true
 end
 
+local function preserve_reasoning_enabled(opts)
+    if opts and opts.preserve_reasoning ~= nil then
+        return opts.preserve_reasoning ~= false
+    end
+    local configured = agent_config_boolean("preserve_reasoning")
+    if configured ~= nil then return configured end
+    return true
+end
+
 local function completion_review_warranted(state)
     if not state or not state.workspace_mutated then return false end
-    if state.successful_validation then return true end
+    if state.successful_validation then return false end
     local targets = state.workspace_write_targets or {}
     local count = 0
     for _ in pairs(targets) do
@@ -435,6 +468,7 @@ function M.run(opts, callbacks)
         empty_terminal_retries = 0,
     }
     local review_enabled = completion_review_enabled(opts, profile, run_depth)
+    local preserve_reasoning = preserve_reasoning_enabled(opts)
     local permission_scope = opts.permission_scope or {allowed_tools = {}, full_control = false}
     if type(permission_scope.allowed_tools) ~= "table" then
         permission_scope.allowed_tools = {}
@@ -550,6 +584,14 @@ function M.run(opts, callbacks)
             end
 
             if result.tool_calls and #result.tool_calls > 0 then
+                if not preserve_reasoning and
+                   (result.reasoning or result.reasoning_details) then
+                    logging.runtime_log(
+                        "agent",
+                        "reasoning continuity disabled for tool continuation; provider may reject or restart reasoning",
+                        "warn"
+                    )
+                end
                 if defer_visible_text and #deferred_text_chunks > 0 then
                     publish_text(table.concat(deferred_text_chunks))
                     deferred_text_chunks = {}
@@ -574,6 +616,9 @@ function M.run(opts, callbacks)
                     callbacks = callbacks,
                     guard = guard,
                     state = run_state,
+                    assistant_reasoning = preserve_reasoning and result.reasoning or nil,
+                    assistant_reasoning_details = preserve_reasoning and result.reasoning_details or nil,
+                    assistant_reasoning_field = active.reasoning_history_field,
                     stop_run = stop_run,
                 })
             else
@@ -662,10 +707,7 @@ function M.run(opts, callbacks)
             stream = true,
             stream_options = {include_usage = true}
         }
-        local reasoning = request_reasoning(active, effort)
-        if reasoning then
-            request.reasoning = reasoning
-        end
+        apply_request_reasoning(request, active, effort)
 
         local headers = {
             ["Content-Type"] = "application/json",
@@ -800,6 +842,11 @@ local function compact_run_options(messages)
     if weak then
         opts.provider = weak.provider
         opts.model = weak.model
+        if weak.reasoning_effort == "default" then
+            opts.reasoning_effort_default = true
+        else
+            opts.reasoning_effort = weak.reasoning_effort
+        end
     end
     return opts, weak
 end

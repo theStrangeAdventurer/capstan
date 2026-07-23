@@ -41,8 +41,16 @@ echo "Summarize this repo" | capstan run --json
   profile content to the system prompt, publish wiki runtime fields, or expose
   wiki model tools. This is intended for isolated eval runs that must not
   depend on owner wiki state.
+- `--no-preserve-reasoning` disables returning provider reasoning blocks with
+  assistant tool calls for this run. Preservation is enabled by default so a
+  reasoning model can continue an interrupted tool-use turn. This diagnostic
+  override can degrade continuity or trigger a provider protocol error.
 - `--full-control` grants workspace-scoped tool permissions for this run.
-- `--benchmark` is shorthand for `--no-mcp --full-control`.
+- `--benchmark` enables `--no-mcp --no-wiki --full-control` and an isolated
+  runtime. It uses the embedded base prompt and built-in tools, but excludes a
+  local system-prompt override, project/user/common skills, `AGENTS.md`, global
+  config plugins, and config/plugin hooks so eval tasks cannot inherit unrelated
+  owner or repository policy.
 - Plain output writes the final assistant text to stdout.
 - `--json` writes `{ ok, text, error }` to stdout.
 

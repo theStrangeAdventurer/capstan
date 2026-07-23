@@ -5,6 +5,17 @@ local state = require("agent.state")
 local M = {}
 
 local models_cache_by_url = {}
+local valid_reasoning_efforts = {
+    none = true, minimal = true, low = true, medium = true, high = true, xhigh = true, max = true,
+}
+
+local function normalize_selected_reasoning_effort(value)
+    if value == nil or value == "" then return nil end
+    if type(value) ~= "string" then return nil, "Invalid reasoning effort" end
+    value = value:lower()
+    if value == "default" or valid_reasoning_efforts[value] then return value end
+    return nil, "Unknown reasoning effort: " .. value
+end
 
 function M.model_context_length(item)
     local top = item.top_provider and item.top_provider.context_length or 0
@@ -103,7 +114,37 @@ local function model_label(item)
     return id
 end
 
-local function normalize_models_response(decoded)
+local function copy_reasoning_efforts(value)
+    if type(value) ~= "table" then return nil end
+    local result = {}
+    for _, effort in ipairs(value) do
+        effort = type(effort) == "string" and effort:lower() or nil
+        if effort and valid_reasoning_efforts[effort] then table.insert(result, effort) end
+    end
+    return #result > 0 and result or nil
+end
+
+local function item_supports_reasoning_effort(item)
+    for _, parameter in ipairs(item.supported_parameters or {}) do
+        if parameter == "reasoning" or parameter == "reasoning_effort" then return true end
+    end
+    return false
+end
+
+local function model_reasoning_efforts(provider, item)
+    local configured = provider and provider.reasoning_efforts
+    local id = tostring(item.id or item.canonical_slug or "")
+    if type(configured) == "table" then
+        local per_model = copy_reasoning_efforts(configured[id])
+        if per_model then return per_model end
+    end
+    if item_supports_reasoning_effort(item) then
+        return copy_reasoning_efforts(provider and provider.default_reasoning_efforts)
+    end
+    return nil
+end
+
+local function normalize_models_response(decoded, provider)
     local data = decoded and decoded.data
     if type(data) ~= "table" then return {} end
 
@@ -114,6 +155,7 @@ local function normalize_models_response(decoded)
                 id = tostring(item.id),
                 text = model_label(item),
                 context_limit = M.model_context_length(item),
+                reasoning_efforts = model_reasoning_efforts(provider, item),
             })
         end
     end
@@ -129,7 +171,7 @@ function M.list(runtime, provider_name)
     end
 
     if type(provider.models) == "table" then
-        return normalize_models_response({data = provider.models}), nil
+        return normalize_models_response({data = provider.models}, provider), nil
     end
 
     local url = provider_models_url(provider)
@@ -146,7 +188,7 @@ function M.list(runtime, provider_name)
     if not ok then
         return nil, "Models response is not valid JSON"
     end
-    return normalize_models_response(decoded), nil
+    return normalize_models_response(decoded, provider), nil
 end
 
 function M.list_all(runtime)
@@ -166,6 +208,7 @@ function M.list_all(runtime)
                     id = model.id,
                     text = string.format("%s/%s", provider_name, model.text or model.id),
                     context_limit = model.context_limit,
+                    reasoning_efforts = model.reasoning_efforts,
                 })
             end
         end
@@ -173,7 +216,16 @@ function M.list_all(runtime)
     return items
 end
 
-function M.set(runtime, provider_name, model)
+function M.reasoning_efforts(runtime, provider_name, model)
+    local list, err = M.list(runtime, provider_name)
+    if not list then return nil, err end
+    for _, item in ipairs(list) do
+        if item.id == model then return item.reasoning_efforts or {}, nil end
+    end
+    return {}, nil
+end
+
+function M.set(runtime, provider_name, model, reasoning_effort)
     provider_name = provider_name or runtime.provider
     if type(model) ~= "string" or model == "" then
         return false, "Missing model"
@@ -182,17 +234,20 @@ function M.set(runtime, provider_name, model)
     if not provider then
         return false, "Unknown provider: " .. tostring(provider_name)
     end
+    local normalized_effort, effort_err = normalize_selected_reasoning_effort(reasoning_effort)
+    if effort_err then return false, effort_err end
     provider.model = model
     provider.context_limit = 0
+    provider.selected_reasoning_effort = normalized_effort
     runtime.provider = provider_name
-    state.set_model(provider_name, model)
+    state.set_model(provider_name, model, normalized_effort)
     if agent and agent.set_info then
         agent.set_info(provider_name, provider.model)
     end
     return true, nil
 end
 
-function M.set_weak(runtime, provider_name, model)
+function M.set_weak(runtime, provider_name, model, reasoning_effort)
     if type(model) ~= "string" or model == "" then
         return false, "Missing model"
     end
@@ -202,8 +257,14 @@ function M.set_weak(runtime, provider_name, model)
     if not runtime.providers[provider_name] then
         return false, "Unknown provider: " .. tostring(provider_name)
     end
-    runtime.weak_model = { provider = provider_name, model = model }
-    return state.set_weak_model(provider_name, model)
+    local normalized_effort, effort_err = normalize_selected_reasoning_effort(reasoning_effort)
+    if effort_err then return false, effort_err end
+    runtime.weak_model = {
+        provider = provider_name,
+        model = model,
+        reasoning_effort = normalized_effort,
+    }
+    return state.set_weak_model(provider_name, model, normalized_effort)
 end
 
 function M.weak(runtime)
@@ -211,7 +272,11 @@ function M.weak(runtime)
     if type(weak) == "table" and
        type(weak.provider) == "string" and weak.provider ~= "" and
        type(weak.model) == "string" and weak.model ~= "" then
-        return { provider = weak.provider, model = weak.model }
+        return {
+            provider = weak.provider,
+            model = weak.model,
+            reasoning_effort = weak.reasoning_effort,
+        }
     end
     return nil
 end
@@ -224,12 +289,16 @@ function M.profile(runtime, profile_name)
     if type(value) == "table" and
        type(value.provider) == "string" and value.provider ~= "" and
        type(value.model) == "string" and value.model ~= "" then
-        return { provider = value.provider, model = value.model }
+        return {
+            provider = value.provider,
+            model = value.model,
+            reasoning_effort = value.reasoning_effort,
+        }
     end
     return nil
 end
 
-function M.set_profile(runtime, profile_name, provider_name, model)
+function M.set_profile(runtime, profile_name, provider_name, model, reasoning_effort)
     local normalized = profiles.normalize(profile_name)
     if not normalized then
         return false, "Unknown profile: " .. tostring(profile_name)
@@ -243,11 +312,17 @@ function M.set_profile(runtime, profile_name, provider_name, model)
     if not runtime.providers[provider_name] then
         return false, "Unknown provider: " .. tostring(provider_name)
     end
+    local normalized_effort, effort_err = normalize_selected_reasoning_effort(reasoning_effort)
+    if effort_err then return false, effort_err end
     if type(runtime.profile_models) ~= "table" then
         runtime.profile_models = {}
     end
-    runtime.profile_models[normalized] = { provider = provider_name, model = model }
-    return state.set_profile_model(normalized, provider_name, model)
+    runtime.profile_models[normalized] = {
+        provider = provider_name,
+        model = model,
+        reasoning_effort = normalized_effort,
+    }
+    return state.set_profile_model(normalized, provider_name, model, normalized_effort)
 end
 
 function M.install_runtime_api(runtime)
@@ -264,23 +339,26 @@ function M.install_runtime_api(runtime)
         list_all = function()
             return M.list_all(runtime)
         end,
-        set = function(model)
-            return M.set(runtime, runtime.provider, model)
+        reasoning_efforts = function(provider_name, model)
+            return M.reasoning_efforts(runtime, provider_name, model)
         end,
-        set_for = function(provider_name, model)
-            return M.set(runtime, provider_name, model)
+        set = function(model, reasoning_effort)
+            return M.set(runtime, runtime.provider, model, reasoning_effort)
+        end,
+        set_for = function(provider_name, model, reasoning_effort)
+            return M.set(runtime, provider_name, model, reasoning_effort)
         end,
         weak = function()
             return M.weak(runtime)
         end,
-        set_weak = function(provider_name, model)
-            return M.set_weak(runtime, provider_name, model)
+        set_weak = function(provider_name, model, reasoning_effort)
+            return M.set_weak(runtime, provider_name, model, reasoning_effort)
         end,
         profile = function(profile_name)
             return M.profile(runtime, profile_name)
         end,
-        set_profile = function(profile_name, provider_name, model)
-            return M.set_profile(runtime, profile_name, provider_name, model)
+        set_profile = function(profile_name, provider_name, model, reasoning_effort)
+            return M.set_profile(runtime, profile_name, provider_name, model, reasoning_effort)
         end,
     }
 end
