@@ -86,8 +86,9 @@ Headless one-shot mode:
 ## License
 
 Capstan is licensed under the Apache License 2.0. See [LICENSE](LICENSE) and
-[NOTICE](NOTICE). Third-party code under `vendor/` remains subject to its
-respective license terms.
+[NOTICE](NOTICE). Licenses for bundled third-party components are collected in
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES). Binary release archives include all
+three files alongside the executable.
 
 ## Config
 

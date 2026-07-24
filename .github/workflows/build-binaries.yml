@@ -52,16 +52,17 @@ jobs:
 
       - name: Stage artifact
         run: |
-          mkdir -p dist
-          cp build/capstan "dist/${{ matrix.binary }}"
-          chmod +x "dist/${{ matrix.binary }}"
-          file "dist/${{ matrix.binary }}"
+          sh tools/package_release.sh \
+            build/capstan \
+            "dist/${{ matrix.binary }}.tar.gz" \
+            "${{ matrix.binary }}"
+          tar -tzf "dist/${{ matrix.binary }}.tar.gz"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.binary }}
-          path: dist/${{ matrix.binary }}
+          path: dist/${{ matrix.binary }}.tar.gz
           if-no-files-found: error
 
   release:
@@ -80,7 +81,7 @@ jobs:
       - name: Show release files
         run: |
           ls -lh dist
-          file dist/capstan-*
+          file dist/capstan-*.tar.gz
 
       - name: Upload to GitHub Release
         env:
