@@ -36,6 +36,7 @@ test: $(TEST_TARGET)
 
 test-build: $(TARGET)
 	sh test/test_build_smoke.sh $(TARGET)
+	sh test/test_release_package.sh $(TARGET)
 
 test-openrouter-vision:
 	sh test/test_openrouter_vision.sh
