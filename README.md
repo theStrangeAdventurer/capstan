@@ -83,6 +83,12 @@ Headless one-shot mode:
 ./build/capstan run --prompt-file task.md --json
 ```
 
+## License
+
+Capstan is licensed under the Apache License 2.0. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE). Third-party code under `vendor/` remains subject to its
+respective license terms.
+
 ## Config
 
 Capstan loads:
