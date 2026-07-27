@@ -30,7 +30,9 @@ Each job:
 
 On tag pushes matching `v*`, a follow-up release job downloads the three
 artifacts and uploads them as assets on the matching GitHub Release. If the
-release does not exist yet, the job creates it.
+release does not exist yet, the job creates it with generated release notes.
+The release job also publishes `SHA256SUMS` covering all three archives and
+verifies the checksums before upload.
 
 `libcurl` remains the only dynamic runtime dependency. ncurses and Lua are built
 from vendored sources and linked as static archives. Their license notices,
