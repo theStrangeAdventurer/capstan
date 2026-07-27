@@ -2469,6 +2469,8 @@ static MunitResult test_provider_models_list_all_includes_static_config_models(
       "endpoint = 'https://llm.example/v1/chat/completions',"
       "model = 'static/model-a',"
       "models = {{id = 'static/model-a', context_limit = 1234}}"
+      "}, unavailable_provider = {"
+      "model = 'configured/fallback'"
       "}}}\n");
   munit_assert_int(config_rc, ==, LUA_OK);
 
@@ -2482,7 +2484,8 @@ static MunitResult test_provider_models_list_all_includes_static_config_models(
   rc = lua_pcall(L, 0, 1, 0);
   munit_assert_int(rc, ==, LUA_OK);
 
-  int found = 0;
+  int found_static = 0;
+  int found_fallback = 0;
   for (int i = 1; i <= (int)lua_rawlen(L, -1); i++) {
     lua_rawgeti(L, -1, i);
     lua_getfield(L, -1, "provider");
@@ -2491,10 +2494,14 @@ static MunitResult test_provider_models_list_all_includes_static_config_models(
     const char *id = lua_tostring(L, -1);
     if (provider && id && strcmp(provider, "static_provider") == 0 &&
         strcmp(id, "static/model-a") == 0)
-      found = 1;
+      found_static = 1;
+    if (provider && id && strcmp(provider, "unavailable_provider") == 0 &&
+        strcmp(id, "configured/fallback") == 0)
+      found_fallback = 1;
     lua_pop(L, 3);
   }
-  munit_assert_true(found);
+  munit_assert_true(found_static);
+  munit_assert_true(found_fallback);
 
   reset_captures(L);
   lua_close(L);

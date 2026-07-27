@@ -5,8 +5,10 @@
 `/models<Tab>` opens a fuzzy-search popup listing models returned by every
 configured provider's models API.
 
-- Popup entries include the provider name and model label. They come from
-  provider API responses, not from a static local list.
+- Popup entries include the provider name and model label. Full catalogs come
+  from provider API responses or an explicit provider `models` list. If neither
+  source is available, the provider's configured `model` is still shown so
+  every configured provider remains selectable.
 - When the selected model advertises reasoning-effort support, selection opens
   a mandatory second popup. Its first item is `Default`, followed by the
   efforts supported by that model (for example `Minimal`, `Low`, `Medium`,

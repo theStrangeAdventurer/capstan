@@ -200,17 +200,29 @@ function M.list_all(runtime)
     table.sort(provider_names)
 
     for _, provider_name in ipairs(provider_names) do
-        local list = M.list(runtime, provider_name)
-        if list then
-            for _, model in ipairs(list) do
-                table.insert(items, {
-                    provider = provider_name,
-                    id = model.id,
-                    text = string.format("%s/%s", provider_name, model.text or model.id),
-                    context_limit = model.context_limit,
-                    reasoning_efforts = model.reasoning_efforts,
-                })
-            end
+        local provider = runtime.providers[provider_name]
+        local list = M.list(runtime, provider_name) or {}
+        local seen = {}
+        for _, model in ipairs(list) do
+            seen[model.id] = true
+            table.insert(items, {
+                provider = provider_name,
+                id = model.id,
+                text = string.format("%s/%s", provider_name, model.text or model.id),
+                context_limit = model.context_limit,
+                reasoning_efforts = model.reasoning_efforts,
+            })
+        end
+
+        local configured_model = provider and provider.model
+        if type(configured_model) == "string" and configured_model ~= "" and not seen[configured_model] then
+            table.insert(items, {
+                provider = provider_name,
+                id = configured_model,
+                text = string.format("%s/%s", provider_name, configured_model),
+                context_limit = provider.context_limit or 0,
+                reasoning_efforts = model_reasoning_efforts(provider, {id = configured_model}),
+            })
         end
     end
     return items
