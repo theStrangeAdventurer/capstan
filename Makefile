@@ -22,6 +22,8 @@ SRCS = $(wildcard src/*.c) $(EMBEDDED_SRCS)
 TARGET = build/capstan
 TEST_TARGET = build/test_runner
 
+.PHONY: all clean test test-build test-http-lua test-openrouter-vision
+
 all: $(TARGET)
 
 $(TARGET): $(SRCS)
@@ -37,6 +39,7 @@ test: $(TEST_TARGET)
 test-build: $(TARGET)
 	sh test/test_build_smoke.sh $(TARGET)
 	sh test/test_release_package.sh $(TARGET)
+	sh test/test_installer.sh $(TARGET)
 
 test-openrouter-vision:
 	sh test/test_openrouter_vision.sh

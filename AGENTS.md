@@ -281,6 +281,7 @@ Feature specs:
 - [Hooks](specs/hooks.md)
 - [Info command](specs/info-command.md)
 - [Input history](specs/input-history.md)
+- [Installer](specs/installer.md)
 - [Editor command](specs/editor-command.md)
 - [Popups](specs/popups.md)
 - [Plugins](specs/plugins.md)

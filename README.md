@@ -15,7 +15,44 @@ optimized for a different shape:
 - explicit permissions for model-initiated tools;
 - opt-in self-improvement through durable user plugins and hooks.
 
-## Build
+## Install
+
+Prebuilt binaries are available for Apple Silicon macOS, x86-64 Linux, and
+ARM64 Linux. The installer detects the current platform, downloads the latest
+release, verifies its SHA-256 checksum, and installs `capstan` into
+`~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/theStrangeAdventurer/capstan/main/install.sh | sh
+```
+
+If `~/.local/bin` is not already on `PATH`:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+To install somewhere else:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/theStrangeAdventurer/capstan/main/install.sh |
+  CAPSTAN_INSTALL_DIR="$HOME/bin" sh
+```
+
+To install a specific release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/theStrangeAdventurer/capstan/main/install.sh |
+  CAPSTAN_VERSION=v0.1.0 sh
+```
+
+For a manual installation, download the archive for your platform from
+[GitHub Releases](https://github.com/theStrangeAdventurer/capstan/releases),
+verify it against `SHA256SUMS`, extract it, and move `capstan` to a directory on
+your `PATH`. Each archive also contains `LICENSE`, `NOTICE`, and
+`THIRD_PARTY_NOTICES`.
+
+## Build From Source
 
 ```sh
 ./build.sh
