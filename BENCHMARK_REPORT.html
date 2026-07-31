@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Capstan vs OpenCode benchmark</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2e;--line:#273452;--text:#e8edf7;--muted:#9aa8c1;--cap:#5ee6a8;--open:#78a9ff;--warn:#ffcc66}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#172342 0,transparent 38%),var(--bg);color:var(--text);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,sans-serif}.wrap{max-width:1180px;margin:auto;padding:56px 24px 80px}h1{font-size:clamp(34px,6vw,68px);letter-spacing:-.05em;line-height:1;margin:0 0 18px}.lead{max-width:760px;color:var(--muted);font-size:18px}.eyebrow{color:var(--cap);font-weight:700;letter-spacing:.12em;text-transform:uppercase}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:34px 0}.card,.panel{background:linear-gradient(145deg,rgba(25,36,62,.95),rgba(15,23,42,.95));border:1px solid var(--line);border-radius:16px;padding:22px}.card b{display:block;font-size:30px;color:var(--cap)}.card span{color:var(--muted)}h2{margin:50px 0 16px;font-size:27px}h3{margin:0 0 8px}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{padding:12px 13px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.cap{color:var(--cap);font-weight:700}.open{color:var(--open)}.bad{color:var(--warn);font-weight:700}.bars{display:grid;gap:22px}.metric{display:grid;grid-template-columns:170px 1fr 100px;gap:14px;align-items:center}.track{height:18px;background:#26334f;border-radius:99px;overflow:hidden}.bar{height:100%;border-radius:99px}.bar.capstan{background:var(--cap)}.bar.opencode{background:var(--open)}.note{color:var(--muted);font-size:13px}.pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:4px 10px;margin:3px;color:var(--muted)}code{color:#c8d5ee}.footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted)}@media(max-width:800px){.grid{grid-template-columns:1fr 1fr}.metric{grid-template-columns:110px 1fr 70px}.scroll{overflow:auto}table{min-width:900px}}@media(max-width:480px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main class="wrap">
+<div class="eyebrow">Aider Polyglot mini-v2 · 31 July 2026</div>
+<h1>Capstan is small.<br>Its benchmark result isn't.</h1>
+<p class="lead">A reproducible comparison against OpenCode using the same direct DeepSeek V4 Pro model, 12 canonical tasks, three runs per agent, and upstream tests as the only quality judge.</p>
+
+<section class="grid">
+  <div class="card"><b>36/36</b><span>Capstan canonical passes</span></div>
+  <div class="card"><b>100%</b><span>pass rate; OpenCode 97.2%</span></div>
+  <div class="card"><b>−18.7%</b><span>median agent wall time</span></div>
+  <div class="card"><b>−4m 50s</b><span>across 36 agent runs</span></div>
+</section>
+
+<section class="panel"><h3>Quality and speed</h3>
+<table><thead><tr><th>Agent</th><th>Passes</th><th>Pass rate</th><th>Median agent time</th><th>Total agent time</th></tr></thead><tbody>
+<tr><td class="cap">Capstan</td><td class="cap">36/36</td><td class="cap">100%</td><td class="cap">64.3s</td><td class="cap">53m 19.0s</td></tr>
+<tr><td class="open">OpenCode 1.18.2</td><td>35/36</td><td>97.2%</td><td>79.0s</td><td>58m 09.2s</td></tr>
+</tbody></table><p class="note">The sole failure was OpenCode run 3 on <code>python/forth</code>: agent timeout at 240.0s. No HTTP 400, empty response, agent error, test failure, or harness error occurred.</p></section>
+
+<h2>All 72 attempts</h2>
+<div class="panel scroll"><table><thead><tr><th>Task</th><th>Capstan pass</th><th>Capstan median</th><th>Capstan runs 1 / 2 / 3</th><th>OpenCode pass</th><th>OpenCode median</th><th>OpenCode runs 1 / 2 / 3</th></tr></thead><tbody>
+<tr><td>cpp/clock</td><td class="cap">3/3</td><td>46.5s</td><td>53.8 · 39.6 · 46.5</td><td>3/3</td><td>52.2s</td><td>49.4 · 77.1 · 52.2</td></tr>
+<tr><td>cpp/grade-school</td><td class="cap">3/3</td><td>93.8s</td><td>93.8 · 123.9 · 79.9</td><td>3/3</td><td>68.8s</td><td>66.7 · 68.8 · 89.3</td></tr>
+<tr><td>go/protein-translation</td><td class="cap">3/3</td><td>27.6s</td><td>55.7 · 26.9 · 27.6</td><td>3/3</td><td>35.9s</td><td>39.0 · 34.0 · 35.9</td></tr>
+<tr><td>go/transpose</td><td class="cap">3/3</td><td>170.2s</td><td>151.6 · 170.2 · 173.6</td><td>3/3</td><td>159.0s</td><td>134.3 · 169.3 · 159.0</td></tr>
+<tr><td>java/phone-number</td><td class="cap">3/3</td><td>59.3s</td><td>59.3 · 126.5 · 58.0</td><td>3/3</td><td>75.0s</td><td>58.9 · 75.0 · 209.2</td></tr>
+<tr><td>java/series</td><td class="cap">3/3</td><td>50.3s</td><td>50.3 · 55.5 · 33.3</td><td>3/3</td><td>32.6s</td><td>31.7 · 34.2 · 32.6</td></tr>
+<tr><td>javascript/promises</td><td class="cap">3/3</td><td>151.5s</td><td>151.5 · 64.6 · 167.1</td><td>3/3</td><td>123.9s</td><td>88.3 · 189.9 · 123.9</td></tr>
+<tr><td>javascript/triangle</td><td class="cap">3/3</td><td>46.5s</td><td>46.5 · 74.3 · 38.6</td><td>3/3</td><td>50.5s</td><td>50.5 · 35.8 · 71.5</td></tr>
+<tr><td>python/pov</td><td class="cap">3/3</td><td>122.7s</td><td>147.3 · 106.1 · 122.7</td><td>3/3</td><td>129.2s</td><td>167.8 · 117.1 · 129.2</td></tr>
+<tr><td>python/forth</td><td class="cap">3/3</td><td>119.4s</td><td>111.4 · 119.4 · 143.7</td><td class="bad">2/3</td><td>124.5s</td><td>124.0 · 124.5 · <span class="bad">timeout 240.0</span></td></tr>
+<tr><td>rust/acronym</td><td class="cap">3/3</td><td>54.5s</td><td>64.2 · 54.5 · 53.3</td><td>3/3</td><td>90.8s</td><td>90.8 · 71.6 · 105.8</td></tr>
+<tr><td>rust/word-count</td><td class="cap">3/3</td><td>52.2s</td><td>54.0 · 52.2 · 45.8</td><td>3/3</td><td>70.2s</td><td>70.2 · 49.9 · 100.4</td></tr>
+</tbody></table></div>
+
+<h2>Local runtime footprint</h2>
+<p class="lead">A separate 15-run-per-agent benchmark on the same Mac measured the local clients with <code>/usr/bin/time -l</code>. Lower is better.</p>
+<section class="panel bars">
+  <div><h3>Median peak RSS</h3><div class="metric"><span class="cap">Capstan</span><div class="track"><div class="bar capstan" style="width:2.65%"></div></div><b>14.7 MiB</b></div><div class="metric"><span class="open">OpenCode</span><div class="track"><div class="bar opencode" style="width:100%"></div></div><b>555.0 MiB</b></div><p class="note">Capstan: 37.8x lower median peak resident memory.</p></div>
+  <div><h3>Median local CPU time</h3><div class="metric"><span class="cap">Capstan</span><div class="track"><div class="bar capstan" style="width:6.4%"></div></div><b>0.19s</b></div><div class="metric"><span class="open">OpenCode</span><div class="track"><div class="bar opencode" style="width:100%"></div></div><b>2.97s</b></div><p class="note">Capstan: 15.6x lower median user + system CPU time. This measures local client overhead, not provider compute.</p></div>
+  <div><h3>Measured executable</h3><div class="metric"><span class="cap">Capstan</span><div class="track"><div class="bar capstan" style="width:.77%"></div></div><b>896 KiB</b></div><div class="metric"><span class="open">OpenCode</span><div class="track"><div class="bar opencode" style="width:100%"></div></div><b>114 MiB</b></div><p class="note">About 130x smaller for the builds measured on 28 June 2026.</p></div>
+</section>
+
+<h2>Method, without sleight of hand</h2>
+<section class="panel"><p><span class="pill">12 fixed tasks</span><span class="pill">3 runs each</span><span class="pill">direct DeepSeek</span><span class="pill">medium reasoning</span><span class="pill">240s timeout</span><span class="pill">concurrency 1</span><span class="pill">cache off</span><span class="pill">upstream tests</span></p>
+<p>The quality run used corpus commit <code>7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f</code> and Promptfoo eval <code>eval-ANr-2026-07-31T10:33:38</code>. CPU/RSS were not captured in that run and cannot be recreated afterward. The footprint numbers are therefore visibly separated: they come from a 28 June 2026 benchmark with three neutral tasks, five alternating runs per task and agent, and the same OpenRouter DeepSeek model for both.</p>
+<p class="note">This is strong evidence that Capstan can match or slightly exceed a mature agent on this fixed suite while imposing dramatically less local runtime overhead. It is not a universal ranking: results depend on model, network, task mix, machine, timeout, and agent revision. Capstan was built from revision <code>b7a664ef</code> with a dirty worktree.</p></section>
+
+<div class="footer">Source details are recorded in <a href="BENCHMARK_REPORT.md" style="color:var(--cap)">BENCHMARK_REPORT.md</a>. Machine-readable data: <a href="benchmarks/polyglot-mini-v2-20260731.csv" style="color:var(--cap)">72 quality attempts</a> and <a href="benchmarks/runtime-footprint-20260628.csv" style="color:var(--cap)">30 resource measurements</a>.</div>
+</main></body></html>

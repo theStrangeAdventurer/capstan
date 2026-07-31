@@ -1,164 +1,118 @@
-# Capstan vs opencode: 5-task CLI agent benchmark
+# Capstan vs OpenCode: quality, speed, and local footprint
 
-Date: 2026-06-29
+## Result
 
-This report compares Capstan and opencode on a small, repeatable CLI-agent
-benchmark. It is intended to be readable enough to attach to the repository or
-share publicly, while still keeping the raw methodology visible.
+The canonical 12-task Aider Polyglot `mini-v2` suite was run three times for
+each agent on 2026-07-31. Both agents used direct DeepSeek V4 Pro with medium
+reasoning, sequential execution, the same public prompts and upstream tests,
+and a 240-second agent timeout.
 
-## Summary
+| Agent | Canonical passes | Pass rate | Median agent time | Total agent time |
+|---|---:|---:|---:|---:|
+| **Capstan** | **36/36** | **100%** | **64.3s** | **53m 19.0s** |
+| OpenCode | 35/36 | 97.2% | 79.0s | 58m 09.2s |
 
-Both agents passed every task in the benchmark.
+Capstan completed every attempt and led by one canonical pass. Its median
+agent time was 18.7% lower, and its 36 agent runs took 4m 50.1s less in total.
+The only failure was OpenCode run 3 on `python/forth`, which reached the
+240-second timeout. There were no HTTP 400, empty-response, agent-error,
+test-failure, or harness-error results.
 
-| Agent | Runs | Passes | Median wall-clock | Median CPU | Median peak RSS | Binary size |
-|---|---:|---:|---:|---:|---:|---:|
-| Capstan | 15 | 15 | 13.797s | 0.810s | 14.4 MiB | 0.89 MiB |
-| opencode | 15 | 15 | 30.338s | 6.004s | 511.3 MiB | 113.80 MiB |
+Open the [standalone HTML report](BENCHMARK_REPORT.html) for the visual summary.
 
-On this benchmark, Capstan passed the same tasks while using substantially less
-local CPU time, memory, and disk space. Capstan also had the lower median
-wall-clock time on all five tasks.
+## All 72 attempts
 
-## What was measured
+Times below are agent wall time; validator time is excluded. Each cell contains
+the canonical pass count, median, then runs 1–3.
 
-The benchmark measures terminal-agent behavior on five tasks:
+| Task | Capstan: pass · median · runs | OpenCode: pass · median · runs |
+|---|---|---|
+| `cpp/clock` | 3/3 · 46.5s · 53.8, 39.6, 46.5 | 3/3 · 52.2s · 49.4, 77.1, 52.2 |
+| `cpp/grade-school` | 3/3 · 93.8s · 93.8, 123.9, 79.9 | 3/3 · 68.8s · 66.7, 68.8, 89.3 |
+| `go/protein-translation` | 3/3 · 27.6s · 55.7, 26.9, 27.6 | 3/3 · 35.9s · 39.0, 34.0, 35.9 |
+| `go/transpose` | 3/3 · 170.2s · 151.6, 170.2, 173.6 | 3/3 · 159.0s · 134.3, 169.3, 159.0 |
+| `java/phone-number` | 3/3 · 59.3s · 59.3, 126.5, 58.0 | 3/3 · 75.0s · 58.9, 75.0, 209.2 |
+| `java/series` | 3/3 · 50.3s · 50.3, 55.5, 33.3 | 3/3 · 32.6s · 31.7, 34.2, 32.6 |
+| `javascript/promises` | 3/3 · 151.5s · 151.5, 64.6, 167.1 | 3/3 · 123.9s · 88.3, 189.9, 123.9 |
+| `javascript/triangle` | 3/3 · 46.5s · 46.5, 74.3, 38.6 | 3/3 · 50.5s · 50.5, 35.8, 71.5 |
+| `python/pov` | 3/3 · 122.7s · 147.3, 106.1, 122.7 | 3/3 · 129.2s · 167.8, 117.1, 129.2 |
+| `python/forth` | 3/3 · 119.4s · 111.4, 119.4, 143.7 | 2/3 · 124.5s · 124.0, 124.5, **timeout 240.0** |
+| `rust/acronym` | 3/3 · 54.5s · 64.2, 54.5, 53.3 | 3/3 · 90.8s · 90.8, 71.6, 105.8 |
+| `rust/word-count` | 3/3 · 52.2s · 54.0, 52.2, 45.8 | 3/3 · 70.2s · 70.2, 49.9, 100.4 |
 
-1. Recovering when asked to inspect a directory.
-2. Editing only the intended file in a dirty git worktree.
-3. Treating malformed provider/tool-call noise as inert text.
-4. Implementing a Python word-problem parser.
-5. Implementing a Python two-bucket solver.
+## Local runtime footprint
 
-Each task ran three times per agent, in alternating order. Every run used a
-fresh workspace.
+CPU and memory were not recorded during the July Polyglot run and cannot be
+reconstructed afterward. The figures below come from the separate controlled
+runtime benchmark performed on the same Apple Silicon Mac on 2026-06-28. It
+ran three neutral tasks five times per agent, alternated agent order, used the
+same OpenRouter `deepseek/deepseek-v4-pro` model for both agents, and measured
+each command with macOS `/usr/bin/time -l`.
 
-The metrics are:
+| Metric, median of 15 runs | Capstan | OpenCode | Capstan difference |
+|---|---:|---:|---:|
+| Peak resident memory | **14.7 MiB** | 555.0 MiB | **37.8x lower** |
+| Local CPU time (`user + sys`) | **0.19s** | 2.97s | **15.6x lower** |
+| Measured executable size | **896 KiB** | 114 MiB | **about 130x smaller** |
 
-- Wall-clock: real elapsed time from command start to command exit.
-- CPU: total user + system CPU time consumed by the process tree, as measured by
-  the benchmark runner.
-- Peak RSS: sampled peak resident memory of the process tree.
-- Binary size: filesystem size of the agent executable used in the run.
+Peak RSS ranged from 14.1–23.9 MiB for Capstan and 529.9–655.8 MiB for
+OpenCode. Mean peak RSS was 15.4 MiB and 570.3 MiB respectively. Network wait
+dominates wall time in this small workload, so CPU time is the useful local
+overhead measure; it is not a claim about provider compute.
 
-Wall-clock includes model/provider latency. CPU and RSS are local machine
-resource measurements.
+This footprint result is evidence about the local clients, not a second quality
+score. The workload, date, and provider route differ from the July Polyglot
+comparison, so the two datasets are presented side by side but never merged.
 
-## Environment
+## Configuration and reproducibility
 
-| Item | Value |
-|---|---|
-| OS | macOS 26.5.1, Darwin 25.5.0 |
-| Architecture | arm64 |
-| CPU | Apple M5 |
-| RAM | 32 GiB |
-| Compiler | Apple clang 21.0.0 |
-| Model/provider | OpenRouter, `deepseek/deepseek-v4-pro` |
-| Capstan binary | `/Users/alxd/.local/bin/capstan` |
-| opencode binary | `/Users/alxd/.opencode/bin/opencode` |
-| opencode version | 1.17.3 |
+| Item | Polyglot quality run | Runtime footprint run |
+|---|---|---|
+| Date | 2026-07-31 | 2026-06-28 |
+| Machine | Apple Silicon macOS | Same local Apple Silicon Mac |
+| Tasks | Aider Polyglot `mini-v2`, 12 fixed tasks | 3 neutral tasks |
+| Repetitions | 3 per agent (72 attempts total) | 5 per task and agent (30 attempts total) |
+| Provider | Direct DeepSeek | OpenRouter |
+| Model | DeepSeek V4 Pro | `deepseek/deepseek-v4-pro` |
+| Agent timeout | 240 seconds | no benchmark timeout recorded |
+| Execution | sequential, Promptfoo cache disabled | sequential, alternating order |
+| Quality scorer | canonical upstream tests | not a quality benchmark |
+| Resource measurement | not collected | macOS `/usr/bin/time -l` |
+| Corpus commit | `7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f` | n/a |
+| Capstan revision | `b7a664ef`, dirty worktree | earlier local build |
+| OpenCode | 1.18.2 | local build measured at 114 MiB |
 
-## Commands
+The Promptfoo evaluation ID is `eval-ANr-2026-07-31T10:33:38`. Sanitized
+machine-readable measurements are committed with this report:
 
-The default benchmark entry point is:
+- [`benchmarks/polyglot-mini-v2-20260731.csv`](benchmarks/polyglot-mini-v2-20260731.csv)
+  contains all 72 quality attempts;
+- [`benchmarks/runtime-footprint-20260628.csv`](benchmarks/runtime-footprint-20260628.csv)
+  contains all 30 resource measurements.
 
-```sh
-~/Benchmarks/run-agent-evals-5.sh
-```
-
-For this report it was run as:
-
-```sh
-RUNS=3 TIMEOUT=240 ~/Benchmarks/run-agent-evals-5.sh
-```
-
-The task file was:
-
-```text
-~/Benchmarks/agent-evals/tasks/benchmark-5.jsonl
-```
-
-The Capstan command template was:
-
-```sh
-{bin} run --benchmark \
-  --provider openrouter \
-  --model deepseek/deepseek-v4-pro \
-  --prompt-file {prompt_file} \
-  --workdir {workdir}
-```
-
-The opencode command template was:
-
-```sh
-python3 /Users/alxd/Benchmarks/opencode_prompt_file.py \
-  --bin {bin} \
-  --model openrouter/deepseek/deepseek-v4-pro \
-  --workdir {workdir} \
-  --prompt-file {prompt_file} \
-  --dangerously-skip-permissions
-```
-
-## Task results
-
-The table below reports median values across three runs per agent.
-
-| Task | Runs passed | Capstan wall-clock | opencode wall-clock | Difference | Winner | Capstan CPU | opencode CPU | Capstan RSS | opencode RSS |
-|---|---:|---:|---:|---:|---|---:|---:|---:|---:|
-| `directory-read-recovery` | 3/3 vs 3/3 | 13.797s | 21.644s | -7.847s | Capstan | 0.810s | 5.000s | 14.4 MiB | 484.3 MiB |
-| `dirty-worktree-scope` | 3/3 vs 3/3 | 12.427s | 16.482s | -4.056s | Capstan | 0.672s | 4.894s | 14.2 MiB | 509.0 MiB |
-| `malformed-tool-tag-noise` | 3/3 vs 3/3 | 4.840s | 7.604s | -2.764s | Capstan | 0.301s | 2.316s | 13.9 MiB | 463.0 MiB |
-| `polyglot-python-two-bucket` | 3/3 vs 3/3 | 116.402s | 117.374s | -0.972s | Capstan | 6.266s | 29.729s | 27.0 MiB | 578.6 MiB |
-| `polyglot-python-wordy` | 3/3 vs 3/3 | 151.443s | 171.288s | -19.844s | Capstan | 8.007s | 43.833s | 22.0 MiB | 577.8 MiB |
-
-`Difference` is `Capstan wall-clock - opencode wall-clock`; negative means
-Capstan was faster.
-
-## Binary size
-
-| Agent | Binary path | Bytes | Size |
-|---|---|---:|---:|
-| Capstan | `/Users/alxd/.local/bin/capstan` | 934,520 | 0.89 MiB |
-| opencode | `/Users/alxd/.opencode/bin/opencode` | 119,322,722 | 113.80 MiB |
-
-Capstan is a C/Lua binary with vendored Lua and ncurses linked statically.
-opencode is distributed as a much larger standalone binary.
-
-## Raw artifacts
-
-The raw benchmark output for this report is stored at:
+The original, unsanitized Promptfoo artifacts remain machine-local:
 
 ```text
-~/Benchmarks/agent-evals-results/20260629-095330/
+/Users/alxd/Benchmarks/promptfoo-results/20260731-103332/report.html
+/Users/alxd/Benchmarks/promptfoo-results/20260731-103332/results.json
+/Users/alxd/Benchmarks/promptfoo-work/eval-ANr-2026-07-31T10-33-38/
 ```
 
-Important files:
-
-- `summary.md`: runner-generated summary.
-- `results.csv`: raw per-run measurements.
-- `runs/<agent>.<task>.runN/`: prompt, command, stdout, stderr, setup logs, and
-  final workspace for each run.
-
-A copy of the report artifacts is stored at:
+The resource benchmark raw artifacts are under:
 
 ```text
-~/Benchmarks/final/
+/Users/alxd/Benchmarks/results/20260628-174237/
 ```
 
 ## Limitations
 
-This benchmark is intentionally small. It is not a universal claim about every
-coding workload or every model. The results depend on the chosen model,
-provider latency, local machine, task mix, and command templates.
-
-The benchmark is still useful because it is concrete and reproducible: the task
-definitions, prompts, command templates, raw stdout/stderr, final workspaces,
-and CSV measurements are all preserved.
-
-For broader claims, run the extended suite:
-
-```sh
-~/Benchmarks/run-agent-evals-extended.sh
-```
-
-The default report uses five tasks because the extended suite is much slower and
-is better suited for periodic validation rather than every iteration.
+- Thirty-six attempts per agent reveal useful differences but do not establish
+  a universal ranking across models, repositories, or machines.
+- Provider latency and transient provider behavior are part of wall time.
+- Capstan was tested from a dirty worktree, so the commit alone does not fully
+  reconstruct the tested binary.
+- The single OpenCode timeout materially affects its total time but not the
+  reported median.
+- CPU/RSS and quality were measured in separate experiments. Future Promptfoo
+  runs should collect process resource metrics directly so they can be shown
+  per attempt.

@@ -20,12 +20,14 @@ posts.
 
 ## Measured Claims
 
-Only publish measurements that include the command used to produce them.
+Only publish measurements that include the command or recorded methodology used
+to produce them.
 
-Useful commands:
+Useful local commands:
 
 ```sh
 ls -lh build/capstan
+file build/capstan
 ./build/capstan --self-test-embedded
 make test
 make test-http-lua
@@ -35,6 +37,16 @@ make test-build
 Binary-size numbers are platform/build specific. Treat a local macOS size as a
 local data point, not as a universal release guarantee.
 
+The repository also contains [the Capstan vs opencode benchmark](../BENCHMARK_REPORT.md).
+Public summaries may quote its exact results when they:
+
+- identify it as the recorded 12-task Aider Polyglot mini-v2 benchmark with
+  three runs per task and agent;
+- keep the shared model/provider and environment context visible or linked;
+- record the exact Capstan revision/worktree state and OpenCode version;
+- link the report for commands, task-level results, artifacts, and limitations;
+- avoid presenting the result as universal performance superiority.
+
 ## Not Yet Current Claims
 
 Do not present these as implemented:
@@ -42,7 +54,7 @@ Do not present these as implemented:
 - forked subagents;
 - isolated plugin sandboxing;
 - sandboxed MCP servers;
-- performance superiority beyond measured binary size and smoke-test behavior.
+- universal performance superiority outside recorded, reproducible measurements.
 
 ## Readiness Checklist
 
