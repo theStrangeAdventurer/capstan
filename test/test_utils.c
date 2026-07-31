@@ -75,6 +75,36 @@ static MunitResult test_replace_with_requires_terminated_input(
   return MUNIT_OK;
 }
 
+static MunitResult test_utf8_truncate_boundary(const MunitParameter params[],
+                                               void *data) {
+  (void)params;
+  (void)data;
+  char out[32];
+  munit_assert_false(utf8_truncate("привет-мир", out, sizeof(out), 6, "…"));
+  munit_assert_string_equal(out, "приве…");
+  return MUNIT_OK;
+}
+
+static MunitResult test_utf8_truncate_small_buffer(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char out[6];
+  utf8_truncate("абвг", out, sizeof(out), 4, "…");
+  munit_assert_string_equal(out, "а…");
+  return MUNIT_OK;
+}
+
+static MunitResult test_utf8_truncate_unchanged(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char out[32];
+  munit_assert_true(utf8_truncate("конфеты", out, sizeof(out), 8, "…"));
+  munit_assert_string_equal(out, "конфеты");
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
   {"/my_strdup", test_my_strdup, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/my_strdup_empty", test_my_strdup_empty, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -85,6 +115,12 @@ static MunitTest tests[] = {
    MUNIT_TEST_OPTION_NONE, NULL},
   {"/replace_requires_terminated_input",
    test_replace_with_requires_terminated_input, NULL, NULL,
+   MUNIT_TEST_OPTION_NONE, NULL},
+  {"/utf8_truncate_boundary", test_utf8_truncate_boundary, NULL, NULL,
+   MUNIT_TEST_OPTION_NONE, NULL},
+  {"/utf8_truncate_small_buffer", test_utf8_truncate_small_buffer, NULL, NULL,
+   MUNIT_TEST_OPTION_NONE, NULL},
+  {"/utf8_truncate_unchanged", test_utf8_truncate_unchanged, NULL, NULL,
    MUNIT_TEST_OPTION_NONE, NULL},
   {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}
 };

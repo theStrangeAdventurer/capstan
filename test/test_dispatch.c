@@ -53,6 +53,15 @@ static MunitResult test_truncates_long_command(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_blocking_enter_requires_top_level_run(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  munit_assert_false(dispatch_blocking_enter_allowed(0));
+  munit_assert_true(dispatch_blocking_enter_allowed(1));
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/no_command_for_plain_text", test_no_command_for_plain_text, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -62,6 +71,9 @@ static MunitTest tests[] = {
      test_parses_single_slash_for_command_menu, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/truncates_long_command", test_truncates_long_command, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/blocking_enter_requires_top_level_run",
+     test_blocking_enter_requires_top_level_run, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

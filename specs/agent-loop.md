@@ -88,7 +88,12 @@ sequenceDiagram
 ## Message Flow Contract
 
 After ordinary text submission, C always creates the agent placeholder before
-calling Lua:
+calling Lua. While that top-level run remains active, later ordinary
+submissions are held in the bounded FIFO described in
+[Queued input](queued-input.md); they do not create another placeholder or call
+Lua concurrently. When the run's `on_done` callback clears the active state,
+the main loop adds the queued items as separate consecutive user messages,
+creates one placeholder, and dispatches one batch run.
 
 ```text
 add_message(text, MSG_USER)
@@ -99,7 +104,9 @@ agent_emit(L)
 `agent_emit()` filters empty messages before passing history to Lua, so the empty
 agent placeholder is not sent to the model. The placeholder still exists in C
 message storage, which lets `agent.append(chunk, "agent")` fill the visible
-assistant response during streaming.
+assistant response during streaming. The TUI adapter reports top-level run
+completion through `agent.finish_run()`; queued dispatch happens later from the
+main event loop to avoid re-entering Lua from an HTTP callback.
 
 Slash commands are direct user intent. By default a command handler returns UI
 text and LLM text; the LLM text is stored as pending context and flushed into
@@ -163,7 +170,8 @@ non-trivial tool batch or phase change. Text accompanying tool calls is shown
 immediately, including after workspace mutations; only a no-tool draft that is
 about to enter completion review remains deferred. Tool status blocks also use
 deterministic phase labels such as `Reading`, `Editing`, and `Validating` when
-the model emits no annotation.
+the model emits no annotation. Every visible tool block starts after one blank
+line so it remains visually separate from the preceding agent commentary.
 
 A successful provider response with neither text nor tool calls is not a valid
 terminal result. The runtime adds one synthetic continuation asking the model
@@ -199,6 +207,28 @@ model-only history and are not rendered as assistant text.
 `agent.preserve_reasoning = false` or `--no-preserve-reasoning` disables the
 behavior.
 
+Responses adapters running with `store=false` must request encrypted reasoning
+content, preserve completed reasoning items as structured `reasoning_details`,
+and replay those items before the associated function calls. Provider terminal
+events such as `response.failed`, `response.incomplete`, and `error` are hard
+stream failures, not empty model responses. An adapter reports them as
+`provider_error` chunks so the agent loop surfaces the provider message without
+running the empty-terminal finalization retry.
+
+For non-2xx streaming responses, the transport error body is never copied
+wholesale into model-visible history. The stream layer extracts a structured
+error code/message, or a bounded plain-text fallback, and applies normal
+redaction and truncation. Streaming response headers are retained long enough
+to surface safe request identifiers such as `x-request-id` or `cf-ray`. If the
+provider sends an empty error body, the user-facing error states that fact and
+includes the available request identifier instead of displaying only
+`HTTP 400`.
+
+Before JSON encoding, the runtime replaces malformed UTF-8 bytes in all request
+string values with U+FFFD and logs the replacement count. This is a final
+provider-boundary safeguard for old persisted sessions and plugin/tool output;
+invalid local bytes must not turn into an opaque provider validation error.
+
 Profiles are workflow policy. `agent.profile`, `capstan run --profile`, and the
 TUI slash commands `/fast`, `/implement`, and `/plan` select named profiles.
 Profiles can append system prompt guidance, choose a default reasoning effort,
@@ -210,6 +240,13 @@ The loop is recursive through a continuation function: every tool round produces
 a new HTTP request with the expanded message history. Esc cancellation can stop
 active curl streams, but it cannot interrupt synchronous Lua work inside tool
 processing until control returns to the main loop.
+
+Tool results sent back to the model are bounded by the canonical tool layer.
+The defaults are 50 KiB and 2,000 lines per result, matching the practical
+limits used by the reference OpenCode workflow. A truncated result contains its
+original byte count and tells the model to use a narrower query or paged read.
+The limits apply across providers and can be changed with top-level
+`tool_output.max_bytes` and `tool_output.max_lines`.
 
 Agent runs also carry an automatic guard to catch runaway loops before the next
 tool executes. By default the guard stops after 80 turns, 900 seconds, 80 total

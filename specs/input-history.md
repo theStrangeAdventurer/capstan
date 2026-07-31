@@ -34,9 +34,11 @@ keeps the latest 20 prompts per workspace.
 ## Implementation Notes
 
 `input_history.c` owns persistence and navigation state. `dispatch_submit()`
-records successful non-empty input before clearing the input buffer. `main.c`
-loads history during TUI startup and routes `KEY_UP` / `KEY_DOWN` to history
-navigation while input focus is active.
+records successful non-empty input before clearing the input buffer. This
+includes text accepted into the active run's queued-input FIFO, but excludes a
+sixth message rejected because the queue is full. `main.c` loads history during
+TUI startup and routes `KEY_UP` / `KEY_DOWN` to history navigation while input
+focus is active.
 
 ## Tests
 

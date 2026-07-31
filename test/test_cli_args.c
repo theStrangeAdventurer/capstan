@@ -18,8 +18,8 @@ static MunitResult test_run_options(const MunitParameter params[], void *data) {
                   "p",         "--model", "m",        "--reasoning-effort",
                   "high",      "--workdir", "/tmp",   "--workspace",
                   "/",         "--max-turns", "7",    "--profile",
-                  "implement", "--json"};
-  CliOptions opts = cli_parse(19, argv);
+                  "implement", "--session-id", "my fucking bench", "--json"};
+  CliOptions opts = cli_parse(21, argv);
   munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
   munit_assert_string_equal(opts.prompt, "hello");
   munit_assert_string_equal(opts.provider, "p");
@@ -28,8 +28,20 @@ static MunitResult test_run_options(const MunitParameter params[], void *data) {
   munit_assert_string_equal(opts.reasoning_effort, "high");
   munit_assert_string_equal(opts.workdir, "/tmp");
   munit_assert_string_equal(opts.workspace, "/");
+  munit_assert_string_equal(opts.session_id, "my fucking bench");
   munit_assert_int(opts.max_turns, ==, 7);
   munit_assert_int(opts.json, ==, 1);
+  return MUNIT_OK;
+}
+
+static MunitResult test_session_id_requires_value(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "run", "--session-id"};
+  CliOptions opts = cli_parse(3, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_ERROR);
+  munit_assert_not_null(opts.error);
   return MUNIT_OK;
 }
 
@@ -133,6 +145,8 @@ static MunitTest tests[] = {
      NULL},
     {"/run_options", test_run_options, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/session_id_requires_value", test_session_id_requires_value, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/effort_alias", test_effort_alias, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
     {"/reasoning_effort_rejects_unknown",

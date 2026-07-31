@@ -2,7 +2,7 @@
 
 ## Behavior
 
-Capstan writes runtime events to:
+Before a session is selected, Capstan writes process-level runtime events to:
 
 ```text
 $XDG_STATE_HOME/capstan/logs/YYYY-MM-DD.log
@@ -11,10 +11,23 @@ $XDG_STATE_HOME/capstan/logs/YYYY-MM-DD.log
 When `XDG_STATE_HOME` is not set, the fallback is
 `~/.local/state/capstan/logs/YYYY-MM-DD.log`.
 
-Each line includes a local timestamp, category, and compact message:
+Once a TUI session is active, or a headless run supplies `--session-id`, events
+are isolated under that stable session ID:
 
 ```text
-2026-06-19 18:30:00 [tool] call name=shell target=/Users/me/project display=~/project args={"command":"shell"}
+$XDG_STATE_HOME/capstan/logs/sessions/<session-id>/YYYY-MM-DD.log
+```
+
+Session titles are not used as paths because generated titles can change.
+Explicit CLI session IDs remain unchanged and therefore provide predictable log
+paths. Switching TUI sessions changes the active log scope; `/logs` and the
+`logs` model tool consequently read only the active session's current log.
+
+Each line includes a local timestamp, category, and compact message. Scoped
+lines also include their stable session ID:
+
+```text
+2026-06-19 18:30:00 [session:my bench] [tool] call name=shell target=/Users/me/project display=~/project args={"command":"shell"}
 ```
 
 The `/logs [n]` command displays the last `n` log lines in the conversation.
@@ -28,9 +41,9 @@ lifecycle, tool, permission, and error events. `debug` adds low-level
 stream/tool-call reconstruction events. `trace` also enables raw SSE/event
 payload logging.
 
-Log files rotate daily by filename. If the current day's file reaches 10 MiB
-before the day changes, Capstan renames it to `.1.log` and keeps up to five
-same-day archives:
+Log files rotate independently inside each scope. If the current file reaches
+10 MiB before the day changes, Capstan renames it to `.1.log` and keeps up to
+five same-day archives:
 
 ```text
 logs/2026-06-27.log
@@ -45,6 +58,10 @@ credential markers, and additive `redaction` rules from
 `~/.config/capstan/config.lua`; see [Config](config.md). Built-in redaction is
 not disabled by config.
 
+Log messages are also normalized to valid UTF-8. Invalid byte sequences are
+replaced before persistence, so reading logs back through the model tool cannot
+poison a later JSON provider request.
+
 `[REDACTED]` means the original value exists but was hidden. Agents must not
 interpret it as the literal stored value, and must not probe secret values by
 printing environment variables, headers, config fields, or credentials. Presence
@@ -57,6 +74,9 @@ checks should print only boolean/status information.
 - Tool names sent to the model
 - Last outbound message role and compact content preview
 - API stream request: endpoint, message count, tool count
+- Non-2xx transport diagnostics: bounded provider body detail when present,
+  plus safe request identifiers from response headers. Empty bodies are logged
+  explicitly instead of being reported as an unexplained status code.
 - Stream summary: SSE event count, raw byte count, chunk counters, final tool
   call count, text/reasoning byte counts
 - Warnings for empty or reasoning-only responses, incomplete tool calls, and
@@ -80,6 +100,7 @@ checks should print only boolean/status information.
   max turns, effective tool count, and effective tool names.
 - [Permission](permissions.md) checks and prompt decisions
 - Tool completion and result size
+- Invalid UTF-8 replacement counts and model-bound tool-result truncation
 - Tool handler failures, including compact diagnostic text
 - Tool guard stops under the `tool_guard` category when the runtime aborts a
   runaway loop before the next tool execution
@@ -107,8 +128,12 @@ instead of returning unredacted input.
 The `agent/` Lua runtime writes agent/tool/API lifecycle events through that Lua
 API.
 `plugins/logs.lua` reads the log file and returns a tail view.
+`session_manager.c` changes the logger scope after TUI session creation or a
+successful switch. Headless CLI setup selects its explicit scope before plugin
+initialization so provider, tool, permission, and hook events share one file.
 
 ## Tests
 
-`make test-http-lua` covers provider-level log calls and the `/logs` plugin.
+`make test-http-lua` covers provider-level log calls, scoped paths and
+permissions, TUI scope switching, and the `/logs` plugin.
 `make test-build` verifies `/logs` is embedded in the standalone binary.

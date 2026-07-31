@@ -9,6 +9,8 @@
 #include "plugins.h"
 #include "popup.h"
 #include "scroll.h"
+#include "session_manager.h"
+#include "submission_queue.h"
 #include "tui.h"
 #include "utils.h"
 #include <lauxlib.h>
@@ -16,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static void finder_add_lua_string_array(FinderIgnoreList *ignore,
                                         const char *field, int load_files) {
@@ -76,7 +79,66 @@ static int open_file_finder(Plugin *plugin, size_t cmd_end) {
   return count > 0;
 }
 
-static void flush_buffered_and_send(const char *ui_text, const char *raw_text) {
+static SubmissionQueue g_submission_queue = {0};
+static int g_session_popup = 0;
+static int g_dispatch_after_compact = 0;
+
+static int open_sessions(void) {
+  SessionInfo *sessions = NULL;
+  size_t count = 0;
+  if (!session_manager_list(&sessions, &count)) {
+    popup_show_message("Sessions", "Could not read saved sessions", 1);
+    return 0;
+  }
+  if (count == 0) {
+    session_list_free(sessions);
+    popup_show_message("Sessions", "No saved sessions", 0);
+    return 1;
+  }
+  PopupItem *items = calloc(count, sizeof(PopupItem));
+  if (!items) {
+    session_list_free(sessions);
+    return 0;
+  }
+  const char *active = session_manager_active_id();
+  for (size_t i = 0; i < count; i++) {
+    char label[256];
+    char stamp[32] = "";
+    struct tm *tm = localtime(&sessions[i].updated_at);
+    if (tm)
+      strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M", tm);
+    snprintf(label, sizeof(label), "%s %s  %s",
+             strcmp(active, sessions[i].id) == 0 ? "*" : " ",
+             sessions[i].title, stamp);
+    items[i].text = my_strdup(label);
+    items[i].value = my_strdup(sessions[i].id);
+  }
+  popup_open_filterable_with_plugin(items, (int)count, "Sessions", 10, 0,
+                                    NULL, 0);
+  g_session_popup = 1;
+  popup_items_free(items, (int)count);
+  session_list_free(sessions);
+  return 1;
+}
+
+int dispatch_queue_size(void) {
+  return submission_queue_size(&g_submission_queue);
+}
+
+int dispatch_queue_visible_size(void) {
+  return submission_queue_visible_size(&g_submission_queue);
+}
+
+const char *dispatch_queue_at(int index) {
+  return submission_queue_at(&g_submission_queue, index);
+}
+
+void dispatch_queue_clear(void) {
+  submission_queue_clear(&g_submission_queue);
+  g_dispatch_after_compact = 0;
+}
+
+static void flush_buffered_results(void) {
   if (g_buffered_results.size > 0) {
     for (int i = 0; i < g_buffered_results.size; i++) {
       add_message(g_buffered_results.items[i].ui_result,
@@ -86,6 +148,10 @@ static void flush_buffered_and_send(const char *ui_text, const char *raw_text) {
     }
     buffered_results_clear();
   }
+}
+
+static void flush_buffered_and_send(const char *ui_text, const char *raw_text) {
+  flush_buffered_results();
   if (ui_text[0]) {
     char *ui = my_strdup(ui_text);
     char *raw = my_strdup(raw_text);
@@ -148,10 +214,18 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
   if (strcmp(command, "/new") == 0) {
     http_cancel_streams(L);
     agent_set_thinking(0);
+    agent_finish_run();
     agent_reset_usage();
-    clear_messages();
     buffered_results_clear();
+    dispatch_queue_clear();
+    if (!session_manager_new())
+      popup_show_message("Sessions", "Could not create a new session", 1);
     scroll_reset();
+    return 1;
+  }
+
+  if (strcmp(command, "/sessions") == 0) {
+    open_sessions();
     return 1;
   }
 
@@ -198,7 +272,7 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
 
   if (strcmp(command, "/") == 0) {
     int pc = plugin_registry_count();
-    int builtins = 3;
+    int builtins = 4;
     int command_plugins = 0;
     for (int i = 0; i < pc; i++) {
       Plugin *pp = plugin_registry_at(i);
@@ -210,10 +284,12 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
       PopupItem *items = malloc(count * sizeof(PopupItem));
       items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
       items[0].value = my_strdup("/editor");
-      items[1].text = my_strdup("/new  Clear messages and token usage");
+      items[1].text = my_strdup("/new  Start a new session");
       items[1].value = my_strdup("/new");
-      items[2].text = my_strdup("/compact  Compact conversation context");
-      items[2].value = my_strdup("/compact");
+      items[2].text = my_strdup("/sessions  Open saved sessions");
+      items[2].value = my_strdup("/sessions");
+      items[3].text = my_strdup("/compact  Compact conversation context");
+      items[3].value = my_strdup("/compact");
       int out = builtins;
       for (int i = 0; i < pc; i++) {
         Plugin *pp = plugin_registry_at(i);
@@ -252,7 +328,7 @@ int dispatch_tab(void) {
 
   if (strcmp(command, "/") == 0) {
     int pc = plugin_registry_count();
-    int builtins = 3;
+    int builtins = 4;
     int command_plugins = 0;
     for (int i = 0; i < pc; i++) {
       Plugin *pp = plugin_registry_at(i);
@@ -266,10 +342,12 @@ int dispatch_tab(void) {
     PopupItem *items = malloc(count * sizeof(PopupItem));
     items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
     items[0].value = my_strdup("/editor");
-    items[1].text = my_strdup("/new  Clear messages and token usage");
+    items[1].text = my_strdup("/new  Start a new session");
     items[1].value = my_strdup("/new");
-    items[2].text = my_strdup("/compact  Compact conversation context");
-    items[2].value = my_strdup("/compact");
+    items[2].text = my_strdup("/sessions  Open saved sessions");
+    items[2].value = my_strdup("/sessions");
+    items[3].text = my_strdup("/compact  Compact conversation context");
+    items[3].value = my_strdup("/compact");
     int out = builtins;
     for (int i = 0; i < pc; i++) {
       Plugin *pp = plugin_registry_at(i);
@@ -320,6 +398,24 @@ int dispatch_tab(void) {
   return count > 0;
 }
 
+void dispatch_tick(void) {
+  if (agent_is_running() ||
+      (submission_queue_size(&g_submission_queue) == 0 &&
+       !g_dispatch_after_compact))
+    return;
+
+  g_dispatch_after_compact = 0;
+  while (submission_queue_size(&g_submission_queue) > 0) {
+    char *text = submission_queue_shift(&g_submission_queue);
+    if (text)
+      add_message(text, text, MSG_USER);
+  }
+  char *empty = my_strdup("");
+  add_message(empty, empty, MSG_AGENT);
+  scroll_reset();
+  agent_build_and_dispatch(L);
+}
+
 void dispatch_submit(void) {
   const char *text = input_get_text();
   if (!text[0] && g_buffered_results.size == 0)
@@ -328,12 +424,33 @@ void dispatch_submit(void) {
   scroll_reset();
   char submitted[INPUT_BUFFER_SIZE];
   snprintf(submitted, sizeof(submitted), "%s", text);
-  if (submitted[0])
-    input_history_add(submitted);
 
   char command[MAX_COMMAND_LEN];
   size_t cmd_end;
   int is_command = submitted[0] && has_command(submitted, command, &cmd_end);
+
+  if (agent_is_running() || submission_queue_size(&g_submission_queue) > 0) {
+    if (is_command) {
+      popup_show_message_ms("Queued input",
+                            "Commands are unavailable while the agent is running",
+                            0, 1200);
+      return;
+    }
+    if (!submitted[0])
+      return;
+    if (!submission_queue_push(&g_submission_queue, submitted)) {
+      popup_show_message_ms("Queued input", "Queue is full (5 messages)", 0,
+                            1200);
+      return;
+    }
+    input_history_add(submitted);
+    input_clear();
+    render_all();
+    return;
+  }
+
+  if (submitted[0])
+    input_history_add(submitted);
   input_clear();
   render_all();
 
@@ -341,9 +458,18 @@ void dispatch_submit(void) {
     int handled = try_builtin_or_plugin_command(submitted, cmd_end);
     if (handled == 2)
       return;
-  } else if (g_buffered_results.size > 0) {
-    flush_buffered_and_send(submitted, submitted);
   } else {
+    flush_buffered_results();
+    if (agent_should_auto_compact(L, submitted)) {
+      if (submitted[0] &&
+          !submission_queue_push(&g_submission_queue, submitted)) {
+        flush_buffered_and_send(submitted, submitted);
+        return;
+      }
+      g_dispatch_after_compact = 1;
+      agent_auto_compact(L);
+      return;
+    }
     flush_buffered_and_send(submitted, submitted);
   }
 }
@@ -356,10 +482,25 @@ void dispatch_popup_result(void) {
     Plugin *p = popup_get_plugin();
     size_t cmd_end = popup_get_cmd_end();
     if (!p) {
-      char buf[INPUT_BUFFER_SIZE];
-      snprintf(buf, INPUT_BUFFER_SIZE, "%s ", selected[0]);
-      input_set_text(buf);
-      popup_free_selected(selected, sel_count);
+      if (g_session_popup) {
+        if (!session_manager_switch(selected[0]))
+          popup_show_message("Sessions", "Could not open the selected session",
+                             1);
+        else {
+          buffered_results_clear();
+          dispatch_queue_clear();
+          input_clear();
+          agent_reset_usage();
+          scroll_reset();
+        }
+        g_session_popup = 0;
+        popup_free_selected(selected, sel_count);
+      } else {
+        char buf[INPUT_BUFFER_SIZE];
+        snprintf(buf, INPUT_BUFFER_SIZE, "%s ", selected[0]);
+        input_set_text(buf);
+        popup_free_selected(selected, sel_count);
+      }
     } else if (plugin_has_autocomplete(p)) {
       int is_dir = 0;
       const char *dir_path = NULL;
@@ -416,5 +557,7 @@ void dispatch_popup_result(void) {
       popup_free_selected(selected, sel_count);
     }
   }
+  if (!selected || sel_count == 0)
+    g_session_popup = 0;
   popup_close();
 }

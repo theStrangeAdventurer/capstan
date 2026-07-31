@@ -112,11 +112,55 @@ static MunitResult test_log_event_preserves_long_messages(
   return MUNIT_OK;
 }
 
+static MunitResult test_session_scoped_log_path(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char state_dir[256];
+  snprintf(state_dir, sizeof(state_dir), "/tmp/capstan-log-scoped-test-%ld",
+           (long)getpid());
+  mkdir(state_dir, 0700);
+  munit_assert_int(setenv("XDG_STATE_HOME", state_dir, 1), ==, 0);
+
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  munit_assert_int(luaL_dostring(L, "capstan = { config = {} }"), ==, LUA_OK);
+  munit_assert_true(log_set_session_id("my fucking bench"));
+  log_init(L);
+  log_event("test", "scoped marker");
+
+  char path[512];
+  munit_assert_int(log_path(path, sizeof(path)), ==, 0);
+  munit_assert_not_null(
+      strstr(path, "/logs/sessions/my fucking bench/"));
+  char *content = read_file_alloc(path);
+  munit_assert_not_null(content);
+  munit_assert_not_null(strstr(content, "[session:my fucking bench]"));
+  munit_assert_not_null(strstr(content, "scoped marker"));
+
+  struct stat st;
+  munit_assert_int(stat(path, &st), ==, 0);
+  munit_assert_int(st.st_mode & 0777, ==, 0600);
+  char *slash = strrchr(path, '/');
+  munit_assert_not_null(slash);
+  *slash = '\0';
+  munit_assert_int(stat(path, &st), ==, 0);
+  munit_assert_int(st.st_mode & 0777, ==, 0700);
+
+  free(content);
+  log_cleanup();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/event_uses_lua_redaction_config", test_log_event_uses_lua_redaction_config,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/event_preserves_long_messages", test_log_event_preserves_long_messages,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/session_scoped_log_path", test_session_scoped_log_path, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite log_suite = {"/log", tests, NULL, 1, MUNIT_SUITE_OPTION_NONE};

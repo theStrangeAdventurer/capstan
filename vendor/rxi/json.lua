@@ -24,6 +24,14 @@
 --
 
 local json = { _version = "0.1.2" }
+local array_mt = {}
+
+function json.array(value)
+	if type(value) ~= "table" then
+		error("expected argument of type table, got " .. type(value))
+	end
+	return setmetatable(value, array_mt)
+end
 
 -------------------------------------------------------------------------------
 -- Encode
@@ -66,7 +74,7 @@ local function encode_table(val, stack)
 
 	stack[val] = true
 
-	if rawget(val, 1) ~= nil then
+	if getmetatable(val) == array_mt or rawget(val, 1) ~= nil then
 		-- Treat as array -- check keys are valid and it is not sparse
 		local n = 0
 		for k in pairs(val) do
@@ -275,7 +283,7 @@ end
 
 
 local function parse_array(str, i)
-	local res = {}
+	local res = json.array({})
 	local n = 1
 	i = i + 1
 	while 1 do

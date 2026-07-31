@@ -11,6 +11,7 @@ capstan run --prompt "Inspect the build failure"
 capstan run --prompt-file task.md --provider openrouter --model anthropic/claude-sonnet-4
 capstan run --prompt-file task.md --reasoning-effort low
 capstan run --profile plan --prompt-file task.md
+capstan run --session-id "my fucking bench" --prompt-file task.md
 capstan run --benchmark --prompt-file task.md --workdir /tmp/repo/task --workspace /tmp/repo
 capstan run --no-wiki --prompt-file task.md --workdir /tmp/capstan-eval
 echo "Summarize this repo" | capstan run --json
@@ -23,6 +24,11 @@ echo "Summarize this repo" | capstan run --json
   They do not update runtime state.
 - `--workdir` sets the base for relative file paths and shell commands.
   `--workspace` sets the containing project/instruction/permission root.
+- `--session-id ID` persists the one-shot prompt and response as a new
+  workspace-scoped session, pins both its ID and title to the exact supplied
+  value, and isolates runtime logs beneath that ID. IDs may contain quoted
+  spaces but not path separators, controls, leading dots, or edge spaces. An
+  existing ID is an error; CLI mode never resumes or overwrites it implicitly.
 - `--profile` selects an agent workflow profile for this run. Accepted values
   are `fast`, `implement`, and `plan`. Profiles can set default reasoning
   effort, append profile-specific system instructions, and restrict available
@@ -66,5 +72,6 @@ not call TUI rendering functions.
 
 ## Tests
 
-`make test` covers CLI option parsing. `make test-build` covers embedded runtime
-availability from an isolated directory.
+`make test` covers CLI option parsing and named-session policy.
+`make test-http-lua` covers session-scoped logging. `make test-build` covers
+embedded runtime availability from an isolated directory.

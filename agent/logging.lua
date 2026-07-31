@@ -1,5 +1,17 @@
 local M = {}
 local redact = require("agent.redact")
+local utf8_sanitize = require("agent.utf8")
+
+local function utf8_prefix(value, limit)
+    if #value <= limit then return value end
+    local cut = math.max(0, limit)
+    while cut > 0 do
+        local next_byte = value:byte(cut + 1)
+        if not next_byte or next_byte < 0x80 or next_byte >= 0xC0 then break end
+        cut = cut - 1
+    end
+    return value:sub(1, cut)
+end
 
 local levels = {
     error = 1,
@@ -29,7 +41,8 @@ end
 function M.runtime_log(category, message, level)
     if not M.enabled(level or "info") then return end
     if _G.capstan and _G.capstan.log then
-        _G.capstan.log(category, redact.text(message or ""))
+        local sanitized = utf8_sanitize.sanitize(redact.text(message or ""))
+        _G.capstan.log(category, sanitized)
     end
 end
 
@@ -42,28 +55,17 @@ function M.trace(category, message)
 end
 
 function M.compact(value, limit)
-    local s = redact.text(tostring(value or ""))
+    local s = utf8_sanitize.sanitize(redact.text(tostring(value or "")))
     s = s:gsub("%s+", " ")
     limit = limit or 240
     if #s > limit then
-        return s:sub(1, limit) .. "...<truncated>"
+        return utf8_prefix(s, limit) .. "...<truncated>"
     end
     return s
 end
 
 function M.raw_logging_enabled()
     return M.enabled("trace")
-end
-
-local function utf8_prefix(value, limit)
-    if #value <= limit then return value end
-    local cut = math.max(0, limit)
-    while cut > 0 do
-        local next_byte = value:byte(cut + 1)
-        if not next_byte or next_byte < 0x80 or next_byte >= 0xC0 then break end
-        cut = cut - 1
-    end
-    return value:sub(1, cut)
 end
 
 function M.truncate(value, limit, suffix)
@@ -76,7 +78,7 @@ function M.truncate(value, limit, suffix)
 end
 
 function M.safe_error(value, limit)
-    local s = redact.text(tostring(value or "error"))
+    local s = utf8_sanitize.sanitize(redact.text(tostring(value or "error")))
     s = s:match("^[^\r\n]*") or ""
     s = s:gsub("%s+", " "):match("^%s*(.-)%s*$")
     if s == "" then s = "error" end

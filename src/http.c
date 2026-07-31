@@ -266,8 +266,11 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
 }
 
 /*
- * http.post_stream(url, body, headers, callback[, timeout_ms])
- * callback(raw_chunk, is_done) is invoked for every received chunk.
+ * http.post_stream(url, body, headers, callback[, timeout_ms[, options]])
+ * callback(raw_chunk, is_done) is invoked for every received chunk. A failed
+ * transfer finishes with callback(nil, true, error, body_or_nil, headers).
+ * options.background keeps metadata/background streams out of the visible
+ * loading state and user-triggered stream cancellation.
  * Returns async_id.
  */
 static int l_http_post_stream(lua_State *L) {
@@ -281,6 +284,7 @@ static int l_http_post_stream(lua_State *L) {
 
   struct curl_slist *headers = parse_headers(L, 3);
   lua_Integer timeout_ms = luaL_optinteger(L, 5, 0);
+  int background = lua_opt_background(L, 6);
 
   luaL_checktype(L, 4, LUA_TFUNCTION);
   lua_pushvalue(L, 4);
@@ -304,7 +308,8 @@ static int l_http_post_stream(lua_State *L) {
   ctx->L = L;
   ctx->callback_ref = callback_ref;
   ctx->headers = headers;
-  ctx->background = 0;
+  ctx->background = background;
+  ctx->response_headers.max_size = HTTP_MAX_HEADER_BYTES;
 
   configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
@@ -331,6 +336,8 @@ static int l_http_post_stream(lua_State *L) {
 
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, stream_write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, ctx);
+  curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
+  curl_easy_setopt(easy, CURLOPT_HEADERDATA, &ctx->response_headers);
 
   if (stream_count >= stream_cap) {
     int new_cap = stream_cap ? stream_cap * 2 : 4;
@@ -737,9 +744,13 @@ int http_poll_limited(lua_State *L, int max_callbacks) {
         lua_pushfstring(L, "HTTP %d", (int)http_status);
       }
 
-      if (has_error && err_body) {
-        nargs = 4;
-        lua_pushstring(L, err_body);
+      if (has_error) {
+        if (err_body)
+          lua_pushstring(L, err_body);
+        else
+          lua_pushnil(L);
+        push_headers_table(L, found->response_headers.data);
+        nargs = 5;
       }
     }
 

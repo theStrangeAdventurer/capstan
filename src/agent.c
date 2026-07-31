@@ -1,6 +1,7 @@
 #include "agent.h"
 #include "dyn_arr.h"
 #include "popup.h"
+#include "session_manager.h"
 #include "utils.h"
 #include <lauxlib.h>
 #include <lua.h>
@@ -9,18 +10,49 @@
 #include <string.h>
 
 static Messages messages = {0};
+static unsigned long g_messages_revision = 0;
 
 Messages *get_messages(void) { return &messages; }
+unsigned long agent_messages_revision(void) { return g_messages_revision; }
 
 static char *g_provider_name = NULL;
 static char *g_provider_model = NULL;
 static char *g_profile_name = NULL;
 static char *g_activity = NULL;
 static int g_thinking = 0;
+static int g_running = 0;
 static UsageStats g_usage = {0};
 
 void agent_set_thinking(int active) { g_thinking = active; }
 int  agent_is_thinking(void)      { return g_thinking; }
+void agent_begin_run(void) { g_running = 1; }
+void agent_finish_run(void) { g_running = 0; }
+int agent_is_running(void) { return g_running; }
+
+static int l_agent_finish_run(lua_State *L) {
+  (void)L;
+  agent_finish_run();
+  return 0;
+}
+
+static int l_agent_session_title_context(lua_State *L) {
+  const char *id = NULL;
+  const char *user_text = NULL;
+  const char *assistant_text = NULL;
+  if (!session_manager_title_context(&id, &user_text, &assistant_text))
+    return 0;
+  lua_pushstring(L, id);
+  lua_pushstring(L, user_text);
+  lua_pushstring(L, assistant_text);
+  return 3;
+}
+
+static int l_agent_set_session_title(lua_State *L) {
+  const char *id = luaL_checkstring(L, 1);
+  const char *title = luaL_checkstring(L, 2);
+  lua_pushboolean(L, session_manager_set_generated_title(id, title));
+  return 1;
+}
 
 static int l_agent_set_thinking(lua_State *L) {
   agent_set_thinking(lua_toboolean(L, 1));
@@ -122,6 +154,7 @@ void append_to_last_message(const char *text, MessageRole role) {
   m->text = new_ptr;
   memcpy(m->raw_text + old_len, text, add_len);
   m->raw_text[old_len + add_len] = '\0';
+  g_messages_revision++;
 }
 
 void add_message(char *text, char *raw_text, MessageRole role) {
@@ -139,6 +172,7 @@ void add_message(char *text, char *raw_text, MessageRole role) {
   message->role = role;
 
   da_append(&messages, message);
+  g_messages_revision++;
 }
 
 void free_message(Message *m) {
@@ -149,7 +183,10 @@ void free_message(Message *m) {
   free(m);
 }
 
-void clear_messages(void) { da_free_each(&messages, free_message); }
+void clear_messages(void) {
+  da_free_each(&messages, free_message);
+  g_messages_revision++;
+}
 
 static int l_agent_replace_compacted_context(lua_State *L) {
   const char *summary = luaL_checkstring(L, 1);
@@ -201,6 +238,12 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "set_profile_info");
   lua_pushcfunction(L, l_agent_set_thinking);
   lua_setfield(L, -2, "set_thinking");
+  lua_pushcfunction(L, l_agent_finish_run);
+  lua_setfield(L, -2, "finish_run");
+  lua_pushcfunction(L, l_agent_session_title_context);
+  lua_setfield(L, -2, "session_title_context");
+  lua_pushcfunction(L, l_agent_set_session_title);
+  lua_setfield(L, -2, "set_session_title");
   lua_pushcfunction(L, l_agent_set_activity);
   lua_setfield(L, -2, "set_activity");
   lua_pushcfunction(L, l_agent_set_usage);
@@ -227,21 +270,41 @@ static void push_messages_table(lua_State *L) {
 }
 
 void agent_build_and_dispatch(lua_State *L) {
+  agent_begin_run();
   push_messages_table(L);
   lua_getglobal(L, "agent_entry");
   if (lua_isfunction(L, -1)) {
     lua_pushvalue(L, -2);
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+      agent_finish_run();
       popup_show_message("Agent Error", lua_tostring(L, -1), 1);
       lua_pop(L, 1);
     }
   } else {
+    agent_finish_run();
     lua_pop(L, 1);
   }
   lua_pop(L, 1);
 }
 
-void agent_compact(lua_State *L) {
+int agent_should_auto_compact(lua_State *L, const char *additional_text) {
+  lua_getglobal(L, "should_auto_compact");
+  if (!lua_isfunction(L, -1)) {
+    lua_pop(L, 1);
+    return 0;
+  }
+  push_messages_table(L);
+  lua_pushstring(L, additional_text ? additional_text : "");
+  if (lua_pcall(L, 2, 1, 0) != LUA_OK) {
+    lua_pop(L, 1);
+    return 0;
+  }
+  int should_compact = lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  return should_compact;
+}
+
+static void agent_compact_internal(lua_State *L, int automatic) {
   Messages *msgs = get_messages();
   int non_empty = 0;
   for (size_t i = 0; i < msgs->size; i++) {
@@ -253,17 +316,27 @@ void agent_compact(lua_State *L) {
     return;
   }
 
+  /* Compact is a top-level operation: keep normal submissions in the existing
+     FIFO until the compacted context has replaced the old history. */
+  agent_begin_run();
   push_messages_table(L);
   lua_getglobal(L, "compact_entry");
   if (lua_isfunction(L, -1)) {
     lua_pushvalue(L, -2);
-    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+    lua_pushboolean(L, automatic);
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+      agent_finish_run();
       popup_show_message("Compact Error", lua_tostring(L, -1), 1);
       lua_pop(L, 1);
     }
   } else {
+    agent_finish_run();
     popup_show_message("Compact Error", "Compact runtime is not initialized", 1);
     lua_pop(L, 1);
   }
   lua_pop(L, 1);
 }
+
+void agent_compact(lua_State *L) { agent_compact_internal(L, 0); }
+
+void agent_auto_compact(lua_State *L) { agent_compact_internal(L, 1); }

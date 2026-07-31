@@ -10,10 +10,9 @@ and clearing conversational context.
 - Cancellation stops future chunks, clears the thinking indicator, and appends
   `[stopped]` to the current agent message.
 - Space always keeps its normal input behavior.
-- `/new` clears all visible messages and pending context badges.
-- `/new` resets token usage and thinking state.
-- `/new` does not create a persisted session; it only clears the current
-  in-memory context.
+- `/new` saves the current conversation and creates a new empty session.
+- `/new` clears pending context badges and resets token usage and thinking state.
+- `/sessions` lists and restores conversations saved for the active workspace.
 
 ## Architecture
 
@@ -21,15 +20,17 @@ and clearing conversational context.
 callbacks, and frees stream resources.
 
 The main input loop handles Esc in input mode before regular text insertion and
-calls the stream cancellation helper when `http_is_loading()` is true. `/new` is
-a built-in dispatch command because it needs direct access to message storage,
-pending context storage, usage state, and active stream cancellation.
+calls the stream cancellation helper when `http_is_loading()` is true. `/new`
+and `/sessions` are built-in dispatch commands because they need direct access
+to persisted sessions, message storage, pending context storage, usage state,
+and active stream cancellation.
 
 ## Constraints
 
 - Blocking plugin HTTP calls still run inside Lua plugin execution and cannot be
   interrupted by Esc until control returns to the main loop.
-- `/new` is intentionally in-memory only until a session model exists.
+- Session switching follows the queued-input policy and is unavailable until the
+  active top-level run completes.
 
 ## Test Notes
 

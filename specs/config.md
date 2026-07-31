@@ -43,6 +43,7 @@ return {
     max_same_shell_command = 0,
     max_generated_output_checks = 1,
     completion_review = true,
+    auto_compact_percent = 80,
   },
   subagents = {
     max_concurrent = 3,
@@ -50,6 +51,10 @@ return {
     max_turns = 6,
     max_turns_cap = 200,
     max_result_bytes = 16384,
+  },
+  tool_output = {
+    max_bytes = 50 * 1024,
+    max_lines = 2000,
   },
   finder = {
     ignore_files = { ".gitignore", ".ignore" },
@@ -85,6 +90,10 @@ return {
 - `redaction` extends secret masking in Lua-visible shell output, tool results,
   and runtime logs. Built-in masking for common credentials remains enabled;
   config entries only add project-specific rules.
+- `tool_output.max_bytes` and `tool_output.max_lines` bound each tool result
+  inserted into provider continuation history. Defaults are 50 KiB and 2,000
+  lines. The visible truncation marker includes the original byte count and
+  directs the model toward a narrower query or paged read.
 - `hooks` registers [agent hook](hooks.md) functions during runtime startup.
 - `capabilities.self_improvement = true` explicitly enables the built-in
   [self-improvement skill](self-improvement.md). It is disabled by default.
@@ -109,6 +118,14 @@ return {
   Successful validation suppresses the redundant pass until another workspace
   write invalidates that evidence. The review shares the same conversation and
   tools, runs at most once per root agent run, and is not run for subagents.
+- `agent.auto_compact_percent` controls automatic conversation compaction in
+  the interactive TUI. Before an ordinary submission, Capstan estimates the
+  complete next prompt, including the system/profile instructions, current
+  history, new user text, and available tool schemas. At or above the threshold
+  it compacts the existing history first and keeps the new submission in the
+  normal FIFO. The default is `80`; `0` disables automatic compacting. Values
+  above `100` are treated as `100`. Auto-compact is skipped when the active
+  model's context limit is unknown.
 - `agent.profile` sets the default workflow profile. Accepted values are
   `fast`, `implement`, and `plan`. Profiles may append system instructions,
   set a default reasoning effort, and restrict model tools. Slash commands

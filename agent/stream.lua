@@ -5,6 +5,55 @@ local tokens = require("agent.tokens")
 
 local M = {}
 
+local function structured_error_message(value)
+    if type(value) == "string" and value ~= "" then return value end
+    if type(value) ~= "table" then return nil end
+    local message = type(value.message) == "string" and value.message or nil
+    local code = type(value.code) == "string" and value.code or nil
+    if message and code and not message:find(code, 1, true) then
+        return code .. ": " .. message
+    end
+    return message or code
+end
+
+local function error_detail_from_body(body)
+    if type(body) ~= "string" or body == "" then return nil end
+
+    local function extract(value)
+        if type(value) ~= "table" then return nil end
+        return structured_error_message(value.error)
+            or (type(value.response) == "table" and structured_error_message(value.response.error))
+    end
+
+    local ok, decoded = pcall(json.decode, body)
+    if ok then
+        local detail = extract(decoded)
+        if detail then return detail end
+    end
+
+    for data in body:gmatch("data:%s*([^\r\n]+)") do
+        local event_ok, event = pcall(json.decode, data)
+        if event_ok then
+            local detail = extract(event)
+            if detail then return detail end
+        end
+    end
+    local plain = body:gsub("<[^>]+>", " "):gsub("%s+", " ")
+    plain = plain:match("^%s*(.-)%s*$") or ""
+    return plain ~= "" and plain or nil
+end
+
+local function error_header_context(headers)
+    if type(headers) ~= "table" then return nil, nil end
+    local request_id = headers["x-request-id"]
+        or headers["request-id"]
+        or headers["openai-request-id"]
+    local edge_id = headers["cf-ray"]
+    if type(request_id) ~= "string" or request_id == "" then request_id = nil end
+    if type(edge_id) ~= "string" or edge_id == "" then edge_id = nil end
+    return request_id, edge_id
+end
+
 local function unquote_shell_token(token)
     if type(token) ~= "string" then return "" end
     if #token >= 2 then
@@ -155,6 +204,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local has_chunk_hooks = hooks.has("on_stream_chunk")
     local buffer_text_until_done = minimax_model(provider)
     local finished = false
+    local provider_error = nil
 
     local function filter_leaked_think(delta, final)
         local s = leaked_think_pending .. (delta or "")
@@ -216,7 +266,10 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     end
 
     local function process_chunk(chunk)
-        if chunk.type == "reasoning" then
+        if chunk.type == "provider_error" then
+            provider_error = provider_error or logging.safe_error(chunk.error, 500)
+            logging.runtime_log("stream", "provider_error=" .. provider_error, "error")
+        elseif chunk.type == "reasoning" then
             reasoning_chunks = reasoning_chunks + 1
             local reasoning_content = chunk.content or ""
             accumulated_reasoning = accumulated_reasoning .. reasoning_content
@@ -299,15 +352,37 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
         end
     end
 
-    return function(raw, is_done, err, body)
+    return function(raw, is_done, err, body, response_headers)
         if finished then return end
         if err then
             finished = true
             if reasoning_active and not provider.suppress_agent_state then agent.set_thinking(false) end
-            -- The body can be the beginning of a partially received SSE stream,
-            -- including arbitrary model output. It is diagnostic transport data,
-            -- not a safe model-visible error message.
             local msg = logging.safe_error(err, 240)
+            local detail = error_detail_from_body(body)
+            local request_id, edge_id = error_header_context(response_headers)
+            if detail then
+                detail = logging.safe_error(detail, 500)
+                logging.runtime_log("stream", "transport_error status=" .. msg ..
+                    " detail=" .. detail, "error")
+                if not msg:find(detail, 1, true) then
+                    msg = logging.safe_error(msg .. ": " .. detail, 500)
+                end
+            else
+                local unavailable = "provider returned an empty error body"
+                logging.runtime_log("stream", "transport_error status=" .. msg ..
+                    " body_detail=unavailable", "error")
+                msg = logging.safe_error(msg .. ": " .. unavailable, 500)
+            end
+            if request_id then
+                request_id = logging.safe_error(request_id, 160)
+                logging.runtime_log("stream", "transport_request_id=" .. request_id, "error")
+                msg = logging.safe_error(msg .. " (request id: " .. request_id .. ")", 700)
+            end
+            if edge_id then
+                edge_id = logging.safe_error(edge_id, 160)
+                logging.runtime_log("stream", "transport_edge_id=" .. edge_id, "error")
+                msg = logging.safe_error(msg .. " (cf-ray: " .. edge_id .. ")", 800)
+            end
             if not provider.suppress_agent_state then
                 popup.error("API Error", msg)
             end
@@ -382,6 +457,25 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                     incomplete_calls,
                     #final_calls
                 ), "warn")
+            end
+            if provider_error then
+                logging.runtime_log("stream", string.format(
+                    "failed events=%d raw_bytes=%d text_bytes=%d reasoning_bytes=%d error=%s",
+                    event_count,
+                    raw_bytes,
+                    #accumulated_text,
+                    #accumulated_reasoning,
+                    logging.compact(provider_error, 500)
+                ), "error")
+                on_result({
+                    ok = false,
+                    error = provider_error,
+                    text = accumulated_text,
+                    reasoning = accumulated_reasoning ~= "" and accumulated_reasoning or nil,
+                    reasoning_details = #accumulated_reasoning_details > 0 and
+                        accumulated_reasoning_details or nil,
+                }, true)
+                return
             end
             if accumulated_text == "" and #final_calls == 0 then
                 local kind = accumulated_reasoning ~= "" and "reasoning_only_response" or "empty_response"

@@ -4,6 +4,7 @@ local logging = require("agent.logging")
 local mcp_client = require("agent.mcp")
 local workspace = require("agent.workspace")
 local redact = require("agent.redact")
+local utf8_sanitize = require("agent.utf8")
 
 local M = {}
 
@@ -539,7 +540,7 @@ local function run_subagents(args, run_ctx)
     local max_attempts = subagent_max_attempts()
     local max_result_bytes = subagent_max_result_bytes()
 
-    agent.append(string.format("\n⚙ subagents: running %d concurrent, %d total\n", max_concurrent, #args.tasks), "agent")
+    agent.append(string.format("\n\n⚙ subagents: running %d concurrent, %d total\n", max_concurrent, #args.tasks), "agent")
     for _, task in ipairs(args.tasks) do
         agent.append("  " .. task_label(task) .. "\n", "agent")
     end
@@ -705,7 +706,7 @@ local function run_subagents(args, run_ctx)
     local group_finished_at = now_ms()
     local group_duration_ms = math.max(0, math.floor(group_finished_at - group_started_at))
 
-    agent.append(string.format("\n⚙ subagents: done %d/%d, error %d/%d, %.1fs\n",
+    agent.append(string.format("\n\n⚙ subagents: done %d/%d, error %d/%d, %.1fs\n",
         done_count, #results, error_count, #results, group_duration_ms / 1000.0), "agent")
     for _, result in ipairs(results) do
         local status = result.ok and "done" or "error"
@@ -1005,6 +1006,40 @@ local function tool_result_text(result)
     return tostring(result or "")
 end
 
+local function tool_output_limits()
+    local configured = config_table("tool_output") or {}
+    local max_bytes = tonumber(configured.max_bytes) or (50 * 1024)
+    local max_lines = tonumber(configured.max_lines) or 2000
+    return math.max(1024, math.floor(max_bytes)),
+        math.max(1, math.floor(max_lines))
+end
+
+local function bound_tool_result(text)
+    local sanitized, invalid_bytes = utf8_sanitize.sanitize(text)
+    local max_bytes, max_lines = tool_output_limits()
+    local line_count = 1
+    local line_cut = nil
+    for newline in sanitized:gmatch("()\n") do
+        if line_count == max_lines then
+            line_cut = newline
+            break
+        end
+        line_count = line_count + 1
+    end
+    if not line_cut and #sanitized <= max_bytes then
+        return sanitized, false, invalid_bytes
+    end
+
+    local original_bytes = #sanitized
+    local candidate = line_cut and sanitized:sub(1, line_cut - 1) or sanitized
+    local suffix = string.format(
+        "\n\n[Tool output truncated: %d bytes; use a narrower query or a paged read.]",
+        original_bytes
+    )
+    local prefix = logging.truncate(candidate, math.max(0, max_bytes - #suffix), "")
+    return prefix .. suffix, true, invalid_bytes
+end
+
 local function tool_result_images(result)
     if type(result) ~= "table" or type(result.images) ~= "table" then return {} end
     return result.images
@@ -1041,9 +1076,9 @@ end
 local function tool_status_prefix(tool_name, display_target, display_command)
     local phase = tool_phase(tool_name, display_command)
     if display_command then
-        return string.format("\n⚙ %s\n  %s\n  $ %s ", tool_name, phase, display_command)
+        return string.format("\n\n⚙ %s\n  %s\n  $ %s ", tool_name, phase, display_command)
     end
-    return string.format("\n⚙ %s\n  %s: %s ", tool_name, phase, display_target)
+    return string.format("\n\n⚙ %s\n  %s: %s ", tool_name, phase, display_target)
 end
 
 local function tool_status_suffix(status, _display_command)
@@ -1218,14 +1253,14 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         if not tool_available(combined_tools, tc.name) then
             result_content = "Tool " .. tostring(tc.name) .. " is not available in the active profile"
             logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tc.name)))
-            append_status(string.format("\n⚙ %s: unavailable — denied\n\n", tostring(tc.name)))
+            append_status(string.format("\n\n⚙ %s: unavailable — denied\n\n", tostring(tc.name)))
         else
             local args, decode_err = decode_tool_arguments(tc.arguments, run_ctx)
 
             if decode_err then
                 result_content = decode_err
                 logging.runtime_log("tool", string.format("invalid_args name=%s error=%s", tc.name, logging.compact(decode_err, 240)))
-                append_status(string.format("\n⚙ %s: invalid arguments — error\n\n", tc.name))
+                append_status(string.format("\n\n⚙ %s: invalid arguments — error\n\n", tc.name))
             else
                 local target = tool_call_target(tc.name, args)
                 local permission_tool = tool_permission_name(tc.name)
@@ -1253,7 +1288,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 if not tool_available(combined_tools, tool_name) then
                     result_content = "Tool " .. tostring(tool_name) .. " is not available in the active profile"
                     logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tool_name)))
-                    append_status(string.format("\n⚙ %s: unavailable — denied\n\n", tostring(tool_name)))
+                    append_status(string.format("\n\n⚙ %s: unavailable — denied\n\n", tostring(tool_name)))
                 else
                     if tool_name == "subagents" then
                         permission_tool = nil
@@ -1376,10 +1411,23 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
 
         if result_content then
             local result_text = tool_result_text(result_content)
+            local bounded, truncated, invalid_bytes = bound_tool_result(result_text)
+            if invalid_bytes > 0 then
+                logging.runtime_log("tool", string.format(
+                    "replaced_invalid_utf8_bytes=%d name=%s",
+                    invalid_bytes, tostring(tc.name)
+                ), "warn")
+            end
+            if truncated then
+                logging.runtime_log("tool", string.format(
+                    "result_truncated name=%s original_bytes=%d",
+                    tostring(tc.name), #result_text
+                ), "warn")
+            end
             table.insert(current_msgs, {
                 role = "tool",
                 tool_call_id = tc.id,
-                content = result_text ~= "" and result_text or "[image attached]"
+                content = bounded ~= "" and bounded or "[image attached]"
             })
             for _, image in ipairs(tool_result_images(result_content)) do
                 if type(image) == "table" and type(image.data) == "string" and

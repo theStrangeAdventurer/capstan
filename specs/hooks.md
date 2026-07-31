@@ -94,7 +94,9 @@ plugin.hooks = {
   more tool calls. This is the point where all tool continuations are done and
   control returns to the user. Receives `ctx.text`, `ctx.messages`,
   `ctx.tools`, `ctx.provider`, `ctx.provider_name`, `ctx.runtime`, and
-  `ctx.run`.
+  `ctx.run`. Internal metadata runs may set `skip_after_agent_turn = true`;
+  session-title generation does so because it does not return control to the
+  user and must not trigger notifications or automation.
 - `after_subagents`: after all internal subagent runs complete and before the
   structured result is returned to the orchestrator as a tool result. May change
   `ctx.result`.

@@ -19,6 +19,7 @@ typedef struct {
   const char *reasoning_effort;
   const char *workdir;
   const char *workspace;
+  const char *session_id;
   int max_turns;
   int json;
   int no_mcp;

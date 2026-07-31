@@ -1,18 +1,22 @@
 #include "log.h"
 #include "app_config.h"
 #include "redact.h"
+#include "session.h"
 #include <lauxlib.h>
 #include <lua.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #define LOG_MAX_BYTES (10L * 1024L * 1024L)
 #define LOG_MAX_ARCHIVES 5
 
 static lua_State *g_log_lua = NULL;
+static char g_log_session_id[SESSION_ID_SIZE] = "";
 
 int log_path(char *buf, size_t buf_size) {
   time_t now = time(NULL);
@@ -20,24 +24,66 @@ int log_path(char *buf, size_t buf_size) {
   struct tm *tm = localtime_r(&now, &tm_buf);
   char name[64];
   if (tm) {
-    if (strftime(name, sizeof(name), "logs/%Y-%m-%d.log", tm) == 0)
+    if (strftime(name, sizeof(name), "%Y-%m-%d.log", tm) == 0)
       return -1;
   } else {
-    snprintf(name, sizeof(name), "logs/unknown-date.log");
+    snprintf(name, sizeof(name), "unknown-date.log");
   }
-  return app_state_path(buf, buf_size, name);
+  char relative[512];
+  int n;
+  if (g_log_session_id[0])
+    n = snprintf(relative, sizeof(relative), "logs/sessions/%s/%s",
+                 g_log_session_id, name);
+  else
+    n = snprintf(relative, sizeof(relative), "logs/%s", name);
+  if (n < 0 || (size_t)n >= sizeof(relative))
+    return -1;
+  return app_state_path(buf, buf_size, relative);
+}
+
+int log_set_session_id(const char *session_id) {
+  if (!session_id || !session_id[0]) {
+    g_log_session_id[0] = '\0';
+    return 1;
+  }
+  if (!session_id_valid(session_id))
+    return 0;
+  snprintf(g_log_session_id, sizeof(g_log_session_id), "%s", session_id);
+  return 1;
+}
+
+const char *log_session_id(void) { return g_log_session_id; }
+
+static int ensure_dir(const char *path, mode_t mode) {
+  struct stat st;
+  if (stat(path, &st) == 0) {
+    if (!S_ISDIR(st.st_mode))
+      return -1;
+    chmod(path, mode);
+    return 0;
+  }
+  return mkdir(path, mode);
 }
 
 static int ensure_log_dir(void) {
-  char dir[512];
-  if (app_state_path(dir, sizeof(dir), "logs") != 0)
+  char logs[512];
+  if (app_state_path(logs, sizeof(logs), "logs") != 0 ||
+      ensure_dir(logs, 0755) != 0)
     return -1;
 
-  struct stat st;
-  if (stat(dir, &st) == 0)
-    return S_ISDIR(st.st_mode) ? 0 : -1;
+  if (!g_log_session_id[0])
+    return 0;
 
-  return mkdir(dir, 0755);
+  char sessions[512];
+  int n = snprintf(sessions, sizeof(sessions), "%s/sessions", logs);
+  if (n < 0 || (size_t)n >= sizeof(sessions) ||
+      ensure_dir(sessions, 0700) != 0)
+    return -1;
+  char scoped[512];
+  n = snprintf(scoped, sizeof(scoped), "%s/%s", sessions, g_log_session_id);
+  if (n < 0 || (size_t)n >= sizeof(scoped))
+    return -1;
+  return ensure_dir(scoped, 0700);
 }
 
 static void sanitize(char *s) {
@@ -138,9 +184,15 @@ void log_event(const char *category, const char *message) {
 
   rotate_if_needed(path);
 
-  FILE *f = fopen(path, "a");
-  if (!f)
+  int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+  if (fd < 0)
     return;
+  FILE *f = fdopen(fd, "a");
+  if (!f) {
+    close(fd);
+    return;
+  }
+  chmod(path, 0600);
 
   time_t now = time(NULL);
   struct tm tm_buf;
@@ -166,7 +218,11 @@ void log_event(const char *category, const char *message) {
   }
   sanitize(redacted);
 
-  fprintf(f, "%s [%s] %s\n", ts, cat, redacted);
+  if (g_log_session_id[0])
+    fprintf(f, "%s [session:%s] [%s] %s\n", ts, g_log_session_id, cat,
+            redacted);
+  else
+    fprintf(f, "%s [%s] %s\n", ts, cat, redacted);
   free(redacted);
   fclose(f);
 }
@@ -206,4 +262,7 @@ void log_init(lua_State *L) {
   lua_setglobal(L, "capstan");
 }
 
-void log_cleanup(void) { g_log_lua = NULL; }
+void log_cleanup(void) {
+  g_log_lua = NULL;
+  g_log_session_id[0] = '\0';
+}

@@ -6,11 +6,15 @@
 #include "input.h"
 #include "input_history.h"
 #include "linemap.h"
+#include "log.h"
 #include "mode.h"
 #include "plugins.h"
 #include "popup.h"
 #include "scroll.h"
+#include "session.h"
+#include "session_manager.h"
 #include "tui.h"
+#include "utils.h"
 #include "visual.h"
 #include <lauxlib.h>
 #include <locale.h>
@@ -149,7 +153,10 @@ static int message_pane_geometry(int *out_y, int *out_x, int *out_h,
        !popup_is_message_active())
           ? 1
           : 0;
-  int msg_h = rows - INPUT_WIN_HEIGHT - 2 * MARGIN - badge_h;
+  int queue_h = (!popup_is_active() && !popup_is_message_active())
+                    ? dispatch_queue_visible_size()
+                    : 0;
+  int msg_h = rows - INPUT_WIN_HEIGHT - 2 * MARGIN - badge_h - queue_h;
   int inner_w = cols - 2 * MARGIN;
   if (msg_h < 1 || inner_w < 1)
     return 0;
@@ -254,10 +261,14 @@ static void flash_copy_active_selection(void) {
 static int stop_active_stream(void) {
   if (!http_is_loading())
     return 0;
+  int compacting = strcmp(agent_activity(), "Compacting") == 0;
   if (http_cancel_streams(L) <= 0)
     return 0;
   agent_set_thinking(0);
-  append_to_last_message("\n[stopped]\n", MSG_AGENT);
+  agent_set_activity(NULL);
+  agent_finish_run();
+  if (!compacting)
+    append_to_last_message("\n[stopped]\n", MSG_AGENT);
   return 1;
 }
 
@@ -315,6 +326,7 @@ static void print_help(void) {
   printf("                      Reasoning effort: none, minimal, low, medium, high, xhigh, max\n");
   printf("  --workdir PATH      Override command and relative-file directory\n");
   printf("  --workspace PATH    Override workspace root and permission boundary\n");
+  printf("  --session-id ID     Persist this run and isolate its logs by session\n");
   printf("  --max-turns N       Limit agent continuation rounds (default: 200)\n");
   printf("  --no-mcp           Do not start configured MCP servers for this run\n");
   printf("  --no-wiki          Do not load or initialize wiki context for this run\n");
@@ -460,6 +472,94 @@ static void print_json_result(int ok, const char *text, const char *error) {
   printf("}\n");
 }
 
+static int headless_session_begin(const CliOptions *opts, const char *prompt,
+                                  Session *session, char *error,
+                                  size_t error_size) {
+  memset(session, 0, sizeof(*session));
+  if (!opts->session_id)
+    return 1;
+  if (!session_id_valid(opts->session_id)) {
+    snprintf(error, error_size,
+             "invalid --session-id: use a non-empty name under %d bytes "
+             "without slashes, control characters, or edge spaces",
+             SESSION_ID_SIZE);
+    return 0;
+  }
+  if (!session_store_init(app_workspace_root())) {
+    snprintf(error, error_size, "could not initialize session storage");
+    return 0;
+  }
+  if (!session_create_named(session, opts->session_id)) {
+    snprintf(error, error_size,
+             "session '%s' already exists or could not be created",
+             opts->session_id);
+    return 0;
+  }
+
+  session->messages = calloc(1, sizeof(SessionMessage));
+  if (!session->messages) {
+    session_delete(session->id);
+    session_free(session);
+    snprintf(error, error_size, "could not allocate session history");
+    return 0;
+  }
+  session->messages[0].role = SESSION_ROLE_USER;
+  session->messages[0].text = my_strdup(prompt);
+  session->messages[0].raw_text = my_strdup(prompt);
+  if (!session->messages[0].text || !session->messages[0].raw_text) {
+    session_delete(session->id);
+    session_free(session);
+    snprintf(error, error_size, "could not allocate session history");
+    return 0;
+  }
+  session->message_count = 1;
+  if (!session_save(session)) {
+    session_delete(session->id);
+    session_free(session);
+    snprintf(error, error_size, "could not save session '%s'",
+             opts->session_id);
+    return 0;
+  }
+  if (!log_set_session_id(session->id)) {
+    session_delete(session->id);
+    session_free(session);
+    snprintf(error, error_size, "could not initialize session log scope");
+    return 0;
+  }
+  return 1;
+}
+
+static int headless_session_finish(Session *session,
+                                   const HeadlessRun *run) {
+  if (!session->id[0])
+    return 1;
+  if (run->text && run->text[0]) {
+    SessionMessage *grown =
+        realloc(session->messages,
+                (session->message_count + 1) * sizeof(SessionMessage));
+    if (!grown)
+      return 0;
+    session->messages = grown;
+    SessionMessage *message = &session->messages[session->message_count];
+    memset(message, 0, sizeof(*message));
+    message->role = SESSION_ROLE_ASSISTANT;
+    message->text = my_strdup(run->text);
+    message->raw_text = my_strdup(run->text);
+    if (!message->text || !message->raw_text) {
+      free(message->text);
+      free(message->raw_text);
+      memset(message, 0, sizeof(*message));
+      return 0;
+    }
+    session->message_count++;
+  }
+  session->updated_at = time(NULL);
+  int ok = session_save(session);
+  log_event("session", ok ? "headless session finished"
+                           : "headless session save failed");
+  return ok;
+}
+
 static int run_headless(const CliOptions *opts, const char *argv0) {
   char *owned_prompt = NULL;
   const char *prompt = opts->prompt;
@@ -494,6 +594,17 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   }
 
   setlocale(LC_ALL, "");
+  Session headless_session = {0};
+  char session_error[256] = "";
+  if (!headless_session_begin(opts, prompt, &headless_session, session_error,
+                              sizeof(session_error))) {
+    if (opts->json)
+      print_json_result(0, "", session_error);
+    else
+      fprintf(stderr, "capstan: %s\n", session_error);
+    free(owned_prompt);
+    return 1;
+  }
   http_set_headless(1);
   PluginsInitOptions plugin_options = {.disable_mcp = opts->no_mcp,
                                        .disable_wiki = opts->no_wiki,
@@ -504,6 +615,8 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   if (!opts->benchmark &&
       app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
     load_plugins_from(global_plugins);
+  if (headless_session.id[0])
+    log_event("session", "headless session started");
 
   lua_getglobal(L, "capstan");
   lua_getfield(L, -1, "agent");
@@ -567,6 +680,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
       fprintf(stderr, "capstan: %s\n", message);
     lua_pop(L, 1);
     plugins_cleanup();
+    session_free(&headless_session);
     free(owned_prompt);
     return 1;
   }
@@ -580,6 +694,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
     else
       fprintf(stderr, "capstan: %s\n", message);
     plugins_cleanup();
+    session_free(&headless_session);
     free(owned_prompt);
     return 1;
   }
@@ -592,6 +707,13 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   if (!g_headless_run.done && !g_headless_run.error[0]) {
     snprintf(g_headless_run.error, sizeof(g_headless_run.error),
              "agent stream ended without completion");
+    g_headless_run.ok = 0;
+  }
+
+  if (!headless_session_finish(&headless_session, &g_headless_run) &&
+      g_headless_run.ok) {
+    snprintf(g_headless_run.error, sizeof(g_headless_run.error),
+             "agent completed but session could not be saved");
     g_headless_run.ok = 0;
   }
 
@@ -611,6 +733,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   int rc = g_headless_run.ok ? 0 : 1;
   free(g_headless_run.text);
   g_headless_run = (HeadlessRun){0};
+  session_free(&headless_session);
   plugins_cleanup();
   free(owned_prompt);
   return rc;
@@ -839,7 +962,9 @@ int main(int argc, char *argv[]) {
     plugins_watch_start(global_plugins);
 
   input_init();
-  input_history_load(app_workdir());
+  input_history_load(app_workspace_root());
+  if (!session_manager_init(app_workspace_root()))
+    popup_show_message("Sessions", "Sessions are unavailable", 1);
   scroll_reset();
   render_all();
   long long last_idle_render_ms = main_now_ms();
@@ -849,6 +974,8 @@ int main(int argc, char *argv[]) {
     int ch = getch();
     if (ch == ERR) {
       int had_http_events = http_poll_limited(L, 2);
+      dispatch_tick();
+      session_manager_tick();
       long long now = main_now_ms();
       int had_mcp_events = 0;
       if (now - last_mcp_tick_ms >= 30) {
@@ -857,8 +984,8 @@ int main(int argc, char *argv[]) {
       }
       plugins_watch_poll();
       napms(10);
-      int active = http_is_loading() || agent_is_thinking() || had_http_events ||
-                   had_mcp_events;
+      int active = http_is_loading() || agent_is_running() ||
+                   agent_is_thinking() || had_http_events || had_mcp_events;
       long long interval =
           active ? ACTIVE_RENDER_INTERVAL_MS : IDLE_RENDER_INTERVAL_MS;
       if (now - last_idle_render_ms >= interval) {
@@ -1044,6 +1171,7 @@ int main(int argc, char *argv[]) {
 
     render_all();
   }
+  session_manager_shutdown();
   terminal_disable_bracketed_paste();
   terminal_reset_mouse_modes();
   endwin();

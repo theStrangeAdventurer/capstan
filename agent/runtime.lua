@@ -5,6 +5,7 @@ local models = require("agent.models")
 local mcp_client = require("agent.mcp")
 local provider_config = require("agent.provider_config")
 local profiles = require("agent.profiles")
+local utf8_sanitize = require("agent.utf8")
 local stream = require("agent.stream")
 local tokens = require("agent.tokens")
 local tools_runtime = require("agent.tools")
@@ -668,15 +669,17 @@ function M.run(opts, callbacks)
                 if defer_visible_text then
                     publish_text(final_text)
                 end
-                hooks.run("after_agent_turn", {
-                    runtime = M,
-                    provider = active,
-                    provider_name = provider_name,
-                    messages = current_msgs,
-                    tools = tools,
-                    text = final_text,
-                    run = opts,
-                })
+                if opts.skip_after_agent_turn ~= true then
+                    hooks.run("after_agent_turn", {
+                        runtime = M,
+                        provider = active,
+                        provider_name = provider_name,
+                        messages = current_msgs,
+                        tools = tools,
+                        text = final_text,
+                        run = opts,
+                    })
+                end
                 finished = true
                 finish({
                     ok = true,
@@ -739,6 +742,13 @@ function M.run(opts, callbacks)
             if callbacks.on_done then callbacks.on_done({ok = false, error = message, text = ""}) end
             return false, message
         end
+        local _, invalid_utf8_bytes = utf8_sanitize.sanitize_values(request)
+        if invalid_utf8_bytes > 0 then
+            logging.runtime_log("api", string.format(
+                "replaced_invalid_utf8_bytes=%d before JSON encoding",
+                invalid_utf8_bytes
+            ), "warn")
+        end
         local body = json.encode(request)
 
         logging.runtime_log("api", string.format("post_stream endpoint=%s messages=%d tools=%d",
@@ -751,7 +761,8 @@ function M.run(opts, callbacks)
             stream_attempt = stream_attempt + 1
             http.post_stream(endpoint, body, headers,
                 stream.stream(active, on_result, prompt_estimate, opts),
-                stream_timeout_sec * 1000)
+                stream_timeout_sec * 1000,
+                {background = opts.background == true})
         end
         start_stream()
     end
@@ -806,6 +817,68 @@ _G.capstan.mcp = {
 
 publish_agent_status()
 
+local AUTO_COMPACT_DEFAULT_PERCENT = 80
+
+local function auto_compact_percent()
+    local configured = config_table("agent")
+    local value = configured and tonumber(configured.auto_compact_percent)
+    if value == nil then return AUTO_COMPACT_DEFAULT_PERCENT end
+    value = math.floor(value)
+    if value <= 0 then return 0 end
+    return math.min(value, 100)
+end
+
+-- Called by the TUI dispatcher before it appends a new user submission. This
+-- mirrors the normal request's system/profile/tool assembly without running
+-- user hooks, which must not gain an extra side-effecting invocation merely
+-- because a budget check occurred.
+_G.should_auto_compact = function(messages, additional_text)
+    local threshold = auto_compact_percent()
+    if threshold == 0 or not messages or #messages == 0 then
+        return false, 0, 0, threshold
+    end
+
+    local profile = effective_profile({})
+    local active, provider_name = prepare_provider({}, profile)
+    if not active then
+        logging.runtime_log("compact",
+            "auto_check skipped unknown_provider=" .. tostring(provider_name),
+            "warn")
+        return false, 0, 0, threshold
+    end
+    local context_limit = models.ensure_context_limit(active)
+    if not context_limit or context_limit <= 0 then
+        logging.runtime_log("compact",
+            "auto_check skipped context_limit=unknown")
+        return false, 0, 0, threshold
+    end
+
+    local candidate = {}
+    for _, message in ipairs(messages) do
+        table.insert(candidate, message)
+    end
+    if type(additional_text) == "string" and additional_text ~= "" then
+        table.insert(candidate, {role = "user", content = additional_text})
+    end
+
+    local request_messages = build_messages(candidate, profile)
+    local request_tools = tools_runtime.collect()
+    request_tools = profiles.filter_tools(request_tools, profile)
+    local estimated_tokens =
+        tokens.estimate_messages_tokens(request_messages, request_tools)
+    local percent = estimated_tokens * 100 / context_limit
+    local trigger = percent >= threshold
+    logging.runtime_log("compact", string.format(
+        "auto_check estimated_tokens=%d context_limit=%d percent=%.1f threshold=%d trigger=%s",
+        estimated_tokens,
+        context_limit,
+        percent,
+        threshold,
+        tostring(trigger)
+    ))
+    return trigger, estimated_tokens, context_limit, threshold
+end
+
 local compact_instruction = [[
 Compact the conversation above into an operational handoff summary for a coding agent.
 
@@ -821,7 +894,44 @@ Preserve only information needed to continue the work correctly:
 Do not write a conversational recap. Do not omit concrete file names, model/provider choices, test results, or unresolved work. Use concise Markdown.
 ]]
 
-local function compact_run_options(messages)
+local function compact_weak_model_fits(weak, compact_messages, automatic)
+    if not weak then return false end
+    local profile = effective_profile({})
+    local active = prepare_provider({
+        provider = weak.provider,
+        model = weak.model,
+        update_status = false,
+        update_usage = false,
+    }, profile)
+    if not active then return false end
+    local context_limit = models.ensure_context_limit(active)
+    if not context_limit or context_limit <= 0 then
+        if automatic then
+            logging.runtime_log("compact", string.format(
+                "weak_model_skipped context_limit=unknown provider=%s model=%s",
+                tostring(weak.provider),
+                tostring(weak.model)
+            ), "warn")
+            return false
+        end
+        return true
+    end
+    local request_messages = build_messages(compact_messages, profile)
+    local estimated_tokens = tokens.estimate_messages_tokens(request_messages, {})
+    local fits = estimated_tokens * 100 < context_limit * 90
+    if not fits then
+        logging.runtime_log("compact", string.format(
+            "weak_model_skipped estimated_tokens=%d context_limit=%d provider=%s model=%s",
+            estimated_tokens,
+            context_limit,
+            tostring(weak.provider),
+            tostring(weak.model)
+        ), "warn")
+    end
+    return fits
+end
+
+local function compact_run_options(messages, automatic)
     local compact_messages = {}
     for _, message in ipairs(messages or {}) do
         table.insert(compact_messages, message)
@@ -832,12 +942,18 @@ local function compact_run_options(messages)
     })
 
     local weak = models.weak(M)
+    if weak and
+       not compact_weak_model_fits(weak, compact_messages, automatic) then
+        weak = nil
+    end
     local opts = {
         messages = compact_messages,
         max_turns = 1,
         tools = {},
+        silent_tools = true,
         update_status = false,
         update_usage = false,
+        skip_after_agent_turn = true,
     }
     if weak then
         opts.provider = weak.provider
@@ -851,14 +967,14 @@ local function compact_run_options(messages)
     return opts, weak
 end
 
-_G.compact_entry = function(messages)
+_G.compact_entry = function(messages, automatic)
     if not messages or #messages == 0 then
         popup.error("Compact", "No conversation to compact")
         return
     end
 
     local chunks = {}
-    local opts, weak = compact_run_options(messages)
+    local opts, weak = compact_run_options(messages, automatic == true)
     agent.set_activity(weak and "Compacting" or "Compacting")
     agent.set_thinking(true)
     M.run(opts, {
@@ -874,16 +990,78 @@ _G.compact_entry = function(messages)
             agent.set_thinking(false)
             agent.set_activity(nil)
             if not result or result.ok == false then
+                agent.finish_run()
                 local message = result and result.error or "compact failed"
                 popup.error("Compact", message)
                 return
             end
             local text = result.text or table.concat(chunks)
+            text = text:gsub("^%s+", ""):gsub("%s+$", "")
             if text == "" then
+                agent.finish_run()
                 popup.error("Compact", "Compact returned an empty summary")
                 return
             end
             agent.replace_compacted_context(text)
+            agent.finish_run()
+        end,
+    })
+end
+
+local session_title_instruction = [[
+Create a concise title for this conversation in the same language as the user.
+Use 3 to 7 words. Return only the title: no quotes, markdown, punctuation suffix,
+or explanation.
+]]
+
+local session_title_jobs = {}
+
+local function generate_session_title()
+    if type(agent.session_title_context) ~= "function" or
+       type(agent.set_session_title) ~= "function" then
+        return
+    end
+    local session_id, user_text, assistant_text = agent.session_title_context()
+    if not session_id or session_title_jobs[session_id] then return end
+    session_title_jobs[session_id] = true
+
+    local weak = models.weak(M)
+    local opts = {
+        messages = {{
+            role = "user",
+            content = session_title_instruction ..
+                "\nUser message:\n" .. user_text ..
+                "\n\nAssistant response:\n" .. assistant_text,
+        }},
+        max_turns = 1,
+        tools = {},
+        background = true,
+        silent_tools = true,
+        update_status = false,
+        update_usage = false,
+        skip_after_agent_turn = true,
+    }
+    if weak then
+        opts.provider = weak.provider
+        opts.model = weak.model
+        if weak.reasoning_effort == "default" then
+            opts.reasoning_effort_default = true
+        else
+            opts.reasoning_effort = weak.reasoning_effort
+        end
+    end
+
+    M.run(opts, {
+        -- Title generation is metadata work. Supplying an explicit text
+        -- callback prevents M.run's UI-visible agent.append fallback.
+        on_text = function() end,
+        on_done = function(result)
+            session_title_jobs[session_id] = nil
+            if not result or result.ok == false then return end
+            local title = tostring(result.text or "")
+            title = title:gsub("^%s+", ""):gsub("%s+$", "")
+            title = title:gsub("^[\"'`]+", ""):gsub("[\"'`]+$", "")
+            if title ~= "" then agent.set_session_title(session_id, title) end
         end,
     })
 end
@@ -901,6 +1079,14 @@ _G.agent_entry = function(messages)
         end,
         on_error = function(message)
             popup.error("Provider", message)
+        end,
+        on_done = function(result)
+            agent.set_thinking(false)
+            agent.set_activity(nil)
+            agent.finish_run()
+            if result and result.ok ~= false then
+                generate_session_title()
+            end
         end,
     })
 end

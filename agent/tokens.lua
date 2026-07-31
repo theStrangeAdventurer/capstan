@@ -4,14 +4,25 @@ local M = {}
 
 function M.estimate_text_tokens(text)
     if type(text) ~= "string" or text == "" then return 0 end
-    local chars = 0
+    -- Keep the common ASCII approximation while charging more for multibyte
+    -- scripts: roughly two Cyrillic-style code points or one CJK/emoji code
+    -- point per token. This remains tokenizer-independent but avoids the old
+    -- four-Unicode-characters-per-token underestimate.
+    local ascii_bytes = 0
+    local two_byte_points = 0
+    local wide_points = 0
     for i = 1, #text do
         local b = text:byte(i)
-        if b < 128 or b >= 192 then
-            chars = chars + 1
+        if b < 128 then
+            ascii_bytes = ascii_bytes + 1
+        elseif b >= 194 and b <= 223 then
+            two_byte_points = two_byte_points + 1
+        elseif b >= 224 then
+            wide_points = wide_points + 1
         end
     end
-    return math.max(1, math.floor(chars / 4 + 0.5))
+    local estimate = ascii_bytes / 4 + two_byte_points / 2 + wide_points
+    return math.max(1, math.floor(estimate + 0.5))
 end
 
 local function estimate_content_tokens(content)

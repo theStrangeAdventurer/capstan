@@ -99,6 +99,10 @@ CliOptions cli_parse(int argc, char **argv) {
       opts.workspace = next_value(argc, argv, &i);
       if (!opts.workspace)
         opts.error = "--workspace requires a value";
+    } else if (is_flag(arg, "--session-id")) {
+      opts.session_id = next_value(argc, argv, &i);
+      if (!opts.session_id)
+        opts.error = "--session-id requires a value";
     } else if (is_flag(arg, "--max-turns")) {
       const char *value = next_value(argc, argv, &i);
       if (!value) {

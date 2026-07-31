@@ -92,6 +92,7 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.tokens", "agent/tokens.lua");
   preload_embedded_asset(L, "agent.images", "agent/images.lua");
   preload_embedded_asset(L, "agent.logging", "agent/logging.lua");
+  preload_embedded_asset(L, "agent.utf8", "agent/utf8.lua");
   preload_embedded_asset(L, "agent.hooks", "agent/hooks.lua");
   preload_embedded_asset(L, "agent.state", "agent/state.lua");
   preload_embedded_asset(L, "agent.auth", "agent/auth.lua");

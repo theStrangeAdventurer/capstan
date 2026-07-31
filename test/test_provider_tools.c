@@ -35,6 +35,7 @@ static int permit_prompt_advance_ms;
 static int mock_models_success;
 static int post_stream_calls;
 static lua_Integer captured_stream_timeout_ms;
+static int captured_stream_background;
 
 static int l_http_get(lua_State *L) {
   const char *url = luaL_checkstring(L, 1);
@@ -59,6 +60,12 @@ static int l_http_get(lua_State *L) {
 static int l_http_post_stream(lua_State *L) {
   post_stream_calls++;
   captured_stream_timeout_ms = luaL_optinteger(L, 5, 0);
+  captured_stream_background = 0;
+  if (lua_istable(L, 6)) {
+    lua_getfield(L, 6, "background");
+    captured_stream_background = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+  }
   size_t body_len = 0;
   const char *body = luaL_checklstring(L, 2, &body_len);
   size_t copy = body_len < sizeof(captured_body) - 1
@@ -363,6 +370,7 @@ static void reset_captures(lua_State *L) {
   mock_models_success = 0;
   post_stream_calls = 0;
   captured_stream_timeout_ms = 0;
+  captured_stream_background = 0;
 }
 
 static void set_permit_decision(const char *decision) {
@@ -2380,6 +2388,12 @@ static MunitResult test_compact_uses_weak_model_and_replaces_history(
   clear_messages();
   set_capstan_provider_config(L);
   set_capstan_config_weak_model(L, "openrouter", "weak/model");
+  set_config_hook(L,
+                  "after_agent_turn = function(ctx) "
+                  "compact_after_turn_calls = "
+                  "(compact_after_turn_calls or 0) + 1 "
+                  "return ctx "
+                  "end");
 
   int rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
@@ -2395,12 +2409,18 @@ static MunitResult test_compact_uses_weak_model_and_replaces_history(
   add_message(assistant, assistant, MSG_AGENT);
 
   agent_compact(L);
+  munit_assert_true(agent_is_running());
   munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
   munit_assert_true(strstr(captured_body, "\"model\":\"weak/model\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"tools\"") == NULL);
   munit_assert_true(strstr(captured_body, "operational handoff summary") != NULL);
 
   send_text_done(L, "Goal: continue compact work");
+
+  munit_assert_false(agent_is_running());
+  lua_getglobal(L, "compact_after_turn_calls");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 1);
 
   Messages *msgs = get_messages();
   munit_assert_size(msgs->size, ==, 1);
@@ -2410,6 +2430,236 @@ static MunitResult test_compact_uses_weak_model_and_replaces_history(
                            "Goal: continue compact work") != NULL);
   munit_assert_true(strstr(msgs->items[0]->raw_text,
                            "Previous conversation was compacted") != NULL);
+
+  clear_messages();
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_compact_whitespace_result_preserves_history(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  clear_messages();
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  char *user = malloc(strlen("keep this user message") + 1);
+  char *assistant = malloc(strlen("keep this assistant response") + 1);
+  munit_assert_not_null(user);
+  munit_assert_not_null(assistant);
+  strcpy(user, "keep this user message");
+  strcpy(assistant, "keep this assistant response");
+  add_message(user, user, MSG_USER);
+  add_message(assistant, assistant, MSG_AGENT);
+
+  agent_compact(L);
+  munit_assert_true(agent_is_running());
+  send_text_done(L, "   ");
+
+  munit_assert_false(agent_is_running());
+  Messages *msgs = get_messages();
+  munit_assert_size(msgs->size, ==, 2);
+  munit_assert_string_equal(msgs->items[0]->text, "keep this user message");
+  munit_assert_string_equal(msgs->items[1]->text,
+                            "keep this assistant response");
+  munit_assert_string_equal(captured_agent_appends, "");
+
+  clear_messages();
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_compact_provider_error_preserves_history_and_finishes(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  clear_messages();
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  char *user = malloc(strlen("original compact context") + 1);
+  munit_assert_not_null(user);
+  strcpy(user, "original compact context");
+  add_message(user, user, MSG_USER);
+
+  agent_compact(L);
+  munit_assert_true(agent_is_running());
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  lua_pushstring(L, "HTTP 400");
+  lua_pushstring(L, "{\"error\":{\"message\":\"invalid compact request\"}}");
+  rc = lua_pcall(L, 4, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_false(agent_is_running());
+  Messages *msgs = get_messages();
+  munit_assert_size(msgs->size, ==, 1);
+  munit_assert_string_equal(msgs->items[0]->text,
+                            "original compact context");
+  munit_assert_string_equal(captured_agent_appends, "");
+
+  clear_messages();
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_auto_compact_estimates_pending_request_and_can_disable(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  clear_messages();
+  set_capstan_provider_config(L);
+  int rc = luaL_dostring(
+      L,
+      "capstan.config.providers.openrouter.context_limit = 100000\n"
+      "capstan.config.agent = {auto_compact_percent = 1}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  char *user = malloc(strlen("short existing context") + 1);
+  munit_assert_not_null(user);
+  strcpy(user, "short existing context");
+  add_message(user, user, MSG_USER);
+
+  munit_assert_false(agent_should_auto_compact(L, ""));
+
+  char pending[8192];
+  memset(pending, 'x', sizeof(pending) - 1);
+  pending[sizeof(pending) - 1] = '\0';
+  munit_assert_true(agent_should_auto_compact(L, pending));
+  munit_assert_true(strstr(captured_logs,
+                           "[compact] auto_check estimated_tokens=") != NULL);
+  munit_assert_true(strstr(captured_logs, "threshold=1 trigger=true") != NULL);
+
+  rc = luaL_dostring(L, "capstan.config.agent.auto_compact_percent = 0");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_false(agent_should_auto_compact(L, pending));
+
+  clear_messages();
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_token_estimate_is_conservative_for_utf8(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dostring(
+      L,
+      "local tokens = require('agent.tokens')\n"
+      "ascii_token_estimate = tokens.estimate_text_tokens('test')\n"
+      "utf8_token_estimate = tokens.estimate_text_tokens('тест')\n"
+      "cjk_token_estimate = tokens.estimate_text_tokens('上下文')\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "ascii_token_estimate");
+  munit_assert_int(lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  lua_getglobal(L, "utf8_token_estimate");
+  munit_assert_int(lua_tointeger(L, -1), ==, 2);
+  lua_pop(L, 1);
+  lua_getglobal(L, "cjk_token_estimate");
+  munit_assert_int(lua_tointeger(L, -1), ==, 3);
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_compact_skips_weak_model_with_smaller_context(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  clear_messages();
+  set_capstan_provider_config(L);
+  set_capstan_config_weak_model(L, "openrouter", "weak/model");
+  int rc = luaL_dostring(
+      L,
+      "capstan.config.providers.openrouter.models = {"
+      "{id = 'weak/model', context_length = 1000}"
+      "}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  char *history = malloc(12001);
+  munit_assert_not_null(history);
+  memset(history, 'h', 12000);
+  history[12000] = '\0';
+  add_message(history, history, MSG_USER);
+
+  agent_compact(L);
+  munit_assert_true(agent_is_running());
+  munit_assert_true(strstr(captured_body, "\"model\":\"config/model\"") !=
+                    NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[compact] weak_model_skipped") != NULL);
+  send_text_done(L, "short handoff");
+  munit_assert_false(agent_is_running());
+
+  clear_messages();
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_auto_compact_skips_weak_model_with_unknown_context(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  clear_messages();
+  set_capstan_provider_config(L);
+  set_capstan_config_weak_model(L, "openrouter", "unknown/weak");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  char *history = malloc(strlen("history for automatic compact") + 1);
+  munit_assert_not_null(history);
+  strcpy(history, "history for automatic compact");
+  add_message(history, history, MSG_USER);
+
+  agent_auto_compact(L);
+  munit_assert_true(agent_is_running());
+  munit_assert_true(strstr(captured_body, "\"model\":\"config/model\"") !=
+                    NULL);
+  munit_assert_true(strstr(
+      captured_logs,
+      "[compact] weak_model_skipped context_limit=unknown") != NULL);
+  send_text_done(L, "automatic handoff");
+  munit_assert_false(agent_is_running());
 
   clear_messages();
   reset_captures(L);
@@ -2844,8 +3094,43 @@ static MunitResult test_stream_error_finishes_with_error(
   rc = lua_pcall(L, 4, 0, 0);
   munit_assert_int(rc, ==, LUA_OK);
 
-  munit_assert_true(strstr(captured_logs, "[agent] stream failed error=HTTP 401") != NULL);
-  munit_assert_true(strstr(captured_logs, "bad key") == NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[stream] transport_error status=HTTP 401 detail=bad key") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[agent] stream failed error=HTTP 401: bad key") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_stream_error_empty_body_includes_request_id(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  lua_pushstring(L, "HTTP 400");
+  lua_pushnil(L);
+  lua_newtable(L);
+  lua_pushstring(L, "req-test-400");
+  lua_setfield(L, -2, "x-request-id");
+  rc = lua_pcall(L, 5, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_true(strstr(
+      captured_logs,
+      "[agent] stream failed error=HTTP 400: provider returned an empty error "
+      "body (request id: req-test-400)") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -3151,6 +3436,8 @@ static MunitResult test_chunked_tool_call_arguments_continue_with_tool_result(
                            "[stream] mixed_text_and_tool_calls text_bytes=15 final_tool_calls=1") != NULL);
   munit_assert_true(strstr(captured_logs,
                            "[agent] continuing mixed response text_bytes=15 tool_calls=1") != NULL);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "Checking first.\n\n⚙ fetch") != NULL);
   munit_assert_true(strstr(captured_logs,
                            "[tools] received 1 tool call(s) assistant_text_bytes=15") != NULL);
   munit_assert_true(strstr(captured_logs, "final_tool_calls=1") != NULL);
@@ -3782,6 +4069,98 @@ static void send_text_done(lua_State *L, const char *text) {
   lua_pushboolean(L, 1);
   rc = lua_pcall(L, 2, 0, 0);
   munit_assert_int(rc, ==, LUA_OK);
+}
+
+static MunitResult test_session_title_generation_is_silent(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_config_hook(L,
+                  "after_agent_turn = function(ctx) "
+                  "session_after_turn_calls = (session_after_turn_calls or 0) + 1 "
+                  "return ctx "
+                  "end");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  rc = luaL_dostring(
+      L,
+      "agent.session_title_context = function()\n"
+      "  return 'session-1', 'How do sessions work?', 'They are persisted.'\n"
+      "end\n"
+      "agent.set_session_title = function(id, title)\n"
+      "  generated_session_id = id\n"
+      "  generated_session_title = title\n"
+      "end\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  call_agent_entry(L);
+  send_text_done(L, "Visible answer");
+  munit_assert_int(post_stream_calls, ==, 2);
+  munit_assert_true(captured_stream_background);
+  munit_assert_string_equal(captured_agent_appends, "Visible answer");
+  munit_assert_true(strstr(captured_body, "How do sessions work?") != NULL);
+  munit_assert_true(strstr(captured_body, "They are persisted.") != NULL);
+  lua_getglobal(L, "session_after_turn_calls");
+  munit_assert_int(lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+
+  send_text_done(L, "Persisted session workflow");
+  munit_assert_string_equal(captured_agent_appends, "Visible answer");
+  lua_getglobal(L, "generated_session_id");
+  munit_assert_string_equal(lua_tostring(L, -1), "session-1");
+  lua_pop(L, 1);
+  lua_getglobal(L, "generated_session_title");
+  munit_assert_string_equal(lua_tostring(L, -1),
+                            "Persisted session workflow");
+  lua_pop(L, 1);
+  lua_getglobal(L, "session_after_turn_calls");
+  munit_assert_int(lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_failed_response_skips_session_title(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  rc = luaL_dostring(
+      L,
+      "agent.session_title_context = function()\n"
+      "  title_context_calls = (title_context_calls or 0) + 1\n"
+      "  return 'session-1', 'Question', 'Partial answer'\n"
+      "end\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  call_agent_entry(L);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  lua_pushstring(L, "HTTP 401");
+  lua_pushstring(L, "{\"error\":\"bad key\"}");
+  rc = lua_pcall(L, 4, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_int(post_stream_calls, ==, 1);
+  lua_getglobal(L, "title_context_calls");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
 }
 
 static MunitResult test_tool_guard_stops_repeated_shell_command(
@@ -5063,6 +5442,165 @@ static MunitResult test_provider_parse_sse_event_override(
   return MUNIT_OK;
 }
 
+static MunitResult test_json_array_preserves_empty_array_encoding(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int rc = luaL_dostring(
+      L,
+      "local json = require('vendor.rxi.json')\n"
+      "encoded_empty_array = json.encode(json.array({}))\n"
+      "encoded_decoded_array = json.encode(json.decode('[]'))\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "encoded_empty_array");
+  munit_assert_string_equal(lua_tostring(L, -1), "[]");
+  lua_pop(L, 1);
+  lua_getglobal(L, "encoded_decoded_array");
+  munit_assert_string_equal(lua_tostring(L, -1), "[]");
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_runtime_sanitizes_invalid_utf8_before_request(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "agent_entry");
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "user");
+  lua_setfield(L, -2, "role");
+  const char invalid[] = {'b', 'a', 'd', ':', (char)0xd0, '.', '\0'};
+  lua_pushlstring(L, invalid, sizeof(invalid) - 1);
+  lua_setfield(L, -2, "content");
+  lua_rawseti(L, -2, 1);
+  rc = lua_pcall(L, 1, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_not_null(strstr(captured_body, "bad:\xef\xbf\xbd."));
+  munit_assert_true(strstr(captured_logs,
+                           "[api] replaced_invalid_utf8_bytes=1") != NULL);
+
+  rc = luaL_dostring(
+      L,
+      "local utf8 = require('agent.utf8')\n"
+      "local input = {['bad' .. string.char(0xd0)] = 'value'}\n"
+      "local sanitized, count = utf8.sanitize_values(input)\n"
+      "sanitized_key, sanitized_key_count = next(sanitized), count\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "sanitized_key");
+  munit_assert_string_equal(lua_tostring(L, -1), "bad\xef\xbf\xbd");
+  lua_pop(L, 1);
+  lua_getglobal(L, "sanitized_key_count");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_output_is_bounded_before_continuation(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dostring(
+      L,
+      "plugins.large_output = {\n"
+      "  tool = {\n"
+      "    name = 'large_output', permission = false,\n"
+      "    description = 'Return a large result',\n"
+      "    parameters = {type = 'object', properties = {}}\n"
+      "  },\n"
+      "  handler = function() return string.rep('x', 60000) end\n"
+      "}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  call_agent_entry(L);
+  send_tool_call(L, "call_large", "large_output", "{}");
+
+  munit_assert_not_null(strstr(
+      captured_body,
+      "[Tool output truncated: 60000 bytes; use a narrower query or a paged "
+      "read.]"));
+  munit_assert_true(strlen(captured_body) < 60000);
+  munit_assert_true(strstr(captured_logs,
+                           "[tool] result_truncated name=large_output "
+                           "original_bytes=60000") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_provider_stream_error_event_skips_empty_retry(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int rc = luaL_dostring(
+      L,
+      "capstan.config = {providers = {deepseek = {"
+      "parse_sse_event = function(raw) "
+      "return {type = 'provider_error', error = 'invalid_prompt: rejected'} "
+      "end"
+      "}}}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushstring(L, "provider-error-event\n\n");
+  lua_pushboolean(L, 0);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, stream_callback_ref);
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  rc = lua_pcall(L, 2, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+
+  munit_assert_int(post_stream_calls, ==, 1);
+  munit_assert_true(strstr(captured_logs,
+                           "[stream] provider_error=invalid_prompt: rejected") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[agent] stream failed error=invalid_prompt: rejected") != NULL);
+  munit_assert_true(strstr(captured_logs, "requesting finalization") == NULL);
+  munit_assert_true(strstr(captured_logs, "[stream] empty_response") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_hook_error_logs_and_keeps_request(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -5091,6 +5629,12 @@ static MunitResult test_hook_error_logs_and_keeps_request(
 }
 
 static MunitTest tests[] = {
+    {"/session_title_generation_is_silent",
+     test_session_title_generation_is_silent, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/failed_response_skips_session_title",
+     test_failed_response_skips_session_title, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/request_enables_auto_tool_choice", test_request_enables_auto_tool_choice,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/request_applies_reasoning_effort", test_request_applies_reasoning_effort,
@@ -5214,6 +5758,24 @@ static MunitTest tests[] = {
     {"/compact_uses_weak_model_and_replaces_history",
      test_compact_uses_weak_model_and_replaces_history, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/compact_whitespace_result_preserves_history",
+     test_compact_whitespace_result_preserves_history, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/compact_provider_error_preserves_history_and_finishes",
+     test_compact_provider_error_preserves_history_and_finishes, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/auto_compact_estimates_pending_request_and_can_disable",
+     test_auto_compact_estimates_pending_request_and_can_disable, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/token_estimate_is_conservative_for_utf8",
+     test_token_estimate_is_conservative_for_utf8, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/compact_skips_weak_model_with_smaller_context",
+     test_compact_skips_weak_model_with_smaller_context, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/auto_compact_skips_weak_model_with_unknown_context",
+     test_auto_compact_skips_weak_model_with_unknown_context, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_list_uses_api_response",
      test_provider_models_list_uses_api_response, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -5245,6 +5807,9 @@ static MunitTest tests[] = {
     {"/stream_error_finishes_with_error",
      test_stream_error_finishes_with_error, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/stream_error_empty_body_includes_request_id",
+     test_stream_error_empty_body_includes_request_id, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/transient_stream_error_retries_before_output",
      test_transient_stream_error_retries_before_output, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -5409,6 +5974,18 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_parse_sse_event_override",
      test_provider_parse_sse_event_override, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/json_array_preserves_empty_array_encoding",
+     test_json_array_preserves_empty_array_encoding, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/runtime_sanitizes_invalid_utf8_before_request",
+     test_runtime_sanitizes_invalid_utf8_before_request, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_output_is_bounded_before_continuation",
+     test_tool_output_is_bounded_before_continuation, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_stream_error_event_skips_empty_retry",
+     test_provider_stream_error_event_skips_empty_retry, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/hook_error_logs_and_keeps_request",
      test_hook_error_logs_and_keeps_request, NULL, NULL,

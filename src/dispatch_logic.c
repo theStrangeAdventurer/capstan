@@ -1,6 +1,10 @@
 #include "dispatch.h"
 #include <string.h>
 
+int dispatch_blocking_enter_allowed(int top_level_run_active) {
+  return top_level_run_active != 0;
+}
+
 int has_command(const char *input, char *command, size_t *cmd_end) {
   const char *start = input;
   while (*start == ' ')

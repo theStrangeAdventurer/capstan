@@ -2,6 +2,7 @@
 #include "agent.h"
 #include "app_config.h"
 #include "curses.h"
+#include "dispatch.h"
 #include "http.h"
 #include "input.h"
 #include "linemap.h"
@@ -405,7 +406,10 @@ void render_all(void) {
   int margin = MARGIN;
   int input_h = INPUT_WIN_HEIGHT;
   int badge_h = (g_buffered_results.size > 0 && !popup_is_active() && !popup_is_message_active()) ? 1 : 0;
-  int msg_h = rows - input_h - 2 * margin - badge_h;
+  int queue_h = (!popup_is_active() && !popup_is_message_active())
+                    ? dispatch_queue_visible_size()
+                    : 0;
+  int msg_h = rows - input_h - 2 * margin - badge_h - queue_h;
   int inner_w = cols - 2 * margin;
   int text_w = inner_w - 2 * MSG_PAD_H;
 
@@ -667,6 +671,42 @@ void render_all(void) {
     }
   }
 
+  if (queue_h > 0) {
+    int queue_y = margin + msg_h + badge_h;
+    for (int i = 0; i < queue_h; i++) {
+      const char *queued = dispatch_queue_at(i);
+      char preview[512];
+      int out = 0;
+      int pending_space = 0;
+      for (const char *p = queued ? queued : ""; *p && out < (int)sizeof(preview) - 1;
+           p++) {
+        if (*p == '\n' || *p == '\r' || *p == '\t' || *p == ' ') {
+          pending_space = out > 0;
+          continue;
+        }
+        if (pending_space && out < (int)sizeof(preview) - 1)
+          preview[out++] = ' ';
+        pending_space = 0;
+        preview[out++] = *p;
+      }
+      preview[out] = '\0';
+
+      /* Queue rows live on stdscr rather than a freshly erased window. Clear
+         the previous row first so a shorter preview cannot leave the tail of
+         the message that previously occupied this position. */
+      wmove(stdscr, queue_y + i, margin);
+      wclrtoeol(stdscr);
+      wattron(stdscr, dim_gray_attr());
+      mvprintw(queue_y + i, margin, "queued %d/%d", i + 1,
+               dispatch_queue_size());
+      wattroff(stdscr, dim_gray_attr());
+      wattron(stdscr, COLOR_PAIR(3));
+      mvwadd_clipped(stdscr, queue_y + i, margin + 12, preview,
+                     inner_w - 12);
+      wattroff(stdscr, COLOR_PAIR(3));
+    }
+  }
+
   int input_y = rows - input_h - margin;
   WINDOW *input_win = newwin(input_h, inner_w, input_y, margin);
   if (!input_win) {
@@ -806,9 +846,7 @@ void render_all(void) {
 
   spinner_tick = (spinner_tick + 1) % 64;
 
-  if (loading)
-    curs_set(0);
-  else if (mode_get() == FOCUS_MESSAGES)
+  if (mode_get() == FOCUS_MESSAGES)
     curs_set(0);
   else
     curs_set(1);
@@ -901,6 +939,24 @@ void tui_pump_blocking(void) {
       scroll_up(5);
     else if (ch == KEY_NPAGE)
       scroll_down(5);
+    else if (mode_get() == FOCUS_INPUT && (ch == '\n' || ch == '\r')) {
+      /* During an active top-level run dispatch_submit() can only enqueue.
+         Outside that run, the blocking pump may be nested inside a Lua plugin,
+         MCP operation, shell command, or permission path. Keep the editor
+         contents intact instead of re-entering dispatch on the same lua_State. */
+      if (dispatch_blocking_enter_allowed(agent_is_running()))
+        dispatch_submit();
+    }
+    else if (mode_get() == FOCUS_INPUT && ch == KEY_LEFT)
+      input_move_left();
+    else if (mode_get() == FOCUS_INPUT && ch == KEY_RIGHT)
+      input_move_right();
+    else if (mode_get() == FOCUS_INPUT &&
+             (ch == KEY_BACKSPACE || ch == 127 || ch == 8))
+      input_backspace();
+    else if (mode_get() == FOCUS_INPUT &&
+             ((ch >= 0x20 && ch <= 0xFF) || ch == '\t'))
+      input_insert(ch);
   }
 
   render_all();
