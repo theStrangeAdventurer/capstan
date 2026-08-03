@@ -45,8 +45,11 @@ static MunitResult test_agent_activity_label(const MunitParameter params[],
   agent_set_activity("Delegating");
   munit_assert_string_equal(agent_activity(), "Delegating");
 
+  munit_assert_int64(agent_activity_elapsed_seconds(), >=, 0);
+
   agent_set_activity(NULL);
   munit_assert_string_equal(agent_activity(), "");
+  munit_assert_int64(agent_activity_elapsed_seconds(), ==, 0);
 
   return MUNIT_OK;
 }

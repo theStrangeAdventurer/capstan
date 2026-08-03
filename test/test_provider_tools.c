@@ -21,6 +21,7 @@ static char captured_agent_appends[2048];
 static char last_agent_provider[128];
 static char last_agent_model[128];
 static char last_agent_profile[128];
+static char captured_activity_during_tool[128];
 static char temp_state_path[512];
 static const char *permit_decision = "deny";
 static const char *permit_prompt_decision = "always";
@@ -215,6 +216,13 @@ static int l_agent_set_profile_info(lua_State *L) {
   return 0;
 }
 
+static int l_capture_activity(lua_State *L) {
+  (void)L;
+  snprintf(captured_activity_during_tool,
+           sizeof(captured_activity_during_tool), "%s", agent_activity());
+  return 0;
+}
+
 static int l_capstan_log(lua_State *L) {
   const char *category = luaL_checkstring(L, 1);
   const char *message = luaL_optstring(L, 2, "");
@@ -294,6 +302,9 @@ static lua_State *new_provider_state(void) {
   lua_setfield(L, -2, "state_ensure_dir");
   lua_setglobal(L, "capstan");
 
+  lua_pushcfunction(L, l_capture_activity);
+  lua_setglobal(L, "capture_activity");
+
   luaL_dostring(L,
                 "plugins = {"
                 "fetch = {"
@@ -306,7 +317,7 @@ static lua_State *new_provider_state(void) {
                 "required = {'url'}"
                 "}"
                 "},"
-                "handler = function(ctx) return ctx:replace('ui', 'llm') end"
+                "handler = function(ctx) capture_activity(); return ctx:replace('ui', 'llm') end"
                 "},"
                 "file = {"
                 "tool = {"
@@ -354,6 +365,8 @@ static void reset_captures(lua_State *L) {
   last_agent_provider[0] = '\0';
   last_agent_model[0] = '\0';
   last_agent_profile[0] = '\0';
+  captured_activity_during_tool[0] = '\0';
+  agent_set_activity(NULL);
   snprintf(temp_state_path, sizeof(temp_state_path),
            "/tmp/capstan-provider-state-%ld.lua", (long)getpid());
   unlink(temp_state_path);
@@ -3942,6 +3955,39 @@ static MunitResult test_invalid_tool_arguments_skip_permission(
   return MUNIT_OK;
 }
 
+static MunitResult test_tool_activity_wraps_top_level_execution(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+
+  int rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "local available = tools.collect()\n"
+      "tools.handle_tool_calls({}, available, {{id='activity', name='fetch', arguments='{\\\"url\\\":\\\"https://example.com\\\"}'}}, '', function() end, {tools=available, silent_tools=true})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_string_equal(captured_activity_during_tool, "Fetching");
+  munit_assert_string_equal(agent_activity(), "");
+
+  captured_activity_during_tool[0] = '\0';
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "local available = tools.collect()\n"
+      "tools.handle_tool_calls({}, available, {{id='quiet', name='fetch', arguments='{\\\"url\\\":\\\"https://example.com\\\"}'}}, '', function() end, {tools=available, silent_tools=true, update_status=false})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_string_equal(captured_activity_during_tool, "");
+  munit_assert_string_equal(agent_activity(), "");
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_tool_handler_error_returns_tool_result(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -5860,6 +5906,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/invalid_tool_arguments_skip_permission",
      test_invalid_tool_arguments_skip_permission, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_activity_wraps_top_level_execution",
+     test_tool_activity_wraps_top_level_execution, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_handler_error_returns_tool_result",
      test_tool_handler_error_returns_tool_result, NULL, NULL,

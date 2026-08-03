@@ -45,5 +45,6 @@ void agent_finish_run(void);
 int agent_is_running(void);
 void agent_set_activity(const char *label);
 const char *agent_activity(void);
+long long agent_activity_elapsed_seconds(void);
 
 #endif

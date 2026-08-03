@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static Messages messages = {0};
 static unsigned long g_messages_revision = 0;
@@ -19,6 +20,7 @@ static char *g_provider_name = NULL;
 static char *g_provider_model = NULL;
 static char *g_profile_name = NULL;
 static char *g_activity = NULL;
+static long long g_activity_started_ms = 0;
 static int g_thinking = 0;
 static int g_running = 0;
 static UsageStats g_usage = {0};
@@ -59,14 +61,32 @@ static int l_agent_set_thinking(lua_State *L) {
   return 0;
 }
 
+static long long monotonic_ms(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    return 0;
+  return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
 void agent_set_activity(const char *label) {
   free(g_activity);
   g_activity = NULL;
-  if (label && label[0])
+  g_activity_started_ms = 0;
+  if (label && label[0]) {
     g_activity = my_strdup(label);
+    if (g_activity)
+      g_activity_started_ms = monotonic_ms();
+  }
 }
 
 const char *agent_activity(void) { return g_activity ? g_activity : ""; }
+
+long long agent_activity_elapsed_seconds(void) {
+  if (!g_activity || g_activity_started_ms <= 0)
+    return 0;
+  long long elapsed_ms = monotonic_ms() - g_activity_started_ms;
+  return elapsed_ms > 0 ? elapsed_ms / 1000LL : 0;
+}
 
 static int l_agent_set_activity(lua_State *L) {
   if (lua_isnoneornil(L, 1))

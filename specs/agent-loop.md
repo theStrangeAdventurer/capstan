@@ -289,6 +289,17 @@ tool must periodically yield through the TUI pump so the screen can repaint and
 safe navigation keys can be handled. It must not recursively call `http_poll()`
 from inside stream callback/tool execution paths.
 
+The canonical tool dispatcher owns the bottom-line activity indicator. It sets
+a phase immediately before every top-level tool handler and clears it after the
+handler returns, including contained plugin failures. Built-ins use specific
+labels such as `Reading`, `Editing`, `Fetching`, `Validating`, `Running command`,
+and `Delegating`; extension and MCP tools use `Using <tool name>`. Nested runs
+created with `update_status=false` must not replace the orchestrator's activity.
+The TUI renders its existing animated indicator while either HTTP is active or
+a tool activity is set, and appends elapsed time to explicit activities. A
+blocking tool still has to pump the TUI for the animation and elapsed time to
+advance.
+
 ## Tool Contract
 
 Plugins may expose a model tool by returning `plugin.tool`:

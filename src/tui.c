@@ -797,7 +797,8 @@ void render_all(void) {
   }
 
   int loading = http_is_loading();
-  if (loading) {
+  const char *activity = agent_activity();
+  if (loading || (activity && activity[0])) {
     int thinking = agent_is_thinking();
     int phase = (spinner_tick / 8) % 8;
     const char *dots[] = {" ", "·", "•", "●", "●", "•", "·", " "};
@@ -810,13 +811,21 @@ void render_all(void) {
     if (thinking)
       wattroff(stdscr, COLOR_PAIR(6));
 
-    const char *activity = agent_activity();
     const char *label = NULL;
+    char activity_label[512];
     int label_attr = A_ITALIC | A_DIM;
 
-    if (activity && activity[0])
-      label = activity;
-    else if (thinking)
+    if (activity && activity[0]) {
+      long long elapsed = agent_activity_elapsed_seconds();
+      if (elapsed >= 60) {
+        snprintf(activity_label, sizeof(activity_label), "%s · %lldm %02llds",
+                 activity, elapsed / 60, elapsed % 60);
+      } else {
+        snprintf(activity_label, sizeof(activity_label), "%s · %llds",
+                 activity, elapsed);
+      }
+      label = activity_label;
+    } else if (thinking)
       label = "Thinking";
     else {
       /* No explicit activity label. If no user prompt has been submitted yet

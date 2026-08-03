@@ -671,15 +671,8 @@ local function run_subagents(args, run_ctx)
         next_index = next_index + 1
     end
 
-    if agent and type(agent.set_activity) == "function" then
-        agent.set_activity("Delegating")
-    end
-
     while completed < #args.tasks do
         if not http or type(http.poll) ~= "function" then
-            if agent and type(agent.set_activity) == "function" then
-                agent.set_activity(nil)
-            end
             return "Subagents failed: http.poll is not available", false
         end
         http.poll()
@@ -690,10 +683,6 @@ local function run_subagents(args, run_ctx)
             start_one(next_index)
             next_index = next_index + 1
         end
-    end
-
-    if agent and type(agent.set_activity) == "function" then
-        agent.set_activity(nil)
     end
 
     local done_count = 0
@@ -1062,15 +1051,43 @@ end
 local shell_command_is_validation
 
 local function tool_phase(tool_name, display_command)
-    if tool_name == "file_read" then return "Reading" end
-    if tool_name == "file_edit" or tool_name == "file_write" then return "Editing" end
+    if tool_name == "file_read" or tool_name == "wiki_read" or
+       tool_name == "wiki_source_read" then return "Reading" end
+    if tool_name == "file_edit" or tool_name == "file_write" or
+       tool_name == "wiki_ingest" then return "Editing" end
     if tool_name == "fetch" then return "Fetching" end
     if tool_name == "logs" then return "Inspecting logs" end
+    if tool_name == "subagents" then return "Delegating" end
     if tool_name == "shell" then
         if shell_command_is_validation(display_command) then return "Validating" end
         return "Running command"
     end
     return "Using tool"
+end
+
+local function tool_activity_label(tool_name, display_command)
+    local phase = tool_phase(tool_name, display_command)
+    if phase ~= "Using tool" then return phase end
+    return "Using " .. tostring(tool_name)
+end
+
+local function execute_tool(tool_name, args, run_ctx, permission_ctx,
+                            display_command)
+    local update_activity = (not run_ctx or run_ctx.update_status ~= false) and
+        agent and type(agent.set_activity) == "function"
+    if update_activity then
+        agent.set_activity(tool_activity_label(tool_name, display_command))
+    end
+
+    local values = table.pack(xpcall(function()
+        return call_plugin_tool_redacted(tool_name, args, run_ctx, permission_ctx)
+    end, function(err)
+        return debug.traceback(tostring(err), 2)
+    end))
+
+    if update_activity then agent.set_activity(nil) end
+    if not values[1] then error(values[2], 0) end
+    return table.unpack(values, 2, values.n)
 end
 
 local function tool_status_prefix(tool_name, display_target, display_command)
@@ -1369,7 +1386,9 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                     if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
                                 else
                                     local tool_ok
-                                    result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx, tool_permission_context(permission_tool, target))
+                                    result_content, tool_ok = execute_tool(tool_name, args, run_ctx,
+                                        tool_permission_context(permission_tool, target),
+                                        display_command)
                                     mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
                                     mark_validation(run_ctx, tool_name, args, tool_ok)
                                     if tool_ok then
@@ -1383,7 +1402,9 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             end
                         else
                             local tool_ok
-                            result_content, tool_ok = call_plugin_tool_redacted(tool_name, args, run_ctx, tool_permission_context(permission_tool, target))
+                            result_content, tool_ok = execute_tool(tool_name, args, run_ctx,
+                                        tool_permission_context(permission_tool, target),
+                                        display_command)
                             mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
                             mark_validation(run_ctx, tool_name, args, tool_ok)
                             if tool_ok then

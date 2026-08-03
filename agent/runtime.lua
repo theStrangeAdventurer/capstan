@@ -613,6 +613,7 @@ function M.run(opts, callbacks)
                     profile = profile and profile.name or nil,
                     tools = tools,
                     silent_tools = opts.silent_tools,
+                    update_status = opts.update_status ~= false,
                     permission_scope = permission_scope,
                     callbacks = callbacks,
                     guard = guard,
