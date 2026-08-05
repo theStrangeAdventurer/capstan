@@ -3,6 +3,7 @@
 #include <curl/multi.h>
 #include <curl/typecheck-gcc.h>
 #include <lauxlib.h>
+#include <limits.h>
 #include <lua.h>
 #include <ncursesw/curses.h>
 #include <stddef.h>
@@ -33,6 +34,7 @@ typedef struct {
   size_t body_len;
   int response_mode;
   int background;
+  int async_id;
   RespBuf response;
   RespBuf response_headers;
   char err_buf[4096 + 1];
@@ -43,6 +45,7 @@ static CURLM *multi_handle = NULL;
 static StreamCtx **streams = NULL;
 static int stream_count = 0;
 static int stream_cap = 0;
+static int g_next_async_id = 1;
 static int g_sync_active = 0;
 static int g_headless = 0;
 static long long g_last_wait_render_ms = 0;
@@ -355,11 +358,12 @@ static int l_http_post_stream(lua_State *L) {
 
   curl_multi_add_handle(multi_handle, easy);
 
+  ctx->async_id = g_next_async_id;
+  g_next_async_id = g_next_async_id == INT_MAX ? 1 : g_next_async_id + 1;
   streams[stream_count] = ctx;
-  int async_id = stream_count;
   stream_count++;
 
-  lua_pushinteger(L, async_id);
+  lua_pushinteger(L, ctx->async_id);
   return 1;
 }
 
@@ -494,6 +498,62 @@ static int l_http_post_response(lua_State *L) {
   return 1;
 }
 
+static int l_http_delete_response(lua_State *L) {
+  const char *url = luaL_checkstring(L, 1);
+  struct curl_slist *headers = parse_headers(L, 2);
+  lua_Integer timeout_ms = luaL_optinteger(L, 3, 30000);
+
+  CURL *easy = curl_easy_init();
+  if (!easy) {
+    curl_slist_free_all(headers);
+    return luaL_error(L, "failed to initialize curl easy handle");
+  }
+  configure_http_handle(easy, url);
+  curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "DELETE");
+  curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS,
+                   (long)(timeout_ms > 0 ? timeout_ms : HTTP_DEFAULT_TIMEOUT_MS));
+  if (headers)
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+
+  RespBuf response = {0};
+  RespBuf response_headers = {0};
+  response.max_size = HTTP_MAX_RESPONSE_BYTES;
+  response_headers.max_size = HTTP_MAX_HEADER_BYTES;
+  curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
+  curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
+  curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
+  curl_easy_setopt(easy, CURLOPT_HEADERDATA, &response_headers);
+
+  g_sync_active = 1;
+  curl_multi_add_handle(multi_handle, easy);
+  int still_running = 1;
+  while (still_running) {
+    curl_multi_perform(multi_handle, &still_running);
+    if (still_running)
+      http_wait_frame();
+  }
+  http_poll(L);
+  curl_multi_remove_handle(multi_handle, easy);
+  g_sync_active = 0;
+
+  long status = 0;
+  curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
+  lua_newtable(L);
+  lua_pushinteger(L, response.overflow ? 0 : status);
+  lua_setfield(L, -2, "status");
+  lua_pushstring(L, response.overflow ? "Response too large" :
+                                      (response.data ? response.data : ""));
+  lua_setfield(L, -2, "body");
+  push_headers_table(L, response_headers.data);
+  lua_setfield(L, -2, "headers");
+
+  free(response.data);
+  free(response_headers.data);
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(easy);
+  return 1;
+}
+
 static int l_http_post_response_async(lua_State *L) {
   const char *url = luaL_checkstring(L, 1);
   const char *body = NULL;
@@ -580,11 +640,12 @@ static int l_http_post_response_async(lua_State *L) {
 
   curl_multi_add_handle(multi_handle, easy);
 
+  ctx->async_id = g_next_async_id;
+  g_next_async_id = g_next_async_id == INT_MAX ? 1 : g_next_async_id + 1;
   streams[stream_count] = ctx;
-  int async_id = stream_count;
   stream_count++;
 
-  lua_pushinteger(L, async_id);
+  lua_pushinteger(L, ctx->async_id);
   return 1;
 }
 
@@ -790,6 +851,44 @@ int http_poll_limited(lua_State *L, int max_callbacks) {
 
 int http_poll(lua_State *L) { return http_poll_limited(L, 0); }
 
+static void compact_streams(void) {
+  int write_idx = 0;
+  for (int i = 0; i < stream_count; i++) {
+    if (streams[i] != NULL)
+      streams[write_idx++] = streams[i];
+  }
+  stream_count = write_idx;
+}
+
+static void cancel_stream_at(lua_State *L, int index) {
+  StreamCtx *ctx = streams[index];
+  curl_multi_remove_handle(multi_handle, ctx->easy);
+  luaL_unref(L, LUA_REGISTRYINDEX, ctx->callback_ref);
+  curl_slist_free_all(ctx->headers);
+  curl_easy_cleanup(ctx->easy);
+  stream_ctx_free(ctx);
+  streams[index] = NULL;
+}
+
+static int l_http_cancel(lua_State *L) {
+  lua_Integer requested_id = luaL_checkinteger(L, 1);
+  if (requested_id < 1 || requested_id > INT_MAX) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  int async_id = (int)requested_id;
+  for (int i = 0; i < stream_count; i++) {
+    if (streams[i] && streams[i]->async_id == async_id) {
+      cancel_stream_at(L, i);
+      compact_streams();
+      lua_pushboolean(L, 1);
+      return 1;
+    }
+  }
+  lua_pushboolean(L, 0);
+  return 1;
+}
+
 int http_cancel_streams(lua_State *L) {
   if (!multi_handle || stream_count == 0)
     return 0;
@@ -797,26 +896,13 @@ int http_cancel_streams(lua_State *L) {
   int canceled = 0;
   for (int i = 0; i < stream_count; i++) {
     StreamCtx *ctx = streams[i];
-    if (!ctx)
+    if (!ctx || ctx->background)
       continue;
-    if (ctx->background)
-      continue;
-
-    curl_multi_remove_handle(multi_handle, ctx->easy);
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->callback_ref);
-    curl_slist_free_all(ctx->headers);
-    curl_easy_cleanup(ctx->easy);
-    stream_ctx_free(ctx);
-    streams[i] = NULL;
+    cancel_stream_at(L, i);
     canceled++;
   }
 
-  int write_idx = 0;
-  for (int i = 0; i < stream_count; i++) {
-    if (streams[i] != NULL)
-      streams[write_idx++] = streams[i];
-  }
-  stream_count = write_idx;
+  compact_streams();
   return canceled;
 }
 
@@ -835,6 +921,9 @@ void http_init(lua_State *L) {
   lua_pushcfunction(L, l_http_post_response);
   lua_setfield(L, -2, "post_response");
 
+  lua_pushcfunction(L, l_http_delete_response);
+  lua_setfield(L, -2, "delete_response");
+
   lua_pushcfunction(L, l_http_post_response_async);
   lua_setfield(L, -2, "post_response_async");
 
@@ -843,6 +932,9 @@ void http_init(lua_State *L) {
 
   lua_pushcfunction(L, l_http_poll);
   lua_setfield(L, -2, "poll");
+
+  lua_pushcfunction(L, l_http_cancel);
+  lua_setfield(L, -2, "cancel");
 
   lua_pushcfunction(L, l_http_wait_frame);
   lua_setfield(L, -2, "wait_frame");
@@ -862,5 +954,6 @@ void http_cleanup(void) {
   streams = NULL;
   stream_count = 0;
   stream_cap = 0;
+  g_next_async_id = 1;
   curl_global_cleanup();
 }

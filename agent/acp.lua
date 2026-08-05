@@ -183,15 +183,19 @@ end
 
 local function ensure_mcp_initialized(run)
     mcp_client.ensure_initialized()
+    local scope_id = run.session.id
     local started_at = capstan.now_ms()
-    while not mcp_client.is_initialized() do
+    while not mcp_client.is_initialized() or
+          not mcp_client.is_scope_initialized(scope_id) do
         mcp_client.tick(8)
+        mcp_client.tick_scope(scope_id)
         if http and type(http.poll) == "function" then http.poll() end
         if acp and type(acp.pump) == "function" then acp.pump() end
         if active ~= run or run.finished then return false, "cancelled" end
-        if mcp_client.is_initialized() then break end
+        if mcp_client.is_initialized() and
+           mcp_client.is_scope_initialized(scope_id) then break end
         if capstan.now_ms() - started_at >= 30000 then
-            return false, "timed out waiting for configured MCP servers"
+            return false, "timed out waiting for MCP servers"
         end
         if http and type(http.wait_frame) == "function" then http.wait_frame() end
     end
@@ -383,6 +387,7 @@ local function start_prompt(id, params)
         max_turns = 200,
         silent_tools = true,
         permission_scope = session.permission_scope,
+        mcp_scope = session.id,
         is_cancelled = function()
             return active ~= run or run.finished
         end,
@@ -463,7 +468,7 @@ handlers.initialize = function(id, params)
         agentCapabilities = {
             loadSession = false,
             promptCapabilities = {image = true, audio = false, embeddedContext = true},
-            mcpCapabilities = {http = false, sse = false},
+            mcpCapabilities = {http = true, sse = false},
             sessionCapabilities = {close = {}},
         },
         agentInfo = {name = "capstan", title = "Capstan", version = tostring(acp.version or "local")},
@@ -481,13 +486,8 @@ handlers["session/new"] = function(id, params)
         return
     end
     local mcp_servers = type(params) == "table" and params.mcpServers or nil
-    if mcp_servers ~= nil and type(mcp_servers) ~= "table" then
+    if type(mcp_servers) ~= "table" then
         rpc_error(id, -32602, "mcpServers must be an array")
-        return
-    end
-    if type(mcp_servers) == "table" and next(mcp_servers) ~= nil then
-        rpc_error(id, -32602,
-            "ACP-provided mcpServers are not supported yet; configure MCP servers in capstan.config.mcp.servers")
         return
     end
     local cwd = type(params) == "table" and params.cwd or nil
@@ -502,6 +502,11 @@ handlers["session/new"] = function(id, params)
     end
     local session_id = string.format("capstan-%d-%d", os.time(), next_session)
     next_session = next_session + 1
+    local attached, attach_err = mcp_client.attach_scope(session_id, mcp_servers)
+    if not attached then
+        rpc_error(id, -32602, attach_err)
+        return
+    end
     local profile = capstan.agent and capstan.agent.get_profile and
         capstan.agent.get_profile() or "implement"
     local provider, model, model_options = model_snapshot(profile)
@@ -588,6 +593,7 @@ handlers["session/close"] = function(id, params)
         acp.cancel()
         finish_active("cancelled", {ok = false})
     end
+    mcp_client.close_scope(session.id)
     sessions[session.id] = nil
     response(id, {})
 end
@@ -647,4 +653,8 @@ function capstan_acp_disconnect()
         active.finished = true
         active = nil
     end
+    for session_id in pairs(sessions) do
+        mcp_client.close_scope(session_id)
+    end
+    sessions = {}
 end

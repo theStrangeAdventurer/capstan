@@ -423,6 +423,7 @@ function M.run(opts, callbacks)
 
     local combined_tools = opts.tools or tools_runtime.collect({
         disable_subagents = (tonumber(opts.depth) or 0) > 0,
+        mcp_scope = opts.mcp_scope,
     })
     local tools_ctx = hooks.run("before_tools", {
         runtime = M,
@@ -639,6 +640,7 @@ function M.run(opts, callbacks)
                     silent_tools = opts.silent_tools,
                     update_status = opts.update_status ~= false,
                     permission_scope = permission_scope,
+                    mcp_scope = opts.mcp_scope,
                     callbacks = callbacks,
                     guard = guard,
                     state = run_state,

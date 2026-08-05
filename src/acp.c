@@ -344,6 +344,7 @@ int acp_run(const char *argv0) {
 
   char *line = NULL;
   size_t capacity = 0;
+  int disconnected = 0;
   while (!g_input_eof || adapter_active(L) || http_is_loading()) {
     struct pollfd input = {.fd = STDIN_FILENO, .events = POLLIN | POLLHUP};
     int ready = g_input_eof ? 0 : poll(&input, 1, 10);
@@ -359,8 +360,9 @@ int acp_run(const char *argv0) {
     http_poll_limited(L, 4);
     plugins_mcp_tick();
 
-    if (g_input_eof && adapter_active(L)) {
+    if (g_input_eof && !disconnected) {
       call_global_noargs(L, "capstan_acp_disconnect", 0);
+      disconnected = 1;
     }
   }
 

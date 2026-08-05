@@ -5071,18 +5071,27 @@ static MunitResult test_subagents_share_child_permission_scope(
   rc = luaL_dostring(
       L,
       "local tools = require('agent.tools')\n"
+      "SUBAGENT_PERMISSION_CALLBACKS = 0\n"
+      "local permission_scope = {allowed_tools = {}, full_control = false}\n"
+      "local parent_callbacks = {on_permission_request = function()\n"
+      "  SUBAGENT_PERMISSION_CALLBACKS = SUBAGENT_PERMISSION_CALLBACKS + 1\n"
+      "  return 'allow_tool_run'\n"
+      "end}\n"
       "capstan.agent.run = function(opts, callbacks)\n"
-      "  tools.handle_tool_calls({}, opts.tools, {{id='inner_' .. opts.messages[1].content, name='shell', arguments='{\\\"command\\\":\\\"pwd\\\"}'}}, '', function() end, {tools = opts.tools, depth = 1, permission_scope = opts.permission_scope, silent_tools = true})\n"
+      "  tools.handle_tool_calls({}, opts.tools, {{id='inner_' .. opts.messages[1].content, name='shell', arguments='{\\\"command\\\":\\\"pwd\\\"}'}}, '', function() end, {tools = opts.tools, depth = 1, permission_scope = opts.permission_scope, silent_tools = true, callbacks = callbacks})\n"
       "  callbacks.on_done({ok = true, text = 'done', turns = 1})\n"
       "  return true, nil\n"
       "end\n"
       "local current_msgs = {}\n"
       "local available = tools.collect()\n"
-      "tools.handle_tool_calls(current_msgs, available, {{id='call_subs_scope', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"one\\\",\\\"task\\\":\\\"one\\\"},{\\\"id\\\":\\\"two\\\",\\\"task\\\":\\\"two\\\"}],\\\"max_concurrent\\\":2}'}}, '', function() end, {tools = available, depth = 0, permission_scope = {allowed_tools = {}, full_control = false}})\n");
+      "tools.handle_tool_calls(current_msgs, available, {{id='call_subs_scope', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"one\\\",\\\"task\\\":\\\"one\\\"},{\\\"id\\\":\\\"two\\\",\\\"task\\\":\\\"two\\\"}],\\\"max_concurrent\\\":2}'}}, '', function() end, {tools = available, depth = 0, permission_scope = permission_scope, callbacks = parent_callbacks})\n");
   munit_assert_int(rc, ==, LUA_OK);
 
   munit_assert_int(permit_check_calls, ==, 1);
-  munit_assert_int(permit_prompt_calls, ==, 1);
+  munit_assert_int(permit_prompt_calls, ==, 0);
+  lua_getglobal(L, "SUBAGENT_PERMISSION_CALLBACKS");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
   munit_assert_int(permit_save_calls, ==, 0);
 
   reset_captures(L);

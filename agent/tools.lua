@@ -106,7 +106,7 @@ function M.collect(opts)
     end
 
     -- MCP tools (collected from connected servers, empty if not configured)
-    for _, t in ipairs(mcp_client.collect_tools()) do
+    for _, t in ipairs(mcp_client.collect_tools(opts.mcp_scope)) do
         table.insert(tools, t)
     end
 
@@ -622,7 +622,10 @@ local function run_subagents(args, run_ctx)
             update_status = false,
             update_usage = false,
             permission_scope = permission_scope,
+            mcp_scope = run_ctx and run_ctx.mcp_scope or nil,
         }, {
+            on_permission_request = run_ctx and run_ctx.callbacks and
+                run_ctx.callbacks.on_permission_request or nil,
             on_text = function(chunk)
                 table.insert(state.text_chunks, chunk)
             end,
@@ -736,8 +739,9 @@ local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
     end
 
     -- MCP tool routing: names like "mcp__browser__browser_navigate"
-    if mcp_client.is_mcp_tool(tool_name) then
-        local result, ok = mcp_client.call(tool_name, args)
+    local mcp_scope = run_ctx and run_ctx.mcp_scope or nil
+    if mcp_client.is_mcp_tool(tool_name, mcp_scope) then
+        local result, ok = mcp_client.call(tool_name, args, mcp_scope)
         return result, ok
     end
 
@@ -789,9 +793,9 @@ local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
     return llm_result or ui_result, result_ok ~= false
 end
 
-local function tool_permission_name(tool_name)
+local function tool_permission_name(tool_name, run_ctx)
     -- MCP tools use a shared "mcp" permission key
-    if mcp_client.is_mcp_tool(tool_name) then
+    if mcp_client.is_mcp_tool(tool_name, run_ctx and run_ctx.mcp_scope or nil) then
         return "mcp"
     end
     local _, tool_spec = find_plugin_tool(tool_name)
@@ -1307,7 +1311,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 append_status(string.format("\n\n⚙ %s: invalid arguments — error\n\n", tc.name))
             else
                 local target = tool_call_target(tc.name, args)
-                local permission_tool = tool_permission_name(tc.name)
+                local permission_tool = tool_permission_name(tc.name, run_ctx)
                 local call_ctx = hooks.run("before_tool_call", {
                     name = tc.name,
                     args = args,
@@ -1326,7 +1330,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 tool_name, args, routed = route_internal_wiki_read(tool_name, args)
                 if routed then
                     target = tool_call_target(tool_name, args)
-                    permission_tool = tool_permission_name(tool_name)
+                    permission_tool = tool_permission_name(tool_name, run_ctx)
                 end
 
                 if not tool_available(combined_tools, tool_name) then

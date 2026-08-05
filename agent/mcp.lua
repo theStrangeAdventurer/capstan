@@ -13,9 +13,10 @@ local image_runtime = require("agent.images")
 
 local M = {}
 
--- Server registry: name → { handle, tools, status, config }
+-- Process-wide configured servers plus ACP session-owned registries.
+-- Session registries are never consulted without their exact scope id.
 local servers = {}
-local exposed_tool_names = {}
+local scoped_servers = {}
 local protocol_version = "2025-06-18"
 local initialized = false
 local initializing = false
@@ -125,22 +126,28 @@ local function exposed_tool_name(server_name, tool_name)
   return "mcp__" .. safe_tool_name_part(server_name) .. "__" .. safe_tool_name_part(tool_name)
 end
 
-local function remember_exposed_tool(name, server_name, tool_name)
-  exposed_tool_names[name] = {
-    server = server_name,
-    tool = tool_name,
-  }
+local function registry_for_scope(scope_id)
+  if scope_id == nil then return nil end
+  local scope = scoped_servers[tostring(scope_id)]
+  return scope and scope.servers or nil
 end
 
-local function resolve_exposed_tool(tool_name)
-  if type(tool_name) ~= "string" then return nil end
-  local mapped = exposed_tool_names[tool_name]
-  if mapped then return mapped.server, mapped.tool end
-  local server_name, mcp_tool = tool_name:match("^mcp__(.-)__(.+)$")
-  if server_name and servers[server_name] then
-    return server_name, mcp_tool
+local function find_in_registry(registry, tool_name)
+  for server_name, server in pairs(registry or {}) do
+    for _, tool in ipairs(server.tools or {}) do
+      if exposed_tool_name(server_name, tool.name) == tool_name then
+        return server, tool
+      end
+    end
   end
   return nil
+end
+
+local function find_exposed_tool(tool_name, scope_id)
+  if type(tool_name) ~= "string" then return nil end
+  local server, tool = find_in_registry(registry_for_scope(scope_id), tool_name)
+  if server then return server, tool end
+  return find_in_registry(servers, tool_name)
 end
 
 local function server_transport(cfg)
@@ -458,6 +465,14 @@ local function async_rpc_start(server, method, params, timeout_ms)
   return true
 end
 
+local function cancel_pending_http(server)
+  local pending = server and server.pending
+  if server and server.transport == "http" and pending and pending.async_id and
+     http and type(http.cancel) == "function" then
+    pcall(http.cancel, pending.async_id)
+  end
+end
+
 local function async_rpc_poll(server)
   local pending = server and server.pending
   if not pending then
@@ -466,6 +481,7 @@ local function async_rpc_poll(server)
 
   if now_ms() - pending.started_at >= pending.timeout then
     local method = pending.method
+    cancel_pending_http(server)
     server.pending = nil
     return false, "timeout waiting for response to " .. tostring(method)
   end
@@ -557,7 +573,8 @@ local function configured_server_count()
   return n
 end
 
-local function start_server_async(cfg)
+local function start_server_async(cfg, registry)
+  registry = registry or servers
   if cfg.enabled == false then
     log("skipping disabled server: " .. tostring(cfg.name))
     return nil
@@ -576,7 +593,7 @@ local function start_server_async(cfg)
     phase = "spawn",
     pending = nil,
   }
-  servers[cfg.name] = server
+  registry[cfg.name] = server
 
   if server.transport == "stdio" then
     local args = cfg.args or {}
@@ -672,8 +689,19 @@ local function tick_server(server)
       return true
     end
     server.tools = {}
+    local exposed = {}
     if type(result.tools) == "table" then
       for _, t in ipairs(result.tools) do
+        if type(t.name) ~= "string" or t.name == "" then
+          fail_async_server(server, "tools/list returned a tool without a valid name")
+          return true
+        end
+        local safe_name = safe_tool_name_part(t.name)
+        if exposed[safe_name] then
+          fail_async_server(server, "tools/list contains colliding tool names: " .. t.name)
+          return true
+        end
+        exposed[safe_name] = true
         table.insert(server.tools, {
           name = t.name,
           description = t.description or "",
@@ -793,21 +821,170 @@ function M.tick(max_steps)
   return changed
 end
 
---- Collect all MCP tools in OpenAI function-calling format.
---- Tool names are prefixed: "mcp__server__original_name"
-function M.collect_tools()
-  M.tick(1)
-  local tools = {}
-  exposed_tool_names = {}
-  for server_name, server in pairs(servers) do
+local function dense_array(value, field)
+  if type(value) ~= "table" then return false, field .. " must be an array" end
+  if next(value) == nil then
+    local ok, encoded = pcall(json.encode, value)
+    if not ok or encoded ~= "[]" then return false, field .. " must be an array" end
+    return true
+  end
+  local count = 0
+  for key in pairs(value) do
+    if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+      return false, field .. " must be an array"
+    end
+    count = count + 1
+  end
+  if count ~= #value then return false, field .. " must be a dense array" end
+  return true
+end
+
+local function validate_string_array(value, field)
+  local valid, array_err = dense_array(value, field)
+  if not valid then return nil, array_err end
+  local result = {}
+  for i, item in ipairs(value) do
+    if type(item) ~= "string" then
+      return nil, field .. "[" .. tostring(i) .. "] must be a string"
+    end
+    table.insert(result, item)
+  end
+  return result
+end
+
+local function named_values(value, field)
+  local valid, array_err = dense_array(value, field)
+  if not valid then return nil, array_err end
+  local result = {}
+  for i, item in ipairs(value) do
+    if type(item) ~= "table" or type(item.name) ~= "string" or item.name == "" or
+       type(item.value) ~= "string" then
+      return nil, field .. "[" .. tostring(i) .. "] must contain string name and value"
+    end
+    result[item.name] = item.value
+  end
+  return result
+end
+
+local function normalize_scoped_config(descriptor)
+  if type(descriptor) ~= "table" then return nil, "mcpServers entries must be objects" end
+  if type(descriptor.name) ~= "string" or descriptor.name == "" then
+    return nil, "MCP server name must be a non-empty string"
+  end
+  local transport = descriptor.type or "stdio"
+  if transport == "stdio" then
+    if type(descriptor.command) ~= "string" or descriptor.command:sub(1, 1) ~= "/" then
+      return nil, "stdio MCP command must be an absolute path"
+    end
+    local args, args_err = validate_string_array(descriptor.args, "args")
+    if not args then return nil, args_err end
+    local env, env_err = named_values(descriptor.env, "env")
+    if not env then return nil, env_err end
+    return {name = descriptor.name, command = descriptor.command, args = args,
+      env = env, transport = "stdio"}
+  end
+  if transport == "http" then
+    if type(descriptor.url) ~= "string" or
+       not descriptor.url:match("^https?://") then
+      return nil, "HTTP MCP url must use http or https"
+    end
+    local headers, headers_err = named_values(descriptor.headers, "headers")
+    if not headers then return nil, headers_err end
+    return {name = descriptor.name, url = descriptor.url, headers = headers,
+      transport = "http"}
+  end
+  return nil, "unsupported ACP MCP transport: " .. tostring(transport)
+end
+
+local function effective_server_name_taken(name, registry)
+  local safe = safe_tool_name_part(name)
+  for existing_name in pairs(servers) do
+    if safe_tool_name_part(existing_name) == safe then return true end
+  end
+  for _, cfg in ipairs(servers_config()) do
+    if type(cfg) == "table" and safe_tool_name_part(cfg.name) == safe then return true end
+  end
+  for existing_name in pairs(registry or {}) do
+    if safe_tool_name_part(existing_name) == safe then return true end
+  end
+  return false
+end
+
+function M.attach_scope(scope_id, descriptors)
+  if type(scope_id) ~= "string" or scope_id == "" then return false, "invalid MCP scope" end
+  local valid, array_err = dense_array(descriptors, "mcpServers")
+  if not valid then return false, array_err end
+  if scoped_servers[scope_id] then return false, "MCP scope already exists" end
+  local configs = {}
+  local registry = {}
+  for _, descriptor in ipairs(descriptors) do
+    local cfg, err = normalize_scoped_config(descriptor)
+    if not cfg then return false, err end
+    if effective_server_name_taken(cfg.name, registry) then
+      return false, "MCP server name conflicts with another visible server: " .. cfg.name
+    end
+    registry[cfg.name] = {reserved = true}
+    table.insert(configs, cfg)
+  end
+  registry = {}
+  local scope = {servers = registry, initialized = #configs == 0}
+  scoped_servers[scope_id] = scope
+  for _, cfg in ipairs(configs) do start_server_async(cfg, registry) end
+  return true
+end
+
+function M.tick_scope(scope_id)
+  local scope = scoped_servers[tostring(scope_id or "")]
+  if not scope or scope.initialized then return false end
+  local changed = false
+  local done = true
+  for _, server in pairs(scope.servers) do
+    if tick_server(server) then changed = true end
+    if server.phase and server.phase ~= "done" then done = false end
+  end
+  if done then scope.initialized = true end
+  return changed
+end
+
+function M.is_scope_initialized(scope_id)
+  local scope = scoped_servers[tostring(scope_id or "")]
+  return scope ~= nil and scope.initialized == true
+end
+
+function M.close_scope(scope_id)
+  local key = tostring(scope_id or "")
+  local scope = scoped_servers[key]
+  if not scope then return end
+  for _, server in pairs(scope.servers) do
+    cancel_pending_http(server)
+    server.pending = nil
+    server.pending_response = nil
+    server.pending_error = nil
+    server.pending_error_body = nil
+    if server.transport == "http" and server.session_id and http and
+       type(http.delete_response) == "function" then
+      local ok, result = pcall(http.delete_response, server.url,
+        http_headers(server), server.timeout or 30000)
+      local status = ok and type(result) == "table" and tonumber(result.status) or 0
+      if not status or status < 200 or status >= 300 then
+        log("could not terminate HTTP MCP session for " .. server.name)
+      end
+    end
+    if server.handle then pcall(mcp.kill, server.handle) end
+    server.handle = nil
+    server.status = "disconnected"
+  end
+  scoped_servers[key] = nil
+end
+
+local function append_registry_tools(tools, registry)
+  for server_name, server in pairs(registry or {}) do
     if server.status == "connected" then
       for _, t in ipairs(server.tools) do
-        local prefixed_name = exposed_tool_name(server_name, t.name)
-        remember_exposed_tool(prefixed_name, server_name, t.name)
         table.insert(tools, {
           type = "function",
           ["function"] = {
-            name = prefixed_name,
+            name = exposed_tool_name(server_name, t.name),
             description = t.description,
             parameters = t.inputSchema,
           },
@@ -817,43 +994,38 @@ function M.collect_tools()
       end
     end
   end
+end
+
+--- Collect global MCP tools and tools owned by the requested scope.
+function M.collect_tools(scope_id)
+  M.tick(1)
+  if scope_id then M.tick_scope(scope_id) end
+  local tools = {}
+  append_registry_tools(tools, servers)
+  append_registry_tools(tools, registry_for_scope(scope_id))
   return tools
 end
 
---- Check if a tool name belongs to MCP.
-function M.is_mcp_tool(tool_name)
-  local server_name = resolve_exposed_tool(tool_name)
-  return server_name ~= nil
+--- Check if a tool name belongs to MCP in the active scope.
+function M.is_mcp_tool(tool_name, scope_id)
+  return find_exposed_tool(tool_name, scope_id) ~= nil
 end
 
 --- Call an MCP tool by its exposed provider-safe name.
 --- Returns a string for text-only results or {text, images} for multimodal
 --- results, followed by ok (boolean).
-function M.call(tool_name, args)
-  local server_name, tool_method = resolve_exposed_tool(tool_name)
-  if not server_name or not tool_method then
+function M.call(tool_name, args, scope_id)
+  local server, tool = find_exposed_tool(tool_name, scope_id)
+  if not server or not tool then
     return "Unknown MCP tool: " .. tool_name, false
   end
-
-  local server = servers[server_name]
-  if not server then
-    return "Unknown MCP server: " .. server_name, false
-  end
   if server.status ~= "connected" then
-    return "MCP server " .. server_name .. " is " .. server.status, false
-  end
-
-  local tool_schema = nil
-  for _, t in ipairs(server.tools) do
-    if t.name == tool_method then
-      tool_schema = t.inputSchema
-      break
-    end
+    return "MCP server " .. server.name .. " is " .. server.status, false
   end
 
   local params = {
-    name = tool_method,
-    arguments = apply_schema_defaults(tool_schema, args),
+    name = tool.name,
+    arguments = apply_schema_defaults(tool.inputSchema, args),
   }
 
   local result, err = rpc_call(server, "tools/call", params, server.timeout)
@@ -999,6 +1171,9 @@ function M.shutdown()
     end
     server.status = "disconnected"
   end
+  local scope_ids = {}
+  for scope_id in pairs(scoped_servers) do table.insert(scope_ids, scope_id) end
+  for _, scope_id in ipairs(scope_ids) do M.close_scope(scope_id) end
 end
 
 return M

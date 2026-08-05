@@ -27,8 +27,10 @@ agent implementation:
   delegates permission decisions to a caller callback when one is provided.
 
 The process can hold several logical sessions, but only one prompt may execute
-at a time because the current Lua, HTTP, MCP, and provider state is process
-scoped. Different sessions retain independent message histories and settings.
+at a time because the current Lua, HTTP/provider, workspace, and permission
+execution state is process scoped. MCP connections and tool visibility are
+session scoped, and different sessions retain independent message histories and
+settings.
 
 ## Supported ACP v1 surface
 
@@ -54,8 +56,8 @@ notification semantics; other request-only methods sent without an `id` are
 ignored.
 
 Session load/list/resume/fork, client filesystem/terminal operations,
-ACP-provided MCP servers, usage/thought streaming, and rich terminal/diff tool
-output are not advertised yet.
+usage/thought streaming, and rich terminal/diff tool output are not advertised
+yet.
 
 Model setup is intentionally network-free. The selector contains the models
 explicitly configured for Capstan providers; it does not fetch every provider's
@@ -88,15 +90,25 @@ Before dispatching the first model-backed ACP prompt, the adapter waits for
 configured MCP discovery to finish (or fail), so successfully discovered tools
 are included in that prompt rather than appearing only on a later turn.
 
-This is distinct from `session/new.mcpServers`: that field asks the agent to
-connect servers supplied by the ACP client for that specific session. The
-current MCP registry and subprocess lifecycle are process-scoped, so attaching
-such a server without session ownership would leak its tools and credentials to
-other logical sessions. Until session-scoped ownership exists, an empty
-`mcpServers` array is accepted and a non-empty value is rejected with
-`-32602` and an actionable message. The initialization response therefore keeps
-ACP-provided MCP transport capabilities disabled; this does not mean that
-Capstan's configured MCP client is disabled.
+`session/new.mcpServers` adds MCP servers owned by that ACP session. Capstan
+supports the mandatory stdio transport and advertises Streamable HTTP support;
+legacy SSE is not advertised. Descriptors are validated against the ACP shape,
+including absolute stdio commands, dense argument/environment/header arrays,
+and `http`/`https` URLs.
+
+The MCP runtime stores each session's servers in a separate registry. Tool
+collection and invocation receive the exact session scope and expose only the
+process-wide configured tools plus tools owned by that session. Server names
+that would collide with a configured server after provider-safe normalization
+are rejected. Different sessions may use the same server name without sharing
+connections or tools.
+
+Before a prompt is dispatched, ACP waits for both configured and session-owned
+MCP discovery to finish or fail. `session/close` and ACP disconnect terminate
+the session's stdio processes. For stateful Streamable HTTP servers, close also
+sends `DELETE` with the negotiated `Mcp-Session-Id`; stateless HTTP servers need
+no termination request. Environment variables, headers, tool discovery, calls,
+and permission decisions remain within the owning ACP session.
 
 ## Streaming and tools
 
@@ -122,21 +134,7 @@ cancellation without attempting to write a final response.
 
 ## Subsequent steps
 
-### 1. Add session-scoped ACP-provided MCP servers
-
-Translate validated ACP stdio and Streamable HTTP server descriptors into the
-existing MCP client, but give every connection an owning ACP session. Tool
-collection must filter by that owner, server names must not collide with global
-configured servers, and `session/close` or disconnect must terminate owned
-processes and HTTP sessions. Advertise only the transports implemented by this
-path.
-
-**Почему это надо сделать:** ACP clients expect `mcpServers` to extend a session
-without requiring edits to the user's global Capstan configuration. Session
-ownership is required first to prevent tools, environment variables, headers,
-and credentials supplied for one session from becoming available to another.
-
-### 2. Track active work by session and turn identifiers
+### 1. Track active work by session and turn identifiers
 
 Replace the single global `active` slot and implicit permission wait with
 registries keyed by session and turn/request identifiers. Keep provider and MCP
@@ -148,7 +146,7 @@ callbacks must be routed to the exact turn. Identifier-based ownership avoids
 cross-session completion and makes later safe concurrency possible without
 changing the protocol surface again.
 
-### 3. Derive ACP modes and configuration from canonical runtime registries
+### 2. Derive ACP modes and configuration from canonical runtime registries
 
 Expose profile metadata and model/config option metadata from their current
 runtime owners, then build ACP `modes` and `configOptions` from those APIs rather
@@ -158,7 +156,7 @@ than duplicating `fast`, `implement`, and `plan` in the adapter.
 settings change. Dynamic metadata keeps ACP clients consistent with the CLI and
 user configuration.
 
-### 4. Project richer runtime events into ACP updates
+### 3. Project richer runtime events into ACP updates
 
 Add plan updates, session title/time updates, usage and thought events when
 supported, and richer terminal/file-diff tool content. Preserve stable tool-call
@@ -168,7 +166,7 @@ identifiers and explicit pending/completed/failed/cancelled statuses.
 progress and diffs; flattening everything to text loses information already
 available inside the Capstan runtime.
 
-### 5. Add durable session operations
+### 4. Add durable session operations
 
 Implement `session/list`, `session/load`, `session/resume`, and `session/fork` on
 top of Capstan's existing session store, including replay of history and session
@@ -178,7 +176,7 @@ metadata. Do not introduce an ACP-only persistence format.
 agent restarts. Reusing the canonical store preserves one history model across
 TUI, CLI, and ACP and avoids incompatible copies of the same conversation.
 
-### 6. Negotiate optional client capabilities before server requests
+### 5. Negotiate optional client capabilities before server requests
 
 Store client capabilities from `initialize` and gate future elicitation,
 filesystem, terminal, and ACP-bridged MCP requests on the exact advertised
@@ -193,7 +191,9 @@ cannot answer a server-initiated request.
 - CLI parsing is covered by `test/test_cli_args.c`.
 - `test/test_acp.sh` launches the built binary with isolated state and verifies
   initialization, session creation, config options, command publication, image
-  validation, canonical image conversion, configured stdio MCP discovery and
-  first-prompt tool exposure, rich tool updates, and bidirectional permission
-  approval at the provider/tool boundary.
+  validation, canonical image conversion, configured MCP discovery, and
+  first-prompt tool exposure. It also verifies session-owned stdio and HTTP MCP
+  discovery, cross-session tool isolation, real tool-call routing, permission
+  approval, stdio process termination, HTTP session deletion, and rich tool
+  updates.
 - Runtime callback changes are exercised by the existing Lua/tool test suite.

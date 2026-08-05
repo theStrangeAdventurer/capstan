@@ -289,6 +289,33 @@ static int response_capture_callback(lua_State *L) {
   return 0;
 }
 
+static lua_Integer start_background_response(lua_State *L) {
+  lua_getglobal(L, "http");
+  lua_getfield(L, -1, "post_response_async");
+  lua_pushliteral(L, "http://127.0.0.1:1/pending");
+  lua_pushliteral(L, "{}");
+  lua_newtable(L);
+  lua_pushinteger(L, 30000);
+  lua_pushcfunction(L, response_capture_callback);
+  lua_newtable(L);
+  lua_pushboolean(L, 1);
+  lua_setfield(L, -2, "background");
+  munit_assert_int(lua_pcall(L, 6, 1, 0), ==, LUA_OK);
+  lua_Integer async_id = lua_tointeger(L, -1);
+  lua_pop(L, 2);
+  return async_id;
+}
+
+static int cancel_async_response(lua_State *L, lua_Integer async_id) {
+  lua_getglobal(L, "http");
+  lua_getfield(L, -1, "cancel");
+  lua_pushinteger(L, async_id);
+  munit_assert_int(lua_pcall(L, 1, 1, 0), ==, LUA_OK);
+  int canceled = lua_toboolean(L, -1);
+  lua_pop(L, 2);
+  return canceled;
+}
+
 static MunitResult test_http_get_follows_redirect(const MunitParameter params[],
                                                   void *data) {
   (void)params;
@@ -556,6 +583,31 @@ static MunitResult test_post_response_returns_headers(
   return MUNIT_OK;
 }
 
+static MunitResult test_cancel_uses_stable_async_id(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  response_done_calls = 0;
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  http_init(L);
+
+  lua_Integer first = start_background_response(L);
+  lua_Integer second = start_background_response(L);
+  munit_assert_int(first, !=, second);
+  munit_assert_true(http_has_background_work());
+  munit_assert_true(cancel_async_response(L, first));
+  munit_assert_true(cancel_async_response(L, second));
+  munit_assert_false(cancel_async_response(L, first));
+  munit_assert_false(http_has_background_work());
+  munit_assert_int(response_done_calls, ==, 0);
+
+  http_cleanup();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/get_follows_redirect", test_http_get_follows_redirect, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -569,6 +621,8 @@ static MunitTest tests[] = {
      test_background_post_response_does_not_set_loading, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/post_response_returns_headers", test_post_response_returns_headers, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/cancel_uses_stable_async_id", test_cancel_uses_stable_async_id, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
