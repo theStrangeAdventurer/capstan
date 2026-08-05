@@ -3,6 +3,7 @@
 extern MunitSuite dispatch_suite;
 extern MunitSuite app_config_suite;
 extern MunitSuite cli_args_suite;
+extern MunitSuite clipboard_suite;
 extern MunitSuite finder_suite;
 extern MunitSuite input_suite;
 extern MunitSuite input_history_suite;
@@ -28,6 +29,7 @@ int main(int argc, char *argv[]) {
     dispatch_suite,
     app_config_suite,
     cli_args_suite,
+    clipboard_suite,
     finder_suite,
     input_suite,
     input_history_suite,

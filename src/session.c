@@ -20,6 +20,9 @@
 #define SESSION_VERSION 1
 #define SESSION_MAX_MESSAGES 10000
 #define SESSION_MAX_LINE (4 * 1024 * 1024)
+#define SESSION_IMAGE_CHUNK (1024 * 1024)
+#define SESSION_MAX_IMAGES_PER_MESSAGE 16
+#define SESSION_MAX_IMAGE_BASE64 (14 * 1024 * 1024 + 16)
 
 static char g_store_dir[PATH_MAX] = "";
 
@@ -339,16 +342,51 @@ int session_save(const Session *session) {
   free(title);
   for (size_t i = 0; ok && i < session->message_count; i++) {
     const SessionMessage *message = &session->messages[i];
-    if (!message->text || !message->text[0])
+    if ((!message->text || !message->text[0]) && message->image_count == 0)
       continue;
-    char *text = json_escape(message->text);
-    char *raw = json_escape(message->raw_text ? message->raw_text : message->text);
+    char *text = json_escape(message->text ? message->text : "");
+    char *raw = json_escape(message->raw_text ? message->raw_text
+                                              : (message->text ? message->text : ""));
     ok = text && raw &&
          fprintf(f, "{\"role\":\"%s\",\"text\":%s,\"raw_text\":%s}\n",
                  message->role == SESSION_ROLE_USER ? "user" : "assistant",
                  text, raw) >= 0;
     free(text);
     free(raw);
+    for (size_t image_idx = 0; ok && image_idx < message->image_count;
+         image_idx++) {
+      const SessionImage *image = &message->images[image_idx];
+      if (!image->mime_type || !image->data ||
+          strncmp(image->mime_type, "image/", 6) != 0 ||
+          strlen(image->data) > SESSION_MAX_IMAGE_BASE64) {
+        ok = 0;
+        break;
+      }
+      char *mime = json_escape(image->mime_type);
+      size_t data_len = strlen(image->data);
+      for (size_t offset = 0; ok && offset < data_len;
+           offset += SESSION_IMAGE_CHUNK) {
+        size_t chunk_len = data_len - offset;
+        if (chunk_len > SESSION_IMAGE_CHUNK)
+          chunk_len = SESSION_IMAGE_CHUNK;
+        char *chunk = malloc(chunk_len + 1);
+        if (!chunk) {
+          ok = 0;
+          break;
+        }
+        memcpy(chunk, image->data + offset, chunk_len);
+        chunk[chunk_len] = '\0';
+        char *escaped = json_escape(chunk);
+        free(chunk);
+        int final_chunk = offset + chunk_len == data_len;
+        ok = mime && escaped &&
+             fprintf(f, "{\"type\":\"image\",\"index\":%zu,"
+                        "\"mime_type\":%s,\"data\":%s,\"final\":%d}\n",
+                     image_idx, mime, escaped, final_chunk) >= 0;
+        free(escaped);
+      }
+      free(mime);
+    }
   }
   if (ok && fflush(f) == 0)
     ok = fsync(fd) == 0;
@@ -412,9 +450,55 @@ void session_free(Session *session) {
   for (size_t i = 0; i < session->message_count; i++) {
     free(session->messages[i].text);
     free(session->messages[i].raw_text);
+    for (size_t image_idx = 0;
+         image_idx < session->messages[i].image_count; image_idx++) {
+      free(session->messages[i].images[image_idx].mime_type);
+      free(session->messages[i].images[image_idx].data);
+    }
+    free(session->messages[i].images);
   }
   free(session->messages);
   memset(session, 0, sizeof(*session));
+}
+
+static int session_append_image_chunk(SessionMessage *message, size_t index,
+                                      const char *mime_type,
+                                      const char *chunk) {
+  if (!message || message->role != SESSION_ROLE_USER || !mime_type ||
+      strncmp(mime_type, "image/", 6) != 0 || !chunk ||
+      index > message->image_count ||
+      index >= SESSION_MAX_IMAGES_PER_MESSAGE)
+    return 0;
+  if (index == message->image_count) {
+    SessionImage *grown =
+        realloc(message->images, (index + 1) * sizeof(SessionImage));
+    if (!grown)
+      return 0;
+    message->images = grown;
+    message->images[index].mime_type = dup_string(mime_type);
+    message->images[index].data = dup_string("");
+    if (!message->images[index].mime_type || !message->images[index].data) {
+      free(message->images[index].mime_type);
+      free(message->images[index].data);
+      return 0;
+    }
+    message->image_count++;
+  } else if (index + 1 != message->image_count ||
+             strcmp(message->images[index].mime_type, mime_type) != 0) {
+    return 0;
+  }
+  SessionImage *image = &message->images[index];
+  size_t old_len = strlen(image->data);
+  size_t chunk_len = strlen(chunk);
+  if (old_len > SESSION_MAX_IMAGE_BASE64 ||
+      chunk_len > SESSION_MAX_IMAGE_BASE64 - old_len)
+    return 0;
+  char *grown = realloc(image->data, old_len + chunk_len + 1);
+  if (!grown)
+    return 0;
+  image->data = grown;
+  memcpy(image->data + old_len, chunk, chunk_len + 1);
+  return 1;
 }
 
 int session_load(const char *id, Session *session) {
@@ -446,15 +530,50 @@ int session_load(const char *id, Session *session) {
   free(stored_id);
   free(title);
   free(line);
+  int image_complete = 1;
   while (ok) {
     line = read_line(f, &line_status);
-    if (line_status == SESSION_LINE_EOF)
+    if (line_status == SESSION_LINE_EOF) {
+      if (!image_complete)
+        ok = 0;
       break;
+    }
     if (line_status != SESSION_LINE_OK || !line) {
       ok = 0;
       break;
     }
     if (!line[0]) { free(line); continue; }
+    char *type = json_field_string(line, "type");
+    if (type && strcmp(type, "image") == 0) {
+      long long image_index = json_field_integer(line, "index", -1);
+      long long final_chunk = json_field_integer(line, "final", -1);
+      char *mime = json_field_string(line, "mime_type");
+      char *chunk = json_field_string(line, "data");
+      SessionMessage *message = session->message_count > 0
+                                    ? &session->messages[session->message_count - 1]
+                                    : NULL;
+      int expected_index = message && image_index >= 0 &&
+          ((image_complete && (size_t)image_index == message->image_count) ||
+           (!image_complete && (size_t)image_index + 1 == message->image_count));
+      ok = expected_index && mime && chunk &&
+           (final_chunk == 0 || final_chunk == 1) &&
+           session_append_image_chunk(message, (size_t)image_index, mime, chunk);
+      if (ok)
+        image_complete = final_chunk == 1;
+      free(type);
+      free(mime);
+      free(chunk);
+      free(line);
+      if (!ok)
+        break;
+      continue;
+    }
+    free(type);
+    if (!image_complete) {
+      free(line);
+      ok = 0;
+      break;
+    }
     char *role = json_field_string(line, "role");
     char *text = json_field_string(line, "text");
     char *raw = json_field_string(line, "raw_text");
@@ -471,6 +590,7 @@ int session_load(const char *id, Session *session) {
     }
     session->messages = grown;
     SessionMessage *message = &session->messages[session->message_count++];
+    memset(message, 0, sizeof(*message));
     message->role = strcmp(role, "user") == 0 ? SESSION_ROLE_USER
                                                : SESSION_ROLE_ASSISTANT;
     message->text = text;

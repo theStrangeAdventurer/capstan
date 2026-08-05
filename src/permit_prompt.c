@@ -2,10 +2,10 @@
 #include "popup_internal.h"
 
 static void clamp_choice(int *choice) {
-  if (*choice < PERMIT_CHOICE_YES)
-    *choice = PERMIT_CHOICE_YES;
-  else if (*choice > PERMIT_CHOICE_ALWAYS)
-    *choice = PERMIT_CHOICE_ALWAYS;
+  if (*choice < PERMIT_CHOICE_ONCE)
+    *choice = PERMIT_CHOICE_ONCE;
+  else if (*choice > PERMIT_CHOICE_REJECT)
+    *choice = PERMIT_CHOICE_REJECT;
 }
 
 PermitPromptAction permit_prompt_handle_key(int ch, int *choice) {
@@ -14,40 +14,32 @@ PermitPromptAction permit_prompt_handle_key(int ch, int *choice) {
   switch (ch) {
   case POPUP_KEY_UP:
   case 'k':
-    if (*choice > PERMIT_CHOICE_YES)
+    if (*choice > PERMIT_CHOICE_ONCE)
       (*choice)--;
     break;
   case POPUP_KEY_DOWN:
   case 'j':
-    if (*choice < PERMIT_CHOICE_ALWAYS)
+    if (*choice < PERMIT_CHOICE_REJECT)
       (*choice)++;
     break;
   case 'y':
   case 'Y':
-    *choice = PERMIT_CHOICE_YES;
-    return PERMIT_PROMPT_DONE;
-  case 'n':
-  case 'N':
-    *choice = PERMIT_CHOICE_NO;
+    *choice = PERMIT_CHOICE_ONCE;
     return PERMIT_PROMPT_DONE;
   case 'a':
   case 'A':
     *choice = PERMIT_CHOICE_ALWAYS;
     return PERMIT_PROMPT_DONE;
-  case 't':
-  case 'T':
-    *choice = PERMIT_CHOICE_TOOL_RUN;
-    return PERMIT_PROMPT_DONE;
-  case 'f':
-  case 'F':
-    *choice = PERMIT_CHOICE_FULL_RUN;
+  case 'n':
+  case 'N':
+    *choice = PERMIT_CHOICE_REJECT;
     return PERMIT_PROMPT_DONE;
   case '\t':
   case '\n':
   case '\r':
     return PERMIT_PROMPT_DONE;
   case 27:
-    *choice = PERMIT_CHOICE_NO;
+    *choice = PERMIT_CHOICE_REJECT;
     return PERMIT_PROMPT_DONE;
   }
 
@@ -56,14 +48,10 @@ PermitPromptAction permit_prompt_handle_key(int ch, int *choice) {
 
 const char *permit_prompt_result(int choice) {
   switch (choice) {
-  case PERMIT_CHOICE_YES:
+  case PERMIT_CHOICE_ONCE:
     return "allow";
-  case PERMIT_CHOICE_TOOL_RUN:
-    return "allow_tool_run";
-  case PERMIT_CHOICE_FULL_RUN:
-    return "allow_run";
   case PERMIT_CHOICE_ALWAYS:
-    return "always";
+    return "allow_session";
   default:
     return "deny";
   }

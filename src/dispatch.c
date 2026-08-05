@@ -150,13 +150,22 @@ static void flush_buffered_results(void) {
   }
 }
 
-static void flush_buffered_and_send(const char *ui_text, const char *raw_text) {
+static void flush_buffered_and_send(const char *ui_text, const char *raw_text,
+                                    InputImage *images, size_t image_count) {
   flush_buffered_results();
-  if (ui_text[0]) {
+  if (ui_text[0] || image_count > 0) {
     char *ui = my_strdup(ui_text);
     char *raw = my_strdup(raw_text);
+    Messages *messages = get_messages();
+    size_t previous_size = messages ? messages->size : 0;
     add_message(ui, raw, MSG_USER);
+    Message *message = messages && messages->size > previous_size
+                           ? messages->items[messages->size - 1]
+                           : NULL;
+    for (size_t i = 0; message && i < image_count; i++)
+      message_add_image(message, images[i].mime_type, images[i].data);
   }
+  input_images_free(images, image_count);
   char *empty = my_strdup("");
   add_message(empty, empty, MSG_AGENT);
   agent_build_and_dispatch(L);
@@ -418,18 +427,28 @@ void dispatch_tick(void) {
 
 void dispatch_submit(void) {
   const char *text = input_get_text();
-  if (!text[0] && g_buffered_results.size == 0)
+  size_t image_count = input_image_count();
+  if (!text[0] && image_count == 0 && g_buffered_results.size == 0)
     return;
 
   scroll_reset();
   char submitted[INPUT_BUFFER_SIZE];
+  char display[INPUT_DISPLAY_BUFFER_SIZE];
   snprintf(submitted, sizeof(submitted), "%s", text);
+  snprintf(display, sizeof(display), "%s", input_get_display_text());
 
   char command[MAX_COMMAND_LEN];
   size_t cmd_end;
-  int is_command = submitted[0] && has_command(submitted, command, &cmd_end);
+  int is_command = image_count == 0 && submitted[0] &&
+                   has_command(submitted, command, &cmd_end);
 
   if (agent_is_running() || submission_queue_size(&g_submission_queue) > 0) {
+    if (image_count > 0) {
+      popup_show_message_ms("Queued input",
+                            "Image prompts cannot be queued while the agent is running",
+                            0, 1600);
+      return;
+    }
     if (is_command) {
       popup_show_message_ms("Queued input",
                             "Commands are unavailable while the agent is running",
@@ -451,26 +470,29 @@ void dispatch_submit(void) {
 
   if (submitted[0])
     input_history_add(submitted);
+  InputImage *images = input_take_images(&image_count);
   input_clear();
   render_all();
 
   if (is_command) {
+    input_images_free(images, image_count);
     int handled = try_builtin_or_plugin_command(submitted, cmd_end);
     if (handled == 2)
       return;
   } else {
     flush_buffered_results();
-    if (agent_should_auto_compact(L, submitted)) {
+    if (image_count == 0 && agent_should_auto_compact(L, submitted)) {
       if (submitted[0] &&
           !submission_queue_push(&g_submission_queue, submitted)) {
-        flush_buffered_and_send(submitted, submitted);
+        flush_buffered_and_send(display, submitted, images, image_count);
         return;
       }
+      input_images_free(images, image_count);
       g_dispatch_after_compact = 1;
       agent_auto_compact(L);
       return;
     }
-    flush_buffered_and_send(submitted, submitted);
+    flush_buffered_and_send(display, submitted, images, image_count);
   }
 }
 

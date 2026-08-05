@@ -321,10 +321,12 @@ local function now_ms()
     return os.clock() * 1000
 end
 
+local DEFAULT_MAX_DURATION_SEC = 2700
+
 local function make_guard(started_at)
     local guard = {
         started_at = started_at,
-        max_duration_ms = agent_config_number("max_duration_sec", 900) * 1000,
+        max_duration_ms = agent_config_number("max_duration_sec", DEFAULT_MAX_DURATION_SEC) * 1000,
         max_tool_calls = agent_config_number("max_tool_calls", 80),
         max_same_tool_call = agent_config_number("max_same_tool_call", 3),
         max_same_shell_command = agent_config_number("max_same_shell_command", 0),
@@ -470,9 +472,13 @@ function M.run(opts, callbacks)
     }
     local review_enabled = completion_review_enabled(opts, profile, run_depth)
     local preserve_reasoning = preserve_reasoning_enabled(opts)
-    local permission_scope = opts.permission_scope or {allowed_tools = {}, full_control = false}
+    local permission_scope = opts.permission_scope or
+        {allowed_tools = {}, allowed_targets = {}, full_control = false}
     if type(permission_scope.allowed_tools) ~= "table" then
         permission_scope.allowed_tools = {}
+    end
+    if type(permission_scope.allowed_targets) ~= "table" then
+        permission_scope.allowed_targets = {}
     end
 
     local function finish(result)
@@ -486,6 +492,12 @@ function M.run(opts, callbacks)
     end
 
     local finished = false
+
+    local function is_cancelled()
+        if type(opts.is_cancelled) ~= "function" then return false end
+        local ok, cancelled = pcall(opts.is_cancelled)
+        return not ok or cancelled == true
+    end
 
     local function stop_run(message, current_msgs)
         if finished then return end
@@ -502,6 +514,11 @@ function M.run(opts, callbacks)
     -- and either finishes or recurses into handle_tool_calls.
     local function continue_agent_cycle(current_msgs, tools)
         if finished then return end
+        if is_cancelled() then
+            finished = true
+            finish({ok = false, error = "cancelled", text = "", messages = current_msgs})
+            return
+        end
         turns = turns + 1
         if turns > max_turns then
             stop_run("max agent turns exceeded: " .. tostring(max_turns), current_msgs)
@@ -536,6 +553,13 @@ function M.run(opts, callbacks)
         end
 
         local function on_result(result, is_done)
+            if is_cancelled() then
+                if not finished then
+                    finished = true
+                    finish({ok = false, error = "cancelled", text = "", messages = current_msgs})
+                end
+                return
+            end
             if not is_done then
                 if result.type == "text" and result.content then
                     stream_emitted_text = true
@@ -1067,6 +1091,21 @@ local function generate_session_title()
     })
 end
 
+local interactive_permission_scopes = {}
+
+local function interactive_permission_scope()
+    local session_id = type(agent.session_id) == "function" and agent.session_id() or "interactive"
+    session_id = tostring(session_id or "interactive")
+    if not interactive_permission_scopes[session_id] then
+        interactive_permission_scopes[session_id] = {
+            allowed_tools = {},
+            allowed_targets = {},
+            full_control = false,
+        }
+    end
+    return interactive_permission_scopes[session_id]
+end
+
 -- Entry point called from C via agent_build_and_dispatch. Receives message
 -- history as a Lua table, runs the full agent cycle with UI-visible streaming.
 _G.agent_entry = function(messages)
@@ -1074,6 +1113,7 @@ _G.agent_entry = function(messages)
         messages = messages,
         update_status = true,
         update_usage = true,
+        permission_scope = interactive_permission_scope(),
     }, {
         on_text = function(chunk)
             agent.append(chunk, "agent")

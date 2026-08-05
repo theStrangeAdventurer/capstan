@@ -24,6 +24,8 @@ static long long now_ms(void) {
 }
 
 static void release_snapshot(void) {
+  for (size_t i = 0; i < g_active.message_count; i++)
+    free(g_active.messages[i].images);
   free(g_active.messages);
   g_active.messages = NULL;
   g_active.message_count = 0;
@@ -39,13 +41,27 @@ static int snapshot_messages(void) {
     return 0;
   for (size_t i = 0; i < messages->size; i++) {
     Message *source = messages->items[i];
-    if (!source || !source->text || !source->text[0])
+    if (!source || ((!source->text || !source->text[0]) &&
+                    source->image_count == 0))
       continue;
     SessionMessage *target = &g_active.messages[g_active.message_count++];
     target->role = source->role == MSG_USER ? SESSION_ROLE_USER
                                             : SESSION_ROLE_ASSISTANT;
     target->text = source->text;
     target->raw_text = source->raw_text ? source->raw_text : source->text;
+    if (source->image_count > 0) {
+      target->images = calloc(source->image_count, sizeof(SessionImage));
+      if (!target->images) {
+        release_snapshot();
+        return 0;
+      }
+      target->image_count = source->image_count;
+      for (size_t image_idx = 0; image_idx < source->image_count; image_idx++) {
+        target->images[image_idx].mime_type =
+            source->images[image_idx].mime_type;
+        target->images[image_idx].data = source->images[image_idx].data;
+      }
+    }
   }
   return 1;
 }
@@ -87,8 +103,24 @@ static void install_loaded(Session *loaded) {
     char *raw = source->raw_text;
     source->text = NULL;
     source->raw_text = NULL;
+    Messages *messages = get_messages();
+    size_t previous_size = messages ? messages->size : 0;
     add_message(text, raw, source->role == SESSION_ROLE_USER ? MSG_USER
                                                              : MSG_AGENT);
+    Message *installed = messages && messages->size > previous_size
+                             ? messages->items[messages->size - 1]
+                             : NULL;
+    for (size_t image_idx = 0; installed && image_idx < source->image_count;
+         image_idx++)
+      message_add_image(installed, source->images[image_idx].mime_type,
+                        source->images[image_idx].data);
+    for (size_t image_idx = 0; image_idx < source->image_count; image_idx++) {
+      free(source->images[image_idx].mime_type);
+      free(source->images[image_idx].data);
+    }
+    free(source->images);
+    source->images = NULL;
+    source->image_count = 0;
   }
   session_free(&g_active);
   g_active = *loaded;

@@ -35,7 +35,7 @@ return {
     },
     reasoning_effort = "medium",
     max_turns = 80,
-    max_duration_sec = 900,
+    max_duration_sec = 2700,
     stream_timeout_sec = 300,
     max_stream_retries = 1,
     max_tool_calls = 80,

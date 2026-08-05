@@ -119,6 +119,26 @@ static MunitResult test_prompt_conflict(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_acp_mode(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "acp"};
+  CliOptions opts = cli_parse(2, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_ACP);
+  return MUNIT_OK;
+}
+
+static MunitResult test_acp_rejects_options(const MunitParameter params[],
+                                            void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "acp", "--json"};
+  CliOptions opts = cli_parse(3, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_ERROR);
+  munit_assert_not_null(opts.error);
+  return MUNIT_OK;
+}
+
 static MunitResult test_self_test_mode(const MunitParameter params[],
                                        void *data) {
   (void)params;
@@ -159,6 +179,9 @@ static MunitTest tests[] = {
     {"/explicit_headless_controls", test_explicit_headless_controls, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/prompt_conflict", test_prompt_conflict, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/acp_mode", test_acp_mode, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/acp_rejects_options", test_acp_rejects_options, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/self_test_mode", test_self_test_mode, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

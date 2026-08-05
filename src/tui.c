@@ -398,8 +398,8 @@ static void render_start_screen(WINDOW *win, int height, int width) {
 }
 
 void render_all(void) {
-  const char *input = input_get_text();
-  int input_pos = input_get_cursor();
+  const char *input = input_get_display_text();
+  int input_pos = input_get_display_cursor();
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
@@ -976,7 +976,7 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   getmaxyx(stdscr, rows, cols);
 
   int popup_w = 56;
-  int popup_h = 11;
+  int popup_h = 9;
   if (cols < popup_w + 4)
     popup_w = cols - 4;
   if (popup_w < 30)
@@ -1004,17 +1004,15 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
            target);
   mvwprintw(win, 2, 2, "%s", target_line);
 
-  int choice = PERMIT_CHOICE_YES;
-  const char *labels[] = {"Yes", "No", "Tool run", "Full run", "Always"};
+  int choice = PERMIT_CHOICE_ONCE;
+  const char *labels[] = {"Allow once", "Always allow", "Reject"};
   const char *descriptions[] = {
-      "Allow this tool call once",
+      "Allow this tool call",
+      "Allow this target for this session",
       "Deny this tool call",
-      "Allow this tool for this run",
-      "Allow all tools for this run",
-      "Persist exact allow rule",
   };
-  const char shortcuts[] = {'Y', 'N', 'T', 'F', 'A'};
-  int choice_count = 5;
+  const char shortcuts[] = {'Y', 'A', 'N'};
+  int choice_count = 3;
   int list_y = 4;
 
   while (1) {

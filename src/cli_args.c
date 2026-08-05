@@ -54,6 +54,14 @@ CliOptions cli_parse(int argc, char **argv) {
   if (strcmp(argv[1], "run") == 0) {
     opts.mode = CLI_MODE_RUN;
     start = 2;
+  } else if (strcmp(argv[1], "acp") == 0) {
+    if (argc != 2) {
+      opts.mode = CLI_MODE_ERROR;
+      opts.error = "acp does not accept options";
+      return opts;
+    }
+    opts.mode = CLI_MODE_ACP;
+    return opts;
   } else {
     opts.mode = CLI_MODE_ERROR;
     opts.error = "unknown command";

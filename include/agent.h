@@ -11,9 +11,16 @@ typedef enum {
 } MessageRole;
 
 typedef struct {
+  char *mime_type;
+  char *data;
+} MessageImage;
+
+typedef struct {
   MessageRole role;
   char *text;
   char *raw_text;
+  MessageImage *images;
+  size_t image_count;
 } Message;
 
 typedef struct {
@@ -23,6 +30,8 @@ typedef struct {
 } Messages;
 
 void add_message(char *text, char *raw_text, MessageRole role);
+int message_add_image(Message *message, const char *mime_type,
+                      const char *base64_data);
 void append_to_last_message(const char *text, MessageRole role);
 Messages *get_messages(void);
 void clear_messages(void);

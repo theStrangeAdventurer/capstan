@@ -23,16 +23,17 @@ name is used. The decision is one of:
 - `deny`: skip the tool and return a denial result.
 - `ask`: show the permit confirmation popup.
 
-The permit popup offers:
+The permit popup and ACP clients expose the same three choices:
 
-- `Yes`: allow this one tool call.
-- `No`: deny this one tool call.
-- `Tool run`: temporarily allow this permission tool for the current run scope.
-- `Full run`: temporarily allow all permissioned tools for the current run scope.
-- `Always allow`: allow this call and persist an exact rule for future calls.
-  For `shell`, the persisted target is the active workspace root, so later
-  shell commands in that workspace do not prompt again just because the command
-  text changed.
+- `Allow once`: allow this one tool call.
+- `Always allow`: allow the exact permission tool and target for the current
+  conversation session.
+- `Reject`: deny this one tool call.
+
+`Always allow` is in-memory only. It applies to later user turns in the same
+TUI or ACP session and disappears when that session or process ends. For
+`shell`, the target is the active workspace root, so later shell commands in
+that workspace do not prompt again just because the command text changed.
 
 For `wiki_ingest`, any positive popup choice persists the `file_read` permission
 for the approved source path. This makes the user's explicit ingest consent
@@ -45,9 +46,8 @@ Markdown root still requires the explicit `wiki_ingest` consent above.
 
 The selected choice can be changed with `k`, up arrow, `j`, or down arrow.
 `Enter` and `Tab` confirm the current choice. Mouse clicks on a choice select
-that choice; mouse clicks outside the permit popup are ignored.
-`y`, `n`, `t`, `f`, and `a` are shortcuts for `Yes`, `No`, `Tool run`,
-`Full run`, and `Always allow`. `Esc` denies the call.
+that choice; mouse clicks outside the permit popup are ignored. `y`, `a`, and
+`n` select `Allow once`, `Always allow`, and `Reject`. `Esc` rejects the call.
 
 Declarative permission rules are configured in:
 
@@ -74,8 +74,8 @@ fields. Newer matching rules take precedence because permission checks scan from
 the end of the in-memory list. A leading `~` or `~/` in `pattern` expands to the
 current `HOME` directory.
 
-Runtime choices from `Always allow` are not editable config. They are persisted
-as application state in:
+Persisted runtime rules created by explicit workflows such as `wiki_ingest`
+(and rules retained from older Capstan versions) are stored in:
 
 ```text
 $XDG_STATE_HOME/capstan/permissions.lua
@@ -92,10 +92,10 @@ prompt still take precedence. Saved `tool` and `pattern` values are escaped as
 Lua string contents so quotes, backslashes, control characters, and newlines
 cannot corrupt the state file.
 
-`Tool run` and `Full run` are in-memory only. They are scoped to the active
-agent run. A `subagents` tool call creates one shared child permission scope for
-all subagent tasks in that batch, so approving `Tool run` or `Full run` once
-applies across the sibling subagents without writing persistent rules.
+Session-scoped exact grants are held in the permission scope owned by the TUI
+or ACP session. Internal run-wide scopes are also used by headless full-control
+mode and shared child permission scopes for a `subagents` batch; none of these
+write persistent rules.
 
 Headless `capstan run --full-control` creates a non-persisted run scope without
 showing prompts. It is workspace-only: file tools are allowed only for paths
@@ -142,8 +142,8 @@ so `"~/narnia/tui-agent/*"` matches both the workspace directory itself and
 paths inside it. This keeps one rule useful for `shell` workspace targets and
 file paths. Newer rules take precedence, so place specific denies after broader
 allows when both could match. The older `"prefix *"` wildcard form is still
-accepted because it is now just normal `*` matching. The current `Always allow`
-UI saves the exact target, not a wildcard.
+accepted because it is now just normal `*` matching. Session-scoped
+`Always allow` also records the exact target, not a wildcard.
 
 ## Architecture
 

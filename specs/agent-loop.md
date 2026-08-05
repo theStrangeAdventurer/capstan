@@ -249,7 +249,7 @@ The limits apply across providers and can be changed with top-level
 `tool_output.max_bytes` and `tool_output.max_lines`.
 
 Agent runs also carry an automatic guard to catch runaway loops before the next
-tool executes. By default the guard stops after 80 turns, 900 seconds, 80 total
+tool executes. By default the guard stops after 80 turns, 2700 seconds, 80 total
 tool calls, or 3 consecutive identical non-shell tool calls. The shell-specific
 repeated-command guard is disabled by default because real coding workflows
 often repeat commands such as `pwd`, `git status`, or `make test`; it can be

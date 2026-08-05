@@ -47,10 +47,12 @@ static MunitResult test_round_trip(const MunitParameter params[], void *data) {
   munit_assert_true(session_create(&session));
   snprintf(session.title, sizeof(session.title), "Тестовая сессия");
   session.title_generated = 1;
+  SessionImage images[] = {{"image/png", "YWJj"}};
   SessionMessage messages[] = {
-      {SESSION_ROLE_USER, "привет\n\"мир\"", "raw\\user\ncontext"},
-      {SESSION_ROLE_ASSISTANT, "ответ", "ответ"},
-      {SESSION_ROLE_ASSISTANT, "", ""},
+      {SESSION_ROLE_USER, "привет\n\"мир\"", "raw\\user\ncontext", images,
+       1},
+      {SESSION_ROLE_ASSISTANT, "ответ", "ответ", NULL, 0},
+      {SESSION_ROLE_ASSISTANT, "", "", NULL, 0},
   };
   session.messages = messages;
   session.message_count = 3;
@@ -67,6 +69,10 @@ static MunitResult test_round_trip(const MunitParameter params[], void *data) {
   munit_assert_string_equal(loaded.messages[0].raw_text,
                             "raw\\user\ncontext");
   munit_assert_string_equal(loaded.messages[1].text, "ответ");
+  munit_assert_size(loaded.messages[0].image_count, ==, 1);
+  munit_assert_string_equal(loaded.messages[0].images[0].mime_type,
+                            "image/png");
+  munit_assert_string_equal(loaded.messages[0].images[0].data, "YWJj");
   session_free(&loaded);
   session.messages = NULL;
   session.message_count = 0;
@@ -150,7 +156,7 @@ static MunitResult test_oversized_line_fails_closed(
   Session session;
   munit_assert_true(session_create(&session));
   SessionMessage messages[] = {
-      {SESSION_ROLE_USER, "valid prefix", "valid prefix"},
+      {SESSION_ROLE_USER, "valid prefix", "valid prefix", NULL, 0},
   };
   session.messages = messages;
   session.message_count = 1;
@@ -175,6 +181,37 @@ static MunitResult test_oversized_line_fails_closed(
   munit_assert_null(loaded.messages);
   munit_assert_size(loaded.message_count, ==, 0);
 
+  session.messages = NULL;
+  session.message_count = 0;
+  session_free(&session);
+  return MUNIT_OK;
+}
+
+static MunitResult test_incomplete_image_chunk_fails_closed(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  munit_assert_true(session_store_init("/repo/incomplete-image"));
+  Session session;
+  munit_assert_true(session_create(&session));
+  SessionMessage messages[] = {
+      {SESSION_ROLE_USER, "image", "image", NULL, 0},
+  };
+  session.messages = messages;
+  session.message_count = 1;
+  munit_assert_true(session_save(&session));
+
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/%s.jsonl", session_store_dir(), session.id);
+  FILE *f = fopen(path, "ab");
+  munit_assert_not_null(f);
+  fputs("{\"type\":\"image\",\"index\":0,\"mime_type\":\"image/png\","
+        "\"data\":\"iVBORw0K\",\"final\":0}\n", f);
+  munit_assert_int(fclose(f), ==, 0);
+
+  Session loaded;
+  munit_assert_false(session_load(session.id, &loaded));
+  munit_assert_null(loaded.messages);
   session.messages = NULL;
   session.message_count = 0;
   session_free(&session);
@@ -239,6 +276,9 @@ static MunitTest tests[] = {
      teardown, MUNIT_TEST_OPTION_NONE, NULL},
     {"/oversized_line_fails_closed", test_oversized_line_fails_closed, setup,
      teardown, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/incomplete_image_chunk_fails_closed",
+     test_incomplete_image_chunk_fails_closed, setup, teardown,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/title", test_title, setup, teardown, MUNIT_TEST_OPTION_NONE, NULL},
     {"/named_session_is_exact_and_not_active",
      test_named_session_is_exact_and_not_active, setup, teardown,

@@ -351,6 +351,19 @@ function M.install_runtime_api(runtime)
         list_all = function()
             return M.list_all(runtime)
         end,
+        configured = function()
+            local items = {}
+            for provider_name, provider in pairs(runtime.providers or {}) do
+                if type(provider.model) == "string" and provider.model ~= "" then
+                    table.insert(items, {provider = provider_name, id = provider.model})
+                end
+            end
+            table.sort(items, function(a, b)
+                if a.provider == b.provider then return a.id < b.id end
+                return a.provider < b.provider
+            end)
+            return items
+        end,
         reasoning_efforts = function(provider_name, model)
             return M.reasoning_efforts(runtime, provider_name, model)
         end,

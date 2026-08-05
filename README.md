@@ -267,9 +267,10 @@ The current MCP client exposes tools; MCP resources, prompts, and sampling are
 not supported yet. MCP servers are trusted integrations and are not sandboxed.
 
 Local PNG, JPEG, GIF, and WebP files, plus validated MCP image results, can be
-passed to vision-capable OpenAI-compatible models. Formats are checked by file
-signature, decoded images are limited to 10 MiB each, and image base64 is not
-written to runtime logs.
+passed to vision-capable OpenAI-compatible models. In the TUI, press `Ctrl+V`
+to attach an image from the system clipboard directly to the current prompt.
+Formats are checked or normalized, decoded images are limited to 10 MiB each,
+and image base64 is not written to runtime logs.
 
 The `subagents` model tool can run focused internal tasks concurrently. Child
 agents can receive narrower model, turn, concurrency, and tool limits. Network
@@ -278,8 +279,9 @@ waits are parallel; Lua callbacks and tool handlers remain single-threaded.
 ## Permissions And Safety
 
 Permissioned model-initiated tools go through Capstan's permission policy.
-Rules may allow, deny, or ask, and the TUI can approve one call, one tool for the
-current run, all tools for the current run, or persist an exact allow rule.
+Rules may allow, deny, or ask. The TUI and ACP clients share three choices:
+allow once, always allow the exact target for the current conversation session,
+or reject.
 
 Additional safeguards include:
 
@@ -296,17 +298,11 @@ Manual slash commands are treated as direct user intent and do not show the
 model-tool permission prompt. Wiki reads are constrained to Capstan's Wiki
 root; external Wiki ingest requires explicit file-read consent.
 
-Persisted `Always allow` rules are stored in:
-
-```text
-$XDG_STATE_HOME/capstan/permissions.lua
-```
-
-or, when `XDG_STATE_HOME` is unset:
-
-```text
-~/.local/state/capstan/permissions.lua
-```
+`Always allow` is not persisted. Permanent owner rules belong in
+`~/.config/capstan/config.lua`. Explicit runtime workflows and older Capstan
+versions may still have rules in
+`$XDG_STATE_HOME/capstan/permissions.lua` (or
+`~/.local/state/capstan/permissions.lua`).
 
 ## Built-In Commands
 

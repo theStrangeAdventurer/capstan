@@ -744,6 +744,10 @@ function M.ensure_initialized()
   end
 end
 
+function M.is_initialized()
+  return initialized
+end
+
 function M.tick(max_steps)
   if disabled or initialized then
     return false

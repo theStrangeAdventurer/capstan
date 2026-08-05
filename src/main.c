@@ -1,6 +1,8 @@
+#include "acp.h"
 #include "agent.h"
 #include "app_config.h"
 #include "cli_args.h"
+#include "clipboard.h"
 #include "dispatch.h"
 #include "http.h"
 #include "input.h"
@@ -46,6 +48,7 @@ static int g_mouse_selecting_messages = 0;
 #define IDLE_RENDER_INTERVAL_MS 50
 #define KEY_CTRL_D 0x04
 #define KEY_CTRL_U 0x15
+#define KEY_CTRL_V 0x16
 
 static long long main_now_ms(void) {
   struct timeval tv;
@@ -258,6 +261,34 @@ static void flash_copy_active_selection(void) {
   popup_show_message_ms("Copied", "Text copied", 0, 500);
 }
 
+static void paste_clipboard_image(void) {
+  char error[256];
+  size_t size = 0;
+  unsigned char *data = clipboard_read_image(&size, error, sizeof(error));
+  if (!data) {
+    popup_show_message_ms("Clipboard", error[0] ? error : "No image found", 1,
+                          1600);
+    return;
+  }
+  if (size > CLIPBOARD_IMAGE_MAX_BYTES) {
+    free(data);
+    popup_show_message_ms("Clipboard", "Image exceeds the 10 MiB limit", 1,
+                          1600);
+    return;
+  }
+  char *base64 = clipboard_base64_encode(data, size);
+  free(data);
+  if (!base64 || !input_add_image("image/png", base64)) {
+    free(base64);
+    popup_show_message_ms("Clipboard", "Could not attach image", 1, 1600);
+    return;
+  }
+  free(base64);
+  char message[64];
+  snprintf(message, sizeof(message), "Image %zu attached", input_image_count());
+  popup_show_message_ms("Clipboard", message, 0, 700);
+}
+
 static int stop_active_stream(void) {
   if (!http_is_loading())
     return 0;
@@ -317,7 +348,8 @@ static void handle_mouse_event(MEVENT *event) {
 static void print_help(void) {
   printf("Usage:\n");
   printf("  capstan\n");
-  printf("  capstan run [--prompt TEXT | --prompt-file PATH] [options]\n\n");
+  printf("  capstan run [--prompt TEXT | --prompt-file PATH] [options]\n");
+  printf("  capstan acp\n\n");
   printf("Options:\n");
   printf("  --provider NAME     Override provider for this run\n");
   printf("  --model ID          Override model for this run\n");
@@ -937,6 +969,9 @@ int main(int argc, char *argv[]) {
   if (cli.mode == CLI_MODE_RUN)
     return run_headless(&cli, argv[0]);
 
+  if (cli.mode == CLI_MODE_ACP)
+    return acp_run(argv[0]);
+
   app_workdir_init(argv[0]);
 
   setlocale(LC_ALL, "");
@@ -1117,6 +1152,12 @@ int main(int argc, char *argv[]) {
           visual_exit();
         }
       }
+      render_all();
+      continue;
+    }
+
+    if (ch == KEY_CTRL_V) {
+      paste_clipboard_image();
       render_all();
       continue;
     }

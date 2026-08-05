@@ -37,6 +37,14 @@ static int l_agent_finish_run(lua_State *L) {
   return 0;
 }
 
+static int l_agent_session_id(lua_State *L) {
+  const char *id = session_manager_active_id();
+  if (!id || !id[0])
+    return 0;
+  lua_pushstring(L, id);
+  return 1;
+}
+
 static int l_agent_session_title_context(lua_State *L) {
   const char *id = NULL;
   const char *user_text = NULL;
@@ -190,9 +198,35 @@ void add_message(char *text, char *raw_text, MessageRole role) {
   message->text = text;
   message->raw_text = raw_text;
   message->role = role;
+  message->images = NULL;
+  message->image_count = 0;
 
   da_append(&messages, message);
   g_messages_revision++;
+}
+
+int message_add_image(Message *message, const char *mime_type,
+                      const char *base64_data) {
+  if (!message || !mime_type || !mime_type[0] || !base64_data ||
+      !base64_data[0])
+    return 0;
+  MessageImage *grown =
+      realloc(message->images,
+              (message->image_count + 1) * sizeof(MessageImage));
+  if (!grown)
+    return 0;
+  message->images = grown;
+  MessageImage *image = &message->images[message->image_count];
+  image->mime_type = my_strdup(mime_type);
+  image->data = my_strdup(base64_data);
+  if (!image->mime_type || !image->data) {
+    free(image->mime_type);
+    free(image->data);
+    return 0;
+  }
+  message->image_count++;
+  g_messages_revision++;
+  return 1;
 }
 
 void free_message(Message *m) {
@@ -200,6 +234,11 @@ void free_message(Message *m) {
     free(m->text);
   if (m->raw_text && m->raw_text != m->text)
     free(m->raw_text);
+  for (size_t i = 0; i < m->image_count; i++) {
+    free(m->images[i].mime_type);
+    free(m->images[i].data);
+  }
+  free(m->images);
   free(m);
 }
 
@@ -260,6 +299,8 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "set_thinking");
   lua_pushcfunction(L, l_agent_finish_run);
   lua_setfield(L, -2, "finish_run");
+  lua_pushcfunction(L, l_agent_session_id);
+  lua_setfield(L, -2, "session_id");
   lua_pushcfunction(L, l_agent_session_title_context);
   lua_setfield(L, -2, "session_title_context");
   lua_pushcfunction(L, l_agent_set_session_title);
@@ -278,13 +319,45 @@ static void push_messages_table(lua_State *L) {
   lua_newtable(L);
   int idx = 1;
   for (size_t i = 0; i < msgs->size; i++) {
-    if (!msgs->items[i]->text || msgs->items[i]->text[0] == '\0')
+    Message *message = msgs->items[i];
+    if ((!message->text || message->text[0] == '\0') &&
+        message->image_count == 0)
       continue;
     lua_newtable(L);
-    lua_pushstring(L, msgs->items[i]->role == MSG_USER ? "user" : "assistant");
+    lua_pushstring(L, message->role == MSG_USER ? "user" : "assistant");
     lua_setfield(L, -2, "role");
-    lua_pushstring(L, msgs->items[i]->raw_text);
-    lua_setfield(L, -2, "content");
+    if (message->role == MSG_USER && message->image_count > 0) {
+      lua_newtable(L);
+      int content_idx = 1;
+      const char *raw = message->raw_text ? message->raw_text : "";
+      if (raw[0]) {
+        lua_newtable(L);
+        lua_pushstring(L, "text");
+        lua_setfield(L, -2, "type");
+        lua_pushstring(L, raw);
+        lua_setfield(L, -2, "text");
+        lua_rawseti(L, -2, content_idx++);
+      }
+      for (size_t image_idx = 0; image_idx < message->image_count;
+           image_idx++) {
+        MessageImage *image = &message->images[image_idx];
+        lua_newtable(L);
+        lua_pushstring(L, "image_url");
+        lua_setfield(L, -2, "type");
+        lua_newtable(L);
+        lua_pushfstring(L, "data:%s;base64,%s", image->mime_type,
+                        image->data);
+        lua_setfield(L, -2, "url");
+        lua_pushstring(L, "auto");
+        lua_setfield(L, -2, "detail");
+        lua_setfield(L, -2, "image_url");
+        lua_rawseti(L, -2, content_idx++);
+      }
+      lua_setfield(L, -2, "content");
+    } else {
+      lua_pushstring(L, message->raw_text ? message->raw_text : message->text);
+      lua_setfield(L, -2, "content");
+    }
     lua_rawseti(L, -2, idx++);
   }
 }

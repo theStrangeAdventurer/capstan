@@ -343,11 +343,13 @@ local function guard_duration_error(guard)
     return nil
 end
 
-local function permission_prompt(run_ctx, permission_tool, target)
+local function permission_prompt(run_ctx, permission_tool, target, details)
     local guard = run_ctx and run_ctx.guard or nil
     if guard and type(guard.pause) == "function" then guard.pause() end
     local prompt_started_at = now_ms()
-    local ok, decision = pcall(permit.prompt, permission_tool, target)
+    local callbacks = run_ctx and run_ctx.callbacks or nil
+    local prompt = callbacks and callbacks.on_permission_request or permit.prompt
+    local ok, decision = pcall(prompt, permission_tool, target, details)
     local paused_ms = math.max(0, now_ms() - prompt_started_at)
     if guard and type(guard.resume) == "function" then
         paused_ms = guard.resume()
@@ -1143,11 +1145,17 @@ local function path_is_within_workspace(path)
 end
 
 local function scope_allows_target(scope, permission_tool, target)
+    if not scope or not permission_tool then return false end
+    local targets = type(scope.allowed_targets) == "table" and
+        scope.allowed_targets[permission_tool] or nil
+    if type(targets) == "table" and targets[tostring(target)] == true then
+        return true
+    end
     if not scope_allows(scope, permission_tool) then return false end
     if (permission_tool == "file_read" or permission_tool == "file_write") and workspace.is_sensitive_path(target) then
         return false
     end
-    if not scope or not scope.workdir_only then return true end
+    if not scope.workdir_only then return true end
     if permission_tool == "shell" then
         local workspace_root = workspace.configured_workspace_root()
         return type(workspace_root) == "string" and workspace_root ~= "" and target == workspace_root
@@ -1158,7 +1166,17 @@ local function scope_allows_target(scope, permission_tool, target)
     return false
 end
 
-local function apply_prompt_decision(decision, scope, permission_tool)
+local function apply_prompt_decision(decision, scope, permission_tool, target)
+    if decision == "allow_session" or decision == "always" then
+        if scope and permission_tool then
+            if type(scope.allowed_targets) ~= "table" then scope.allowed_targets = {} end
+            if type(scope.allowed_targets[permission_tool]) ~= "table" then
+                scope.allowed_targets[permission_tool] = {}
+            end
+            scope.allowed_targets[permission_tool][tostring(target)] = true
+        end
+        return true
+    end
     if decision == "allow_tool_run" then
         if scope and permission_tool then
             if type(scope.allowed_tools) ~= "table" then scope.allowed_tools = {} end
@@ -1170,12 +1188,13 @@ local function apply_prompt_decision(decision, scope, permission_tool)
         if scope then scope.full_control = true end
         return true
     end
-    return decision == "allow" or decision == "always"
+    return decision == "allow"
 end
 
 local function prompt_decision_allows(decision)
-    return decision == "allow" or decision == "allow_tool_run" or
-        decision == "allow_run" or decision == "always"
+    return decision == "allow" or decision == "allow_session" or
+        decision == "allow_tool_run" or decision == "allow_run" or
+        decision == "always"
 end
 
 local function should_persist_prompt_decision(tool_name, permission_tool, decision)
@@ -1267,6 +1286,14 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
 
     for _, tc in ipairs(tool_calls) do
         local result_content
+        local event_ok = false
+        local callbacks = run_ctx and run_ctx.callbacks or nil
+        if callbacks and type(callbacks.on_tool_start) == "function" then
+            local callback_ok, callback_err = pcall(callbacks.on_tool_start, tc)
+            if not callback_ok then
+                logging.runtime_log("tool_event", "on_tool_start failed: " .. tostring(callback_err), "warn")
+            end
+        end
         if not tool_available(combined_tools, tc.name) then
             result_content = "Tool " .. tostring(tc.name) .. " is not available in the active profile"
             logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tc.name)))
@@ -1371,17 +1398,21 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             result_content = shell_scope_reason or ("Permission denied for " .. tool_name .. " " .. target)
                             if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
                         elseif perm == "ask" then
-                            local decision = permission_prompt(run_ctx, permission_tool, target)
+                            local decision = permission_prompt(run_ctx, permission_tool, target, {
+                                tool_name = tool_name,
+                                arguments = args,
+                                tool_call_id = tc.id,
+                            })
                             logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
                             if decision == "deny" then
                                 result_content = "User denied " .. tool_name .. " " .. target
                                 if show_generic_status then append_status(tool_status_suffix("— denied by user", display_command)) end
                             else
-                                if decision == "always" or should_persist_prompt_decision(tool_name, permission_tool, decision) then
+                                if should_persist_prompt_decision(tool_name, permission_tool, decision) then
                                     permit.grant(permission_tool, target, true)
                                     permit.save()
                                 end
-                                if not apply_prompt_decision(decision, permission_scope, permission_tool) then
+                                if not apply_prompt_decision(decision, permission_scope, permission_tool, target) then
                                     result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
                                     if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
                                 else
@@ -1389,6 +1420,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                     result_content, tool_ok = execute_tool(tool_name, args, run_ctx,
                                         tool_permission_context(permission_tool, target),
                                         display_command)
+                                    event_ok = tool_ok == true
                                     mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
                                     mark_validation(run_ctx, tool_name, args, tool_ok)
                                     if tool_ok then
@@ -1405,6 +1437,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             result_content, tool_ok = execute_tool(tool_name, args, run_ctx,
                                         tool_permission_context(permission_tool, target),
                                         display_command)
+                            event_ok = tool_ok == true
                             mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
                             mark_validation(run_ctx, tool_name, args, tool_ok)
                             if tool_ok then
@@ -1427,6 +1460,14 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                     })
                     result_content = result_ctx.result
                 end
+            end
+        end
+
+        if callbacks and type(callbacks.on_tool_done) == "function" then
+            local callback_ok, callback_err = pcall(
+                callbacks.on_tool_done, tc, tool_result_text(result_content), event_ok)
+            if not callback_ok then
+                logging.runtime_log("tool_event", "on_tool_done failed: " .. tostring(callback_err), "warn")
             end
         end
 

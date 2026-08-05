@@ -110,7 +110,7 @@ static MunitResult test_failed_active_write_keeps_current_session(
            session_manager_active_title());
 
   SessionMessage target_messages[] = {
-      {SESSION_ROLE_USER, "target message", "target message"},
+      {SESSION_ROLE_USER, "target message", "target message", NULL, 0},
   };
   Session target = {0};
   snprintf(target.id, sizeof(target.id), "target-session");

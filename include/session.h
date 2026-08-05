@@ -13,9 +13,16 @@ typedef enum {
 } SessionRole;
 
 typedef struct {
+  char *mime_type;
+  char *data;
+} SessionImage;
+
+typedef struct {
   SessionRole role;
   char *text;
   char *raw_text;
+  SessionImage *images;
+  size_t image_count;
 } SessionMessage;
 
 typedef struct {

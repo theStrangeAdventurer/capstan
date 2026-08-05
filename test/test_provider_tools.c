@@ -1235,7 +1235,7 @@ static MunitResult test_mcp_image_result_becomes_multimodal_message(
       "mcp.recv = function(handle, timeout)\n"
       "  return '{\"jsonrpc\":\"2.0\",\"id\":' .. MCP_LAST_ID .. "
       "',\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Screenshot ready\"},' .. "
-      "'{\"type\":\"image\",\"mimeType\":\"image/png\",\"data\":\"aGVsbG8=\"}]}}'\n"
+      "'{\"type\":\"image\",\"mimeType\":\"image/png\",\"data\":\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=\"}]}}'\n"
       "end\n"
       "mcp.recv_nowait = function(handle) return mcp.recv(handle, 0) end\n");
   munit_assert_int(rc, ==, LUA_OK);
@@ -1245,9 +1245,10 @@ static MunitResult test_mcp_image_result_becomes_multimodal_message(
   munit_assert_true(strstr(captured_body, "\"role\":\"tool\"") != NULL);
   munit_assert_true(strstr(captured_body, "Screenshot ready") != NULL);
   munit_assert_true(strstr(captured_body, "\"type\":\"image_url\"") != NULL);
-  munit_assert_true(strstr(captured_body,
-                           "data:image/png;base64,aGVsbG8=") != NULL);
-  munit_assert_true(strstr(captured_logs, "aGVsbG8=") == NULL);
+  munit_assert_true(strstr(
+      captured_body,
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=") != NULL);
+  munit_assert_true(strstr(captured_logs, "iVBORw0KGgo") == NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -4476,6 +4477,43 @@ static MunitResult test_tool_guard_stops_duration_before_tool_execution(
   return MUNIT_OK;
 }
 
+static MunitResult test_tool_guard_default_duration_is_2700_seconds(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  install_mock_now_ms(L, 0);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+  set_mock_now_ms(L, 901000);
+  send_tool_call(L, "call_before_default_duration", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  munit_assert_true(strstr(captured_agent_appends, "[stopped:") == NULL);
+  munit_assert_int(post_stream_calls, ==, 2);
+
+  set_mock_now_ms(L, 2701000);
+  send_tool_call(L, "call_after_default_duration", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  munit_assert_true(strstr(captured_agent_appends,
+                           "[stopped: agent run exceeded 2700s") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[tool_guard] agent run exceeded 2700s") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_tool_guard_pauses_during_permission_prompt(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -4547,7 +4585,7 @@ static MunitResult test_tool_guard_stops_max_turns_before_continuation_request(
   return MUNIT_OK;
 }
 
-static MunitResult test_shell_always_allow_uses_workspace_target(
+static MunitResult test_shell_always_allow_is_session_scoped(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -4568,9 +4606,8 @@ static MunitResult test_shell_always_allow_uses_workspace_target(
 
   munit_assert_string_equal(captured_permit_tool, "shell");
   munit_assert_string_equal(captured_permit_target, "/repo/project");
-  munit_assert_string_equal(granted_tool, "shell");
-  munit_assert_string_equal(granted_pattern, "/repo/project");
-  munit_assert_int(grant_allow, ==, 1);
+  munit_assert_string_equal(granted_tool, "");
+  munit_assert_int(permit_save_calls, ==, 0);
   munit_assert_int(permit_prompt_calls, ==, 1);
   munit_assert_true(strstr(captured_agent_appends, "⚙ shell") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "  $ pwd") != NULL);
@@ -4582,8 +4619,9 @@ static MunitResult test_shell_always_allow_uses_workspace_target(
 
   munit_assert_string_equal(captured_permit_tool, "shell");
   munit_assert_string_equal(captured_permit_target, "/repo/project");
-  munit_assert_int(permit_check_calls, ==, 2);
+  munit_assert_int(permit_check_calls, ==, 1);
   munit_assert_int(permit_prompt_calls, ==, 1);
+  munit_assert_int(permit_save_calls, ==, 0);
   munit_assert_true(strstr(captured_body, "shell llm: ls src") != NULL);
 
   reset_captures(L);
@@ -5937,14 +5975,17 @@ static MunitTest tests[] = {
     {"/tool_guard_stops_duration_before_tool_execution",
      test_tool_guard_stops_duration_before_tool_execution, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_default_duration_is_2700_seconds",
+     test_tool_guard_default_duration_is_2700_seconds, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_guard_pauses_during_permission_prompt",
      test_tool_guard_pauses_during_permission_prompt, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_guard_stops_max_turns_before_continuation_request",
      test_tool_guard_stops_max_turns_before_continuation_request, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/shell_always_allow_uses_workspace_target",
-     test_shell_always_allow_uses_workspace_target, NULL, NULL,
+    {"/shell_always_allow_is_session_scoped",
+     test_shell_always_allow_is_session_scoped, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_tool_redacts_command_before_continuation",
      test_shell_tool_redacts_command_before_continuation, NULL, NULL,

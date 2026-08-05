@@ -269,6 +269,7 @@ See `TEST_SRCS` in the Makefile for the current list of testable modules.
 
 Feature specs:
 
+- [ACP](specs/acp.md)
 - [Agent control](specs/agent-control.md)
 - [Agent profiles](specs/agent-profiles.md)
 - [Agent loop](specs/agent-loop.md)
