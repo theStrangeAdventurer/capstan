@@ -438,7 +438,7 @@ local function subagent_prompt(args, task)
     return table.concat(parts, "\n\n")
 end
 
-local function filter_tools(parent_tools, requested)
+local function inherited_tool_map(parent_tools)
     local inherited = {}
     for _, tool in ipairs(parent_tools or {}) do
         local name = tool["function"] and tool["function"].name
@@ -446,6 +446,11 @@ local function filter_tools(parent_tools, requested)
             inherited[name] = tool
         end
     end
+    return inherited
+end
+
+local function filter_tools(parent_tools, requested)
+    local inherited = inherited_tool_map(parent_tools)
     if type(requested) ~= "table" or #requested == 0 then
         local result = {}
         for _, tool in ipairs(parent_tools or {}) do
@@ -460,6 +465,39 @@ local function filter_tools(parent_tools, requested)
         if tool then table.insert(result, tool) end
     end
     return result
+end
+
+local function validate_subagent_tools(tasks, parent_tools)
+    local inherited = inherited_tool_map(parent_tools)
+    local errors = {}
+    for index, task in ipairs(tasks or {}) do
+        if type(task.tools) == "table" and #task.tools > 0 then
+            local unknown = {}
+            local seen = {}
+            for _, requested in ipairs(task.tools) do
+                local name = tostring(requested)
+                if not inherited[name] and not seen[name] then
+                    seen[name] = true
+                    table.insert(unknown, name)
+                end
+            end
+            if #unknown > 0 then
+                table.sort(unknown)
+                table.insert(errors, string.format(
+                    "task %q requests unavailable tools: %s",
+                    tostring(task.id or index), table.concat(unknown, ", ")
+                ))
+            end
+        end
+    end
+    if #errors == 0 then return nil end
+
+    local available = {}
+    for name in pairs(inherited) do table.insert(available, name) end
+    table.sort(available)
+    local available_text = #available > 0 and table.concat(available, ", ") or "none"
+    return "Subagents failed: " .. table.concat(errors, "; ") ..
+        ". Available tools: " .. available_text
 end
 
 local function make_subagent_result(task, index, started_at)
@@ -523,15 +561,19 @@ local function run_subagents(args, run_ctx)
         return "Subagents failed: too many tasks (" .. tostring(#args.tasks) .. " > " .. tostring(max_tasks) .. ")", false
     end
 
+    local tool_error = validate_subagent_tools(args.tasks, run_ctx and run_ctx.tools)
+    if tool_error then return tool_error, false end
+
     local max_concurrent = math.min(subagent_max_concurrent(args), #args.tasks)
     local provider_name = (run_ctx and run_ctx.provider_name) or nil
     local active_provider = run_ctx and run_ctx.provider or nil
     local default_model = active_provider and active_provider.model or nil
     local model_set = provider_model_set(run_ctx, provider_name)
     local parent_scope = run_ctx and run_ctx.permission_scope or nil
-    local permission_scope = {
+    local permission_scope = parent_scope or {
         allowed_tools = {},
-        full_control = parent_scope and parent_scope.full_control or false,
+        allowed_targets = {},
+        full_control = false,
     }
     local group_started_at = now_ms()
     local results = {}
@@ -1150,6 +1192,7 @@ end
 
 local function scope_allows_target(scope, permission_tool, target)
     if not scope or not permission_tool then return false end
+    if scope.yolo then return true end
     local targets = type(scope.allowed_targets) == "table" and
         scope.allowed_targets[permission_tool] or nil
     if type(targets) == "table" and targets[tostring(target)] == true then
@@ -1375,6 +1418,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                     else
                         local permission_scope = run_ctx and run_ctx.permission_scope or nil
                         local perm = "allow"
+                        local explicit_allow = false
                         local shell_scope_ok = true
                         local shell_scope_reason = nil
                         if permission_tool == "shell" and permission_scope and permission_scope.workdir_only then
@@ -1383,15 +1427,17 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                         if not shell_scope_ok then
                             perm = "deny"
                             logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=deny reason=%s", permission_tool, tool_name, target, tostring(shell_scope_reason)))
-                        elseif scope_allows_target(permission_scope, permission_tool, target) then
-                            logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
                         elseif permission_tool then
-                            local explicit_allow
                             perm, explicit_allow = permit.check(permission_tool, target)
-                            if (permission_tool == "file_read" or permission_tool == "file_write") and workspace.is_sensitive_path(target) and perm == "allow" and not explicit_allow then
-                                perm = "ask"
+                            if perm ~= "deny" and scope_allows_target(permission_scope, permission_tool, target) then
+                                perm = "allow"
+                                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
+                            else
+                                if (permission_tool == "file_read" or permission_tool == "file_write") and workspace.is_sensitive_path(target) and perm == "allow" and not explicit_allow then
+                                    perm = "ask"
+                                end
+                                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
                             end
-                            logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
                         end
 
                         if show_generic_status then

@@ -301,7 +301,27 @@ static int read_request(lua_State *l, char **line, size_t *capacity) {
   return handle_line(l, *line, (size_t)n);
 }
 
-int acp_run(const char *argv0) {
+static void set_yolo(lua_State *l) {
+  int top = lua_gettop(l);
+  lua_getglobal(l, "capstan");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "agent");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "set_yolo");
+  if (!lua_isfunction(l, -1))
+    goto done;
+  lua_pushboolean(l, 1);
+  if (lua_pcall(l, 1, 0, 0) != LUA_OK)
+    fprintf(stderr, "capstan: could not enable ACP YOLO mode: %s\n",
+            lua_tostring(l, -1));
+
+done:
+  lua_settop(l, top);
+}
+
+int acp_run(const char *argv0, int yolo) {
   int protocol_fd = dup(STDOUT_FILENO);
   if (protocol_fd < 0 || !(g_protocol_output = fdopen(protocol_fd, "w"))) {
     if (protocol_fd >= 0)
@@ -330,6 +350,8 @@ int acp_run(const char *argv0) {
   PluginsInitOptions options = {0};
   plugins_init_with_options(&options);
   load_embedded_plugins();
+  if (yolo)
+    set_yolo(L);
   char global_plugins[512];
   if (app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
     load_plugins_from(global_plugins);

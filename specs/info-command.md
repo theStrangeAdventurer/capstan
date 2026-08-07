@@ -22,8 +22,8 @@ The popup includes:
   available
 
 The empty conversation start screen stays brief: it shows only current
-provider/model, profile, workspace, and a ready hint. It does not duplicate this
-diagnostic popup.
+provider/model, effective reasoning effort, profile, workspace, and a ready
+hint. It does not duplicate this diagnostic popup.
 
 ## Architecture
 

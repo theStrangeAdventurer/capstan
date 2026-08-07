@@ -30,6 +30,10 @@ PermitPromptAction permit_prompt_handle_key(int ch, int *choice) {
   case 'A':
     *choice = PERMIT_CHOICE_ALWAYS;
     return PERMIT_PROMPT_DONE;
+  case 't':
+  case 'T':
+    *choice = PERMIT_CHOICE_TOOL;
+    return PERMIT_PROMPT_DONE;
   case 'n':
   case 'N':
     *choice = PERMIT_CHOICE_REJECT;
@@ -52,6 +56,8 @@ const char *permit_prompt_result(int choice) {
     return "allow";
   case PERMIT_CHOICE_ALWAYS:
     return "allow_session";
+  case PERMIT_CHOICE_TOOL:
+    return "allow_tool_run";
   default:
     return "deny";
   }

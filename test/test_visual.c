@@ -36,6 +36,49 @@ static MunitResult test_enter_sets_active(const MunitParameter params[], void *d
     return MUNIT_OK;
 }
 
+static MunitResult test_resume_restores_cursor(const MunitParameter params[],
+                                               void *data) {
+    (void)params;
+    (void)data;
+    setup(NULL, NULL);
+    visual_set_cursor(1, 2);
+    visual_exit();
+    visual_resume();
+    int line, col;
+    visual_get_cursor(&line, &col);
+    munit_assert_int(line, ==, 1);
+    munit_assert_int(col, ==, 2);
+    teardown(NULL);
+    return MUNIT_OK;
+}
+
+static MunitResult test_reset_discards_cursor_for_new_history(
+    const MunitParameter params[], void *data) {
+    (void)params;
+    (void)data;
+    setup(NULL, NULL);
+    visual_set_cursor(1, 2);
+    visual_reset();
+    linemap_free();
+
+    const char *texts[] = {"new session"};
+    int roles[] = {0};
+    linemap_build(NULL, roles, 1, texts, 80);
+    const char **texts_copy = malloc(sizeof(const char *));
+    texts_copy[0] = texts[0];
+    visual_set_texts(texts_copy, 1);
+    visual_resume();
+
+    int line, col;
+    visual_get_cursor(&line, &col);
+    munit_assert_int(line, ==, 1);
+    munit_assert_int(col, ==, 11);
+
+    visual_reset();
+    linemap_free();
+    return MUNIT_OK;
+}
+
 static MunitResult test_exit_clears(const MunitParameter params[], void *data) {
     (void)params;
     (void)data;
@@ -429,6 +472,11 @@ static MunitResult test_word_backward_boundary(const MunitParameter params[], vo
 
 static MunitTest tests[] = {
     {"/enter_active", test_enter_sets_active, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/resume_restores_cursor", test_resume_restores_cursor, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/reset_discards_cursor_for_new_history",
+     test_reset_discards_cursor_for_new_history, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/exit_clears", test_exit_clears, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/cursor_last", test_enter_cursor_at_last_line, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/move_up", test_move_up, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

@@ -79,6 +79,39 @@ static MunitResult test_agent_profile_label(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_agent_provider_status_includes_reasoning_effort(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  agent_init(L);
+  lua_getglobal(L, "agent");
+  lua_getfield(L, -1, "set_info");
+  lua_pushstring(L, "openrouter");
+  lua_pushstring(L, "model/id");
+  lua_pushstring(L, "high");
+  int rc = lua_pcall(L, 3, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_string_equal(agent_provider_name(), "openrouter");
+  munit_assert_string_equal(agent_provider_model(), "model/id");
+  munit_assert_string_equal(agent_reasoning_effort(), "high");
+
+  lua_getfield(L, -1, "set_info");
+  lua_pushnil(L);
+  lua_pushnil(L);
+  lua_pushnil(L);
+  rc = lua_pcall(L, 3, 0, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_null(agent_provider_name());
+  munit_assert_null(agent_provider_model());
+  munit_assert_null(agent_reasoning_effort());
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_failed_active_write_keeps_current_session(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -159,6 +192,9 @@ static MunitTest tests[] = {
     {"/activity_label", test_agent_activity_label, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/profile_label", test_agent_profile_label, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_status_includes_reasoning_effort",
+     test_agent_provider_status_includes_reasoning_effort, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/failed_active_write_keeps_current_session",
      test_failed_active_write_keeps_current_session, NULL, NULL,

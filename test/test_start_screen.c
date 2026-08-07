@@ -90,6 +90,7 @@ static MunitResult test_build_status_values(const MunitParameter params[],
   StartScreenStatus status = {
       .provider = "openrouter",
       .model = "deepseek/deepseek-v4-pro",
+      .reasoning_effort = "high",
       .profile = "plan",
       .workdir = "/Users/alxd/narnia/tui-agent",
   };
@@ -98,6 +99,7 @@ static MunitResult test_build_status_values(const MunitParameter params[],
 
   munit_assert_string_equal(lines.model,
                             "openrouter/deepseek/deepseek-...");
+  munit_assert_string_equal(lines.reasoning_effort, "high");
   munit_assert_string_equal(lines.profile, "plan");
   munit_assert_string_equal(lines.workdir, "~/narnia/tui-agent");
   munit_assert_string_equal(lines.ready,
@@ -114,6 +116,7 @@ static MunitResult test_build_status_fallbacks(const MunitParameter params[],
   start_screen_build_status(&status, &lines);
 
   munit_assert_string_equal(lines.model, "not configured");
+  munit_assert_string_equal(lines.reasoning_effort, "default");
   munit_assert_string_equal(lines.profile, "implement");
   munit_assert_string_equal(lines.workdir, ".");
   return MUNIT_OK;

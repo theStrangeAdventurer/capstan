@@ -3,6 +3,7 @@
 #include "app_config.h"
 #include "curses.h"
 #include "dispatch.h"
+#include "diff_highlight.h"
 #include "http.h"
 #include "input.h"
 #include "linemap.h"
@@ -160,13 +161,15 @@ static void mvwadd_clipped(WINDOW *win, int y, int x, const char *text,
   mvwaddstr(win, y, x, buf);
 }
 
-static int diff_line_color_pair(const char *line, int len) {
-  if (!line || len <= 0)
-    return 0;
-  if (line[0] == '+' && !(len >= 3 && strncmp(line, "+++", 3) == 0))
+static int diff_line_color_pair(const char *logical_line_start) {
+  switch (diff_highlight_kind(logical_line_start)) {
+  case DIFF_HIGHLIGHT_ADD:
     return g_diff_add_color_pair;
-  if (line[0] == '-' && !(len >= 3 && strncmp(line, "---", 3) == 0))
+  case DIFF_HIGHLIGHT_DELETE:
     return g_diff_del_color_pair;
+  case DIFF_HIGHLIGHT_NONE:
+    return 0;
+  }
   return 0;
 }
 
@@ -176,8 +179,13 @@ static int line_starts_with(const char *line, int len, const char *prefix) {
 }
 
 static int is_unified_diff_hunk_header(const char *line, int len) {
-  return line_starts_with(line, len, "@@ ") && len >= 5 &&
-         strstr(line + 3, " @@") != NULL;
+  if (!line_starts_with(line, len, "@@ ") || len < 5)
+    return 0;
+  for (int i = 3; i + 3 <= len; i++) {
+    if (memcmp(line + i, " @@", 3) == 0)
+      return 1;
+  }
+  return 0;
 }
 
 static int is_fence_line(const char *line, int len) {
@@ -328,8 +336,10 @@ static void render_start_screen_wide(WINDOW *win, int height, int width,
 
   render_status_pair(win, frame_y + 6, status_x, "model", lines->model,
                      value_w);
-  render_profile_pair(win, frame_y + 7, status_x, lines->profile, value_w);
-  render_status_pair(win, frame_y + 8, status_x, "workdir", lines->workdir,
+  render_status_pair(win, frame_y + 7, status_x, "effort",
+                     lines->reasoning_effort, value_w);
+  render_profile_pair(win, frame_y + 8, status_x, lines->profile, value_w);
+  render_status_pair(win, frame_y + 9, status_x, "workdir", lines->workdir,
                      value_w);
 
   wattron(win, COLOR_PAIR(2));
@@ -368,9 +378,11 @@ static void render_start_screen_compact(WINDOW *win, int height, int width,
 
   render_status_pair(win, frame_y + 5, frame_x + 2, "model", lines->model,
                      inner_w - 9);
-  render_profile_pair(win, frame_y + 6, frame_x + 2, lines->profile,
+  render_status_pair(win, frame_y + 6, frame_x + 2, "effort",
+                     lines->reasoning_effort, inner_w - 9);
+  render_profile_pair(win, frame_y + 7, frame_x + 2, lines->profile,
                       inner_w - 9);
-  render_status_pair(win, frame_y + 7, frame_x + 2, "workdir", lines->workdir,
+  render_status_pair(win, frame_y + 8, frame_x + 2, "workdir", lines->workdir,
                      inner_w - 9);
 }
 
@@ -378,6 +390,7 @@ static void render_start_screen(WINDOW *win, int height, int width) {
   StartScreenStatus status = {
       .provider = agent_provider_name(),
       .model = agent_provider_model(),
+      .reasoning_effort = agent_reasoning_effort(),
       .profile = agent_profile_name(),
       .workdir = app_workdir(),
   };
@@ -413,7 +426,7 @@ void render_all(void) {
   int inner_w = cols - 2 * margin;
   int text_w = inner_w - 2 * MSG_PAD_H;
 
-  if (msg_h < 1 || inner_w < 1)
+  if (msg_h < 1 || inner_w < 3 || text_w < 1)
     return;
 
   WINDOW *msg_win = newwin(msg_h, inner_w, margin, margin);
@@ -523,9 +536,13 @@ void render_all(void) {
           col++;
       }
 
-      int line_len = (int)(line_end - p);
       int current_diff_state = diff_state;
-      int next_diff_state = update_diff_state(diff_state, p, line_len);
+      int next_diff_state = diff_state;
+      if (*line_end == '\n' || *line_end == '\0') {
+        next_diff_state = update_diff_state(
+            diff_state, logical_line_start,
+            (int)(line_end - logical_line_start));
+      }
 
       if (!is_user && p == logical_line_start) {
         if (line_end == logical_line_start) {
@@ -537,9 +554,10 @@ void render_all(void) {
 
       if (global_line >= top_line && win_row < msg_h) {
         int is_tool_status = !is_user && in_tool_status_block;
-        int diff_pair = !is_user && (current_diff_state == 3 || current_diff_state == 4)
-                            ? diff_line_color_pair(p, line_len)
-                            : 0;
+        int diff_pair =
+            !is_user && (current_diff_state == 3 || current_diff_state == 4)
+                ? diff_line_color_pair(logical_line_start)
+                : 0;
         int tool_status_attrs = A_DIM | A_ITALIC;
         if (g_tool_status_color_pair)
           tool_status_attrs |= COLOR_PAIR(g_tool_status_color_pair);
@@ -862,10 +880,16 @@ void render_all(void) {
 
   const char *prov = agent_provider_name();
   const char *model = agent_provider_model();
+  const char *effort = agent_reasoning_effort();
   const char *profile = agent_profile_name();
   if (prov && model) {
     char info[256];
-    int n = snprintf(info, sizeof(info), "%s/%s", prov, model);
+    int n;
+    if (effort && effort[0])
+      n = snprintf(info, sizeof(info), "%s/%s reasoning:%s", prov, model,
+                   effort);
+    else
+      n = snprintf(info, sizeof(info), "%s/%s", prov, model);
     if (n < 0)
       n = 0;
     info[sizeof(info) - 1] = '\0';
@@ -976,7 +1000,7 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   getmaxyx(stdscr, rows, cols);
 
   int popup_w = 56;
-  int popup_h = 9;
+  int popup_h = 10;
   if (cols < popup_w + 4)
     popup_w = cols - 4;
   if (popup_w < 30)
@@ -1005,14 +1029,15 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   mvwprintw(win, 2, 2, "%s", target_line);
 
   int choice = PERMIT_CHOICE_ONCE;
-  const char *labels[] = {"Allow once", "Always allow", "Reject"};
+  const char *labels[] = {"Allow once", "Allow target", "Allow tool", "Reject"};
   const char *descriptions[] = {
       "Allow this tool call",
       "Allow this target for this session",
+      "Allow every target for this tool this session",
       "Deny this tool call",
   };
-  const char shortcuts[] = {'Y', 'A', 'N'};
-  int choice_count = 3;
+  const char shortcuts[] = {'Y', 'A', 'T', 'N'};
+  int choice_count = 4;
   int list_y = 4;
 
   while (1) {

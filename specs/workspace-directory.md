@@ -27,8 +27,8 @@ working directory invalidates the inferred workspace root so it is recomputed.
   root.
 - Shell children `chdir(capstan.workdir)` before executing `/bin/sh -c`.
 - Shell permission rules use the workspace root as their stable target.
-- `--full-control` and `--benchmark` reject statically visible shell path
-  arguments outside the workspace root instead of silently traversing the
+- `--benchmark` rejects statically visible shell path arguments outside the
+  workspace root instead of silently traversing the
   user's home directory. This is a policy guard, not an operating-system
   sandbox; normal interactive shell use still follows the permission flow.
 - Project `AGENTS.md` and `.agents/skills` are loaded from the workspace root.

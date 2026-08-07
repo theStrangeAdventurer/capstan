@@ -249,12 +249,11 @@ The limits apply across providers and can be changed with top-level
 `tool_output.max_bytes` and `tool_output.max_lines`.
 
 Agent runs also carry an automatic guard to catch runaway loops before the next
-tool executes. By default the guard stops after 80 turns, 2700 seconds, 80 total
-tool calls, or 3 consecutive identical non-shell tool calls. The shell-specific
-repeated-command guard is disabled by default because real coding workflows
-often repeat commands such as `pwd`, `git status`, or `make test`; it can be
-enabled with `agent.max_same_shell_command`. These values can be overridden with
-the `agent.max_*` fields in `config.lua`. When the guard trips, the runtime
+tool executes. By default the guard stops after 80 turns or 2700 seconds. Total
+tool-call and repeated-call limits are disabled by default because legitimate
+coding workflows often need many or repeated reads, edits, and validations.
+They can be enabled with `agent.max_tool_calls`, `agent.max_same_tool_call`, and
+`agent.max_same_shell_command`. When the guard trips, the runtime
 appends a visible `[stopped: ...]` marker, logs `tool_guard`, calls the run error
 callback, and finishes the run with `ok = false`. The guard runs before
 permission checks and before tool execution.
@@ -277,12 +276,11 @@ When the paths of several independent files are already known, the base system
 prompt directs the model to batch them through `file_read.paths`. Sequential
 reads remain appropriate when one result determines which file to inspect next.
 
-Generated-output inspection has a separate soft guard. By default the first
-static shell inspection of `dist/`, `build/`, `out/`, or `coverage/` is allowed;
-later inspection variants are skipped and returned to the model as guidance to
-inspect source, run a behavioral check, or report the requirement as unverified.
-This does not fail the run. `agent.max_generated_output_checks` configures the
-limit, and zero disables it.
+Generated-output inspection has an optional soft guard. It is disabled by
+default. When `agent.max_generated_output_checks` is positive, later static
+shell inspections of `dist/`, `build/`, `out/`, or `coverage/` beyond that
+count are skipped and returned to the model as guidance. This does not fail the
+run.
 
 Synchronous tool work runs on the UI thread. Any blocking C helper used by a
 tool must periodically yield through the TUI pump so the screen can repaint and

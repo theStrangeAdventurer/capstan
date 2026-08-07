@@ -20,6 +20,7 @@ static char captured_logs[8192];
 static char captured_agent_appends[2048];
 static char last_agent_provider[128];
 static char last_agent_model[128];
+static char last_agent_reasoning_effort[32];
 static char last_agent_profile[128];
 static char captured_activity_during_tool[128];
 static char temp_state_path[512];
@@ -202,10 +203,14 @@ static int l_agent_append(lua_State *L) {
 static int l_agent_set_info(lua_State *L) {
   const char *provider = luaL_optstring(L, 1, "");
   const char *model = luaL_optstring(L, 2, "");
+  const char *reasoning_effort = luaL_optstring(L, 3, "");
   strncpy(last_agent_provider, provider, sizeof(last_agent_provider) - 1);
   last_agent_provider[sizeof(last_agent_provider) - 1] = '\0';
   strncpy(last_agent_model, model, sizeof(last_agent_model) - 1);
   last_agent_model[sizeof(last_agent_model) - 1] = '\0';
+  strncpy(last_agent_reasoning_effort, reasoning_effort,
+          sizeof(last_agent_reasoning_effort) - 1);
+  last_agent_reasoning_effort[sizeof(last_agent_reasoning_effort) - 1] = '\0';
   return 0;
 }
 
@@ -364,6 +369,7 @@ static void reset_captures(lua_State *L) {
   captured_agent_appends[0] = '\0';
   last_agent_provider[0] = '\0';
   last_agent_model[0] = '\0';
+  last_agent_reasoning_effort[0] = '\0';
   last_agent_profile[0] = '\0';
   captured_activity_during_tool[0] = '\0';
   agent_set_activity(NULL);
@@ -1104,6 +1110,7 @@ static MunitResult test_config_applies_reasoning_effort(
   call_agent_entry(L);
 
   munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"minimal\"") != NULL);
+  munit_assert_string_equal(last_agent_reasoning_effort, "minimal");
   munit_assert_true(strstr(captured_body, "Reasoning effort: minimal") == NULL);
 
   reset_captures(L);
@@ -1542,6 +1549,47 @@ static MunitResult test_subagents_tool_returns_structured_results(
   return MUNIT_OK;
 }
 
+static MunitResult test_subagents_reject_unavailable_tools_before_launch(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "subagents_child_runs = 0\n"
+      "subagents_invalid_result = ''\n"
+      "capstan.agent.run = function() subagents_child_runs = subagents_child_runs + 1; return false, 'must not run' end\n"
+      "local current_msgs = {}\n"
+      "local available = tools.collect()\n"
+      "tools.handle_tool_calls(current_msgs, available, {{id='call_invalid_subs', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"valid\\\",\\\"task\\\":\\\"read docs\\\",\\\"tools\\\":[\\\"fetch\\\"]},{\\\"id\\\":\\\"bad\\\",\\\"task\\\":\\\"inspect code\\\",\\\"tools\\\":[\\\"functions.shell\\\",\\\"functions.file_read\\\"]}]}' }}, '', function(msgs)\n"
+      "  subagents_invalid_result = msgs[#msgs].content\n"
+      "end, {tools = available, depth = 0})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "subagents_child_runs");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 0);
+  lua_pop(L, 1);
+
+  lua_getglobal(L, "subagents_invalid_result");
+  const char *result = lua_tostring(L, -1);
+  munit_assert_not_null(result);
+  munit_assert_true(strstr(result, "task \"bad\" requests unavailable tools: functions.file_read, functions.shell") != NULL);
+  munit_assert_true(strstr(result, "Available tools: fetch, file_read, shell") != NULL);
+  lua_pop(L, 1);
+  munit_assert_true(strstr(captured_agent_appends, "subagents: running") == NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_plan_subagents_inherit_profile_and_readonly_tools(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -1572,7 +1620,7 @@ static MunitResult test_plan_subagents_inherit_profile_and_readonly_tools(
       "  return true, nil\n"
       "end\n"
       "local available = profiles.filter_tools(tools.collect(), profiles.get('plan'))\n"
-      "tools.handle_tool_calls({}, available, {{id='call_plan_subs', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"a\\\",\\\"task\\\":\\\"inspect a\\\"},{\\\"id\\\":\\\"b\\\",\\\"task\\\":\\\"inspect b\\\",\\\"tools\\\":[\\\"fetch\\\",\\\"shell\\\"]}],\\\"max_concurrent\\\":2}'}}, '', function() end, {tools = available, depth = 0, profile = 'plan'})\n");
+      "tools.handle_tool_calls({}, available, {{id='call_plan_subs', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"a\\\",\\\"task\\\":\\\"inspect a\\\"},{\\\"id\\\":\\\"b\\\",\\\"task\\\":\\\"inspect b\\\",\\\"tools\\\":[\\\"fetch\\\"]}],\\\"max_concurrent\\\":2}'}}, '', function() end, {tools = available, depth = 0, profile = 'plan'})\n");
   munit_assert_int(rc, ==, LUA_OK);
 
   lua_getglobal(L, "subagents_child_profiles");
@@ -2059,6 +2107,7 @@ static MunitResult test_runtime_startup_publishes_configured_profile_status(
 
   munit_assert_string_equal(last_agent_provider, "openrouter");
   munit_assert_string_equal(last_agent_model, "config/plan");
+  munit_assert_string_equal(last_agent_reasoning_effort, "high");
   munit_assert_string_equal(last_agent_profile, "plan");
 
   reset_captures(L);
@@ -2203,6 +2252,7 @@ static MunitResult test_provider_models_set_for_persists_active_provider(
   rc = lua_pcall(L, 3, 2, 0);
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_true(lua_toboolean(L, -2));
+  munit_assert_string_equal(last_agent_reasoning_effort, "high");
 
   lua_getfield(L, -3, "current_provider");
   rc = lua_pcall(L, 0, 1, 0);
@@ -2220,6 +2270,35 @@ static MunitResult test_provider_models_set_for_persists_active_provider(
   call_agent_entry(L);
   munit_assert_true(strstr(captured_body, "\"model\":\"deepseek-v4-pro\"") != NULL);
   munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"high\"") != NULL);
+
+  unlink(temp_state_path);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_provider_models_set_publishes_effective_effort(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dostring(
+      L, "capstan.config.agent = {reasoning_effort = 'minimal'}");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L, "models_set_ok, models_set_err = capstan.models.set('effective/model')");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "models_set_ok");
+  munit_assert_true(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  munit_assert_string_equal(last_agent_reasoning_effort, "minimal");
 
   unlink(temp_state_path);
   reset_captures(L);
@@ -2247,6 +2326,7 @@ static MunitResult test_provider_models_set_persists_state_file(
   rc = lua_pcall(L, 2, 2, 0);
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_true(lua_toboolean(L, -2));
+  munit_assert_string_equal(last_agent_reasoning_effort, "default");
 
   char contents[512];
   read_file(temp_state_path, contents, sizeof(contents));
@@ -2732,7 +2812,10 @@ static MunitResult test_provider_models_list_all_includes_static_config_models(
       "capstan.config = {providers = {static_provider = {"
       "endpoint = 'https://llm.example/v1/chat/completions',"
       "model = 'static/model-a',"
-      "models = {{id = 'static/model-a', context_limit = 1234}}"
+      "default_reasoning_efforts = {'low', 'high'},"
+      "models = {{id = 'static/model-a', context_limit = 1234},"
+      "{id = 'static/model-no-reasoning', supported_parameters = {'temperature'}},"
+      "{id = 'static/model-reasoning', supported_parameters = {'reasoning_effort'}}}"
       "}, unavailable_provider = {"
       "model = 'configured/fallback'"
       "}}}\n");
@@ -2749,6 +2832,9 @@ static MunitResult test_provider_models_list_all_includes_static_config_models(
   munit_assert_int(rc, ==, LUA_OK);
 
   int found_static = 0;
+  int found_static_efforts = 0;
+  int found_no_reasoning = 0;
+  int found_reasoning = 0;
   int found_fallback = 0;
   for (int i = 1; i <= (int)lua_rawlen(L, -1); i++) {
     lua_rawgeti(L, -1, i);
@@ -2757,14 +2843,33 @@ static MunitResult test_provider_models_list_all_includes_static_config_models(
     const char *provider = lua_tostring(L, -2);
     const char *id = lua_tostring(L, -1);
     if (provider && id && strcmp(provider, "static_provider") == 0 &&
-        strcmp(id, "static/model-a") == 0)
+        strcmp(id, "static/model-a") == 0) {
       found_static = 1;
+      lua_getfield(L, -3, "reasoning_efforts");
+      found_static_efforts = lua_istable(L, -1) && lua_rawlen(L, -1) == 2;
+      lua_pop(L, 1);
+    }
+    if (provider && id && strcmp(provider, "static_provider") == 0 &&
+        strcmp(id, "static/model-no-reasoning") == 0) {
+      lua_getfield(L, -3, "reasoning_efforts");
+      found_no_reasoning = lua_isnil(L, -1);
+      lua_pop(L, 1);
+    }
+    if (provider && id && strcmp(provider, "static_provider") == 0 &&
+        strcmp(id, "static/model-reasoning") == 0) {
+      lua_getfield(L, -3, "reasoning_efforts");
+      found_reasoning = lua_istable(L, -1) && lua_rawlen(L, -1) == 2;
+      lua_pop(L, 1);
+    }
     if (provider && id && strcmp(provider, "unavailable_provider") == 0 &&
         strcmp(id, "configured/fallback") == 0)
       found_fallback = 1;
     lua_pop(L, 3);
   }
   munit_assert_true(found_static);
+  munit_assert_true(found_static_efforts);
+  munit_assert_true(found_no_reasoning);
+  munit_assert_true(found_reasoning);
   munit_assert_true(found_fallback);
 
   reset_captures(L);
@@ -4619,10 +4724,145 @@ static MunitResult test_shell_always_allow_is_session_scoped(
 
   munit_assert_string_equal(captured_permit_tool, "shell");
   munit_assert_string_equal(captured_permit_target, "/repo/project");
-  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_int(permit_check_calls, ==, 2);
   munit_assert_int(permit_prompt_calls, ==, 1);
   munit_assert_int(permit_save_calls, ==, 0);
   munit_assert_true(strstr(captured_body, "shell llm: ls src") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_yolo_persists_across_interactive_sessions(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("ask");
+  set_capstan_workdir(L, "/repo/project");
+
+  int rc = luaL_dostring(
+      L,
+      "TEST_SESSION_ID = 'session-a'\n"
+      "agent.session_id = function() return TEST_SESSION_ID end\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  rc = luaL_dostring(L, "capstan.agent.set_yolo(true)");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  call_agent_entry(L);
+  send_tool_call(L, "call_yolo_session_a", "shell",
+                 "{\\\"command\\\":\\\"pwd\\\"}");
+  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_int(permit_prompt_calls, ==, 0);
+
+  rc = luaL_dostring(L, "TEST_SESSION_ID = 'session-b'");
+  munit_assert_int(rc, ==, LUA_OK);
+  call_agent_entry(L);
+  send_tool_call(L, "call_yolo_session_b", "shell",
+                 "{\\\"command\\\":\\\"ls src\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 2);
+  munit_assert_int(permit_prompt_calls, ==, 0);
+  munit_assert_true(strstr(captured_body, "shell llm: ls src") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_yolo_does_not_mutate_external_permission_scope(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "local scope = {allowed_tools = {}, allowed_targets = {}, full_control = false}\n"
+      "capstan.agent.set_yolo(true)\n"
+      "capstan.agent.run({messages = {{role = 'user', content = 'test'}}, permission_scope = scope, update_status = false}, {})\n"
+      "external_scope_yolo_after_run = scope.yolo == true\n"
+      "capstan.agent.set_yolo(false)\n"
+      "external_scope_yolo_after_disable = scope.yolo == true\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "external_scope_yolo_after_run");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "external_scope_yolo_after_disable");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_yolo_allows_sensitive_path_without_prompt(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("ask");
+  set_capstan_workdir(L, "/repo/project");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  rc = luaL_dostring(L, "capstan.agent.set_yolo(true)");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  call_agent_entry(L);
+  send_tool_call(L, "call_yolo_sensitive_env", "file_read",
+                 "{\\\"path\\\":\\\".env.local\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_int(permit_prompt_calls, ==, 0);
+  munit_assert_true(strstr(captured_body, "file llm") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_yolo_preserves_explicit_deny(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("deny");
+  set_capstan_workdir(L, "/repo/project");
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  rc = luaL_dostring(L, "capstan.agent.set_yolo(true)");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  call_agent_entry(L);
+  send_tool_call(L, "call_yolo_denied_env", "file_read",
+                 "{\\\"path\\\":\\\".env.local\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_int(permit_prompt_calls, ==, 0);
+  munit_assert_true(strstr(captured_body, "Permission denied for file_read") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -4816,7 +5056,7 @@ static MunitResult test_tool_run_permission_skips_later_same_tool_prompts(
   send_tool_call(L, "call_shell_tool_run_2", "shell",
                  "{\\\"command\\\":\\\"ls src\\\"}");
 
-  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_int(permit_check_calls, ==, 2);
   munit_assert_int(permit_prompt_calls, ==, 1);
   munit_assert_int(permit_save_calls, ==, 0);
   munit_assert_string_equal(granted_tool, "");
@@ -4849,7 +5089,7 @@ static MunitResult test_full_run_permission_skips_other_tool_prompts(
   send_tool_call(L, "call_full_run_fetch", "fetch",
                  "{\\\"url\\\":\\\"https://example.com\\\"}");
 
-  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_int(permit_check_calls, ==, 2);
   munit_assert_int(permit_prompt_calls, ==, 1);
   munit_assert_int(permit_save_calls, ==, 0);
   munit_assert_string_equal(granted_tool, "");
@@ -4877,7 +5117,7 @@ static MunitResult test_workdir_only_full_control_allows_workspace_shell(
       "tools.handle_tool_calls({}, available, {{id='call_benchmark_shell', name='shell', arguments='{\\\"command\\\":\\\"pwd\\\"}'}}, '', function() end, {tools = available, silent_tools = true, permission_scope = {allowed_tools = {}, full_control = true, workdir_only = true}})\n");
   munit_assert_int(rc, ==, LUA_OK);
 
-  munit_assert_int(permit_check_calls, ==, 0);
+  munit_assert_int(permit_check_calls, ==, 1);
   munit_assert_int(permit_prompt_calls, ==, 0);
 
   reset_captures(L);
@@ -4919,6 +5159,7 @@ static MunitResult test_workdir_only_tracks_nested_shell_cd(
 
   lua_State *L = new_provider_state();
   reset_captures(L);
+  set_permit_decision("ask");
   set_capstan_workdir(L, "/repo/project");
   set_capstan_workspace_root(L, "/repo/project");
 
@@ -4934,7 +5175,7 @@ static MunitResult test_workdir_only_tracks_nested_shell_cd(
       "tools.handle_tool_calls({}, available, {{id='nested-escape', name='shell', arguments='{\"command\":\"cd build && cat ../../outside\"}'}}, '', function(msgs) nested_escape_result = msgs[#msgs].content end, {tools = available, silent_tools = true, permission_scope = scope})\n"
       "tools.handle_tool_calls({}, available, {{id='missing-cd', name='shell', arguments='{\"command\":\"cd && cat project.txt\"}'}}, '', function(msgs) missing_cd_result = msgs[#msgs].content end, {tools = available, silent_tools = true, permission_scope = scope})\n");
   munit_assert_int(rc, ==, LUA_OK);
-  munit_assert_int(permit_check_calls, ==, 0);
+  munit_assert_int(permit_check_calls, ==, 1);
   munit_assert_int(permit_prompt_calls, ==, 0);
 
   lua_getglobal(L, "nested_cd_result");
@@ -4961,6 +5202,7 @@ static MunitResult test_workdir_only_checks_leading_redirection_paths(
 
   lua_State *L = new_provider_state();
   reset_captures(L);
+  set_permit_decision("ask");
   set_capstan_workdir(L, "/repo/project/task");
   set_capstan_workspace_root(L, "/repo/project");
 
@@ -4976,7 +5218,7 @@ static MunitResult test_workdir_only_checks_leading_redirection_paths(
       "tools.handle_tool_calls({}, available, {{id='leading-output', name='shell', arguments='{\"command\":\">/tmp/output echo x\"}'}}, '', function(msgs) leading_output_result = msgs[#msgs].content end, {tools = available, silent_tools = true, permission_scope = scope})\n"
       "tools.handle_tool_calls({}, available, {{id='leading-inside', name='shell', arguments='{\"command\":\">/repo/project/output echo x\"}'}}, '', function(msgs) leading_inside_result = msgs[#msgs].content end, {tools = available, silent_tools = true, permission_scope = scope})\n");
   munit_assert_int(rc, ==, LUA_OK);
-  munit_assert_int(permit_check_calls, ==, 0);
+  munit_assert_int(permit_check_calls, ==, 1);
   munit_assert_int(permit_prompt_calls, ==, 0);
 
   lua_getglobal(L, "leading_input_result");
@@ -5084,10 +5326,11 @@ static MunitResult test_subagents_share_child_permission_scope(
       "end\n"
       "local current_msgs = {}\n"
       "local available = tools.collect()\n"
-      "tools.handle_tool_calls(current_msgs, available, {{id='call_subs_scope', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"one\\\",\\\"task\\\":\\\"one\\\"},{\\\"id\\\":\\\"two\\\",\\\"task\\\":\\\"two\\\"}],\\\"max_concurrent\\\":2}'}}, '', function() end, {tools = available, depth = 0, permission_scope = permission_scope, callbacks = parent_callbacks})\n");
+      "tools.handle_tool_calls(current_msgs, available, {{id='call_subs_scope', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"one\\\",\\\"task\\\":\\\"one\\\"},{\\\"id\\\":\\\"two\\\",\\\"task\\\":\\\"two\\\"}],\\\"max_concurrent\\\":2}'}}, '', function() end, {tools = available, depth = 0, permission_scope = permission_scope, callbacks = parent_callbacks})\n"
+      "tools.handle_tool_calls(current_msgs, available, {{id='call_subs_scope_again', name='subagents', arguments='{\\\"tasks\\\":[{\\\"id\\\":\\\"three\\\",\\\"task\\\":\\\"three\\\"}]}'}}, '', function() end, {tools = available, depth = 0, permission_scope = permission_scope, callbacks = parent_callbacks})\n");
   munit_assert_int(rc, ==, LUA_OK);
 
-  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_int(permit_check_calls, ==, 3);
   munit_assert_int(permit_prompt_calls, ==, 0);
   lua_getglobal(L, "SUBAGENT_PERMISSION_CALLBACKS");
   munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
@@ -5776,6 +6019,9 @@ static MunitTest tests[] = {
     {"/subagents_tool_returns_structured_results",
      test_subagents_tool_returns_structured_results, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/subagents_reject_unavailable_tools_before_launch",
+     test_subagents_reject_unavailable_tools_before_launch, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/plan_subagents_inherit_profile_and_readonly_tools",
      test_plan_subagents_inherit_profile_and_readonly_tools, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -5832,6 +6078,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_set_for_persists_active_provider",
      test_provider_models_set_for_persists_active_provider, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/provider_models_set_publishes_effective_effort",
+     test_provider_models_set_publishes_effective_effort, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_set_persists_state_file",
      test_provider_models_set_persists_state_file, NULL, NULL,
@@ -5996,6 +6245,17 @@ static MunitTest tests[] = {
     {"/shell_always_allow_is_session_scoped",
      test_shell_always_allow_is_session_scoped, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/yolo_persists_across_interactive_sessions",
+     test_yolo_persists_across_interactive_sessions, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/yolo_does_not_mutate_external_permission_scope",
+     test_yolo_does_not_mutate_external_permission_scope, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/yolo_allows_sensitive_path_without_prompt",
+     test_yolo_allows_sensitive_path_without_prompt, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/yolo_preserves_explicit_deny", test_yolo_preserves_explicit_deny,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_tool_redacts_command_before_continuation",
      test_shell_tool_redacts_command_before_continuation, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

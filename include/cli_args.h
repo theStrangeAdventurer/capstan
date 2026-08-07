@@ -26,7 +26,7 @@ typedef struct {
   int no_mcp;
   int no_wiki;
   int no_preserve_reasoning;
-  int full_control;
+  int yolo;
   int benchmark;
   const char *error;
 } CliOptions;

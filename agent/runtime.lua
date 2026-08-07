@@ -13,6 +13,7 @@ local workspace = require("agent.workspace")
 
 local M = provider_config.build()
 local runtime_options = (_G.capstan and _G.capstan.runtime_options) or {}
+local yolo_enabled = false
 
 M.parse_sse_event = stream.parse_sse_event
 if not runtime_options.isolated then
@@ -226,7 +227,12 @@ local function effective_model_info(profile_name)
     if not active then
         return nil, provider_name
     end
-    return { provider = provider_name, model = active.model, profile = profile and profile.name or nil }, nil
+    return {
+        provider = provider_name,
+        model = active.model,
+        reasoning_effort = effective_reasoning_effort(active, nil, profile),
+        profile = profile and profile.name or nil,
+    }, nil
 end
 
 local function display_profile_name(profile)
@@ -237,7 +243,7 @@ local function publish_agent_status(profile_name)
     local info = effective_model_info(profile_name)
     if info and agent then
         if type(agent.set_info) == "function" then
-            agent.set_info(info.provider, info.model)
+            agent.set_info(info.provider, info.model, info.reasoning_effort or "default")
         end
         if type(agent.set_profile_info) == "function" then
             agent.set_profile_info(info.profile)
@@ -245,6 +251,8 @@ local function publish_agent_status(profile_name)
     end
     return info
 end
+
+M.refresh_status = publish_agent_status
 
 local function agent_config_number(field, default)
     local configured = config_table("agent")
@@ -327,10 +335,10 @@ local function make_guard(started_at)
     local guard = {
         started_at = started_at,
         max_duration_ms = agent_config_number("max_duration_sec", DEFAULT_MAX_DURATION_SEC) * 1000,
-        max_tool_calls = agent_config_number("max_tool_calls", 80),
-        max_same_tool_call = agent_config_number("max_same_tool_call", 3),
+        max_tool_calls = agent_config_number("max_tool_calls", 0),
+        max_same_tool_call = agent_config_number("max_same_tool_call", 0),
         max_same_shell_command = agent_config_number("max_same_shell_command", 0),
-        max_generated_output_checks = agent_config_nonnegative("max_generated_output_checks", 1),
+        max_generated_output_checks = agent_config_nonnegative("max_generated_output_checks", 0),
         total_tool_calls = 0,
         generated_output_checks = 0,
         signatures = {},
@@ -399,8 +407,9 @@ function M.run(opts, callbacks)
         return false, message
     end
 
+    local effort = effective_reasoning_effort(active, opts, profile)
     if opts.update_status ~= false then
-        agent.set_info(provider_name, active.model)
+        agent.set_info(provider_name, active.model, effort or "default")
         if type(agent.set_profile_info) == "function" then
             agent.set_profile_info(display_profile_name(profile))
         end
@@ -409,8 +418,6 @@ function M.run(opts, callbacks)
     if opts.update_usage ~= false then
         agent.set_usage(0, 0, 0, active.context_limit or 0)
     end
-
-    local effort = effective_reasoning_effort(active, opts, profile)
     local msgs = build_messages(opts.messages or {}, profile)
     local messages_ctx = hooks.run("before_messages", {
         runtime = M,
@@ -480,6 +487,12 @@ function M.run(opts, callbacks)
     end
     if type(permission_scope.allowed_targets) ~= "table" then
         permission_scope.allowed_targets = {}
+    end
+    if yolo_enabled and permission_scope.yolo ~= true then
+        local yolo_scope = {}
+        for key, value in pairs(permission_scope) do yolo_scope[key] = value end
+        yolo_scope.yolo = true
+        permission_scope = yolo_scope
     end
 
     local function finish(result)
@@ -1103,9 +1116,18 @@ local function interactive_permission_scope()
             allowed_tools = {},
             allowed_targets = {},
             full_control = false,
+            yolo = yolo_enabled,
+            workdir_only = false,
         }
     end
     return interactive_permission_scopes[session_id]
+end
+
+_G.capstan.agent.set_yolo = function(enabled)
+    yolo_enabled = enabled == true
+    for _, scope in pairs(interactive_permission_scopes) do
+        scope.yolo = yolo_enabled
+    end
 end
 
 -- Entry point called from C via agent_build_and_dispatch. Receives message

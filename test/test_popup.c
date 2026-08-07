@@ -517,6 +517,40 @@ static MunitResult test_filterable_typing_filters_items(const MunitParameter p[]
   return MUNIT_OK;
 }
 
+static MunitResult test_filterable_fuzzy_finds_command_name(
+    const MunitParameter p[], void *d) {
+  (void)p;
+  (void)d;
+  PopupItem items[4] = {
+      {my_strdup("/editor  Edit prompt in $EDITOR"), my_strdup("/editor")},
+      {my_strdup("/new  Start a new session"), my_strdup("/new")},
+      {my_strdup("/models  Select provider and model"), my_strdup("/models")},
+      {my_strdup("/compact  Compact conversation context"),
+       my_strdup("/compact")},
+  };
+  popup_open_filterable_with_plugin(items, 4, "Commands", 10, 0, NULL, 0);
+  for (int i = 0; i < 4; i++) {
+    free(items[i].text);
+    free(items[i].value);
+  }
+
+  popup_handle_key('m');
+  popup_handle_key('d');
+  popup_handle_key('l');
+  popup_handle_key('s');
+  munit_assert_int(g_popup.item_count, ==, 1);
+  munit_assert_string_equal(g_popup.items[0].value, "/models");
+
+  munit_assert_int(popup_handle_key('\n'), ==, 0);
+  int sel_count;
+  char **selected = popup_get_selected(&sel_count);
+  munit_assert_int(sel_count, ==, 1);
+  munit_assert_string_equal(selected[0], "/models");
+  popup_free_selected(selected, sel_count);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
 static MunitResult test_filterable_backspace_refilters(const MunitParameter p[],
                                                        void *d) {
   (void)p; (void)d;
@@ -648,6 +682,9 @@ static MunitTest tests[] = {
   {"/drill_down_replaces", test_drill_down_replaces, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/drill_down_clears_filterable_state", test_drill_down_clears_filterable_state, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/filterable_typing_filters_items", test_filterable_typing_filters_items, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/filterable_fuzzy_finds_command_name",
+   test_filterable_fuzzy_finds_command_name, NULL, NULL,
+   MUNIT_TEST_OPTION_NONE, NULL},
   {"/filterable_backspace_refilters", test_filterable_backspace_refilters, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/filterable_enter_selects_current", test_filterable_enter_selects_current, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/row_prefix_width", test_row_prefix_width, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

@@ -279,9 +279,10 @@ waits are parallel; Lua callbacks and tool handlers remain single-threaded.
 ## Permissions And Safety
 
 Permissioned model-initiated tools go through Capstan's permission policy.
-Rules may allow, deny, or ask. The TUI and ACP clients share three choices:
-allow once, always allow the exact target for the current conversation session,
-or reject.
+Rules may allow, deny, or ask. The TUI offers allow once, allow the exact target
+for the current session, allow the tool for every target in the session, and
+reject. ACP exposes its client-defined equivalents: allow once, allow the exact
+target for the session, and reject.
 
 Additional safeguards include:
 
@@ -298,7 +299,7 @@ Manual slash commands are treated as direct user intent and do not show the
 model-tool permission prompt. Wiki reads are constrained to Capstan's Wiki
 root; external Wiki ingest requires explicit file-read consent.
 
-`Always allow` is not persisted. Permanent owner rules belong in
+Session permission grants are not persisted. Permanent owner rules belong in
 `~/.config/capstan/config.lua`. Explicit runtime workflows and older Capstan
 versions may still have rules in
 `$XDG_STATE_HOME/capstan/permissions.lua` (or
@@ -337,12 +338,13 @@ Notable options:
 - `--workdir`, `--workspace`, `--max-turns`
 - `--session-id` for a persisted immutable CLI session and isolated logs
 - `--no-mcp`, `--no-wiki`, `--no-preserve-reasoning`
-- `--full-control` for non-persisted workspace-scoped permission grants
-- `--benchmark` for isolated eval mode
+- `--yolo` to auto-allow permission prompts except explicit denies
+- `--benchmark` for isolated workspace-scoped eval mode
 - `--json` for `{ok, text, error}` output
 
-`--benchmark` implies `--no-mcp --no-wiki --full-control` and excludes local
-prompt overrides, external skills, `AGENTS.md`, global plugins, and hooks so
+`--benchmark` implies `--no-mcp --no-wiki`, uses an internal workspace-only
+permission scope, and excludes local prompt overrides, external skills,
+`AGENTS.md`, global plugins, and hooks so
 evaluations do not inherit unrelated machine or repository policy.
 
 Run `capstan --help` for the current option list.

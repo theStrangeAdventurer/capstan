@@ -13,6 +13,7 @@
 #include "submission_queue.h"
 #include "tui.h"
 #include "utils.h"
+#include "visual.h"
 #include <lauxlib.h>
 #include <lua.h>
 #include <stdio.h>
@@ -82,6 +83,48 @@ static int open_file_finder(Plugin *plugin, size_t cmd_end) {
 static SubmissionQueue g_submission_queue = {0};
 static int g_session_popup = 0;
 static int g_dispatch_after_compact = 0;
+
+static int open_commands(void) {
+  int pc = plugin_registry_count();
+  int builtins = 4;
+  int command_plugins = 0;
+  for (int i = 0; i < pc; i++) {
+    Plugin *plugin = plugin_registry_at(i);
+    if (plugin && plugin->command)
+      command_plugins++;
+  }
+
+  int count = command_plugins + builtins;
+  PopupItem *items = malloc(count * sizeof(PopupItem));
+  if (!items)
+    return 0;
+
+  items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
+  items[0].value = my_strdup("/editor");
+  items[1].text = my_strdup("/new  Start a new session");
+  items[1].value = my_strdup("/new");
+  items[2].text = my_strdup("/sessions  Open saved sessions");
+  items[2].value = my_strdup("/sessions");
+  items[3].text = my_strdup("/compact  Compact conversation context");
+  items[3].value = my_strdup("/compact");
+
+  int out = builtins;
+  for (int i = 0; i < pc; i++) {
+    Plugin *plugin = plugin_registry_at(i);
+    if (!plugin || !plugin->command)
+      continue;
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s  %s", plugin->command,
+             plugin->description ? plugin->description : "");
+    items[out].text = my_strdup(buf);
+    items[out].value = my_strdup(plugin->command);
+    out++;
+  }
+
+  popup_open_filterable_with_plugin(items, count, "Commands", 10, 0, NULL, 0);
+  popup_items_free(items, count);
+  return 1;
+}
 
 static int open_sessions(void) {
   SessionInfo *sessions = NULL;
@@ -229,6 +272,8 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
     dispatch_queue_clear();
     if (!session_manager_new())
       popup_show_message("Sessions", "Could not create a new session", 1);
+    else
+      visual_reset();
     scroll_reset();
     return 1;
   }
@@ -279,47 +324,8 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
     return 1;
   }
 
-  if (strcmp(command, "/") == 0) {
-    int pc = plugin_registry_count();
-    int builtins = 4;
-    int command_plugins = 0;
-    for (int i = 0; i < pc; i++) {
-      Plugin *pp = plugin_registry_at(i);
-      if (pp && pp->command)
-        command_plugins++;
-    }
-    int count = command_plugins + builtins;
-    if (count > 0) {
-      PopupItem *items = malloc(count * sizeof(PopupItem));
-      items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
-      items[0].value = my_strdup("/editor");
-      items[1].text = my_strdup("/new  Start a new session");
-      items[1].value = my_strdup("/new");
-      items[2].text = my_strdup("/sessions  Open saved sessions");
-      items[2].value = my_strdup("/sessions");
-      items[3].text = my_strdup("/compact  Compact conversation context");
-      items[3].value = my_strdup("/compact");
-      int out = builtins;
-      for (int i = 0; i < pc; i++) {
-        Plugin *pp = plugin_registry_at(i);
-        if (!pp || !pp->command)
-          continue;
-        char buf[256];
-        snprintf(buf, sizeof(buf), "%s  %s", pp->command,
-                 pp->description ? pp->description : "");
-        items[out].text = my_strdup(buf);
-        items[out].value = my_strdup(pp->command);
-        out++;
-      }
-      popup_open_with_plugin(items, count, "Commands", 10, 0, NULL, 0);
-      for (int i = 0; i < count; i++) {
-        free(items[i].text);
-        free(items[i].value);
-      }
-      free(items);
-      return 1;
-    }
-  }
+  if (strcmp(command, "/") == 0 && open_commands())
+    return 1;
 
   char err[256];
   snprintf(err, sizeof(err), "Unknown command: %s", command);
@@ -335,48 +341,8 @@ int dispatch_tab(void) {
   if (!text[0] || !has_command(text, command, &cmd_end))
     return 0;
 
-  if (strcmp(command, "/") == 0) {
-    int pc = plugin_registry_count();
-    int builtins = 4;
-    int command_plugins = 0;
-    for (int i = 0; i < pc; i++) {
-      Plugin *pp = plugin_registry_at(i);
-      if (pp && pp->command)
-        command_plugins++;
-    }
-    int count = command_plugins + builtins;
-    if (count <= 0)
-      return 0;
-
-    PopupItem *items = malloc(count * sizeof(PopupItem));
-    items[0].text = my_strdup("/editor  Edit prompt in $EDITOR");
-    items[0].value = my_strdup("/editor");
-    items[1].text = my_strdup("/new  Start a new session");
-    items[1].value = my_strdup("/new");
-    items[2].text = my_strdup("/sessions  Open saved sessions");
-    items[2].value = my_strdup("/sessions");
-    items[3].text = my_strdup("/compact  Compact conversation context");
-    items[3].value = my_strdup("/compact");
-    int out = builtins;
-    for (int i = 0; i < pc; i++) {
-      Plugin *pp = plugin_registry_at(i);
-      if (!pp || !pp->command)
-        continue;
-      char buf[256];
-      snprintf(buf, sizeof(buf), "%s  %s", pp->command,
-               pp->description ? pp->description : "");
-      items[out].text = my_strdup(buf);
-      items[out].value = my_strdup(pp->command);
-      out++;
-    }
-    popup_open_with_plugin(items, count, "Commands", 10, 0, NULL, 0);
-    for (int i = 0; i < count; i++) {
-      free(items[i].text);
-      free(items[i].value);
-    }
-    free(items);
-    return 1;
-  }
+  if (strcmp(command, "/") == 0)
+    return open_commands();
 
   Plugin *p = plugin_registry_find(command);
   if (!p || !plugin_has_autocomplete(p))
@@ -514,6 +480,7 @@ void dispatch_popup_result(void) {
           input_clear();
           agent_reset_usage();
           scroll_reset();
+          visual_reset();
         }
         g_session_popup = 0;
         popup_free_selected(selected, sel_count);

@@ -56,7 +56,11 @@ optional. Subagents always use the orchestrator's current provider. Before
 launching, Capstan fetches that provider's model list; a task `model` is used
 only when it appears in that current-provider list, otherwise the current active
 model is used. `tools` only narrows the parent tool list; it cannot add tools
-unavailable to the orchestrator.
+unavailable to the orchestrator. Before fetching models, showing batch progress,
+or starting any child, Capstan validates every explicit tool whitelist against
+the orchestrator's active-profile tool set. If any name is unavailable, the
+whole batch fails with the affected task, unknown names, and available names;
+no child request is started.
 
 When the orchestrator already knows the right workflow or tool family, it
 should pass the concrete workflow/tool instructions through `instructions`, so

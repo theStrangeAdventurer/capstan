@@ -12,12 +12,14 @@ typedef enum {
 typedef struct {
   const char *provider;
   const char *model;
+  const char *reasoning_effort;
   const char *profile;
   const char *workdir;
 } StartScreenStatus;
 
 typedef struct {
   char model[160];
+  char reasoning_effort[32];
   char profile[64];
   char workdir[160];
   char ready[64];

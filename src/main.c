@@ -224,6 +224,14 @@ static void focus_messages_at(int line, int col) {
   visual_set_cursor(line, col);
 }
 
+static void toggle_focus(void) {
+  if (mode_get() == FOCUS_MESSAGES)
+    visual_exit();
+  mode_toggle();
+  if (mode_get() == FOCUS_MESSAGES)
+    visual_resume();
+}
+
 static void copy_active_selection(void) {
   Messages *msgs = get_messages();
   if (!msgs || msgs->size == 0)
@@ -347,9 +355,9 @@ static void handle_mouse_event(MEVENT *event) {
 
 static void print_help(void) {
   printf("Usage:\n");
-  printf("  capstan\n");
+  printf("  capstan [--yolo]\n");
   printf("  capstan run [--prompt TEXT | --prompt-file PATH] [options]\n");
-  printf("  capstan acp\n\n");
+  printf("  capstan acp [--yolo]\n\n");
   printf("Options:\n");
   printf("  --provider NAME     Override provider for this run\n");
   printf("  --model ID          Override model for this run\n");
@@ -364,8 +372,8 @@ static void print_help(void) {
   printf("  --no-wiki          Do not load or initialize wiki context for this run\n");
   printf("  --no-preserve-reasoning\n");
   printf("                      Do not return prior reasoning with tool results\n");
-  printf("  --full-control     Allow workspace-scoped tools for this run\n");
-  printf("  --benchmark        Isolated eval mode: --no-mcp --no-wiki --full-control\n");
+  printf("  --yolo             Auto-allow tool calls except explicit denies\n");
+  printf("  --benchmark        Isolated workspace-scoped eval mode\n");
   printf("  --json              Print structured JSON result\n");
 }
 
@@ -685,11 +693,13 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   }
   lua_pushinteger(L, opts->max_turns);
   lua_setfield(L, -2, "max_turns");
-  if (opts->full_control) {
+  if (opts->yolo || opts->benchmark) {
     lua_newtable(L);
-    lua_pushboolean(L, 1);
+    lua_pushboolean(L, opts->benchmark);
     lua_setfield(L, -2, "full_control");
-    lua_pushboolean(L, 1);
+    lua_pushboolean(L, opts->yolo);
+    lua_setfield(L, -2, "yolo");
+    lua_pushboolean(L, opts->benchmark);
     lua_setfield(L, -2, "workdir_only");
     lua_setfield(L, -2, "permission_scope");
     lua_pushboolean(L, 1);
@@ -926,6 +936,24 @@ done:
   lua_settop(l, top);
 }
 
+static void lua_agent_set_yolo(lua_State *l, int enabled) {
+  int top = lua_gettop(l);
+  lua_getglobal(l, "capstan");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "agent");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "set_yolo");
+  if (!lua_isfunction(l, -1))
+    goto done;
+  lua_pushboolean(l, enabled);
+  lua_pcall(l, 1, 0, 0);
+
+done:
+  lua_settop(l, top);
+}
+
 static const char *next_profile_name(const char *current) {
   const char *profiles[] = {"fast", "implement", "plan"};
   size_t count = sizeof(profiles) / sizeof(profiles[0]);
@@ -970,7 +998,7 @@ int main(int argc, char *argv[]) {
     return run_headless(&cli, argv[0]);
 
   if (cli.mode == CLI_MODE_ACP)
-    return acp_run(argv[0]);
+    return acp_run(argv[0], cli.yolo);
 
   app_workdir_init(argv[0]);
 
@@ -991,6 +1019,8 @@ int main(int argc, char *argv[]) {
 
   plugins_init();
   load_embedded_plugins();
+  if (cli.yolo)
+    lua_agent_set_yolo(L, 1);
 
   char global_plugins[512];
   if (app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
@@ -1063,12 +1093,14 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
+    if (ch == APP_KEY_ESCAPE && read_exact_after_escape("\t")) {
+      toggle_focus();
+      render_all();
+      continue;
+    }
+
     if (mode_is_focus_toggle_key(ch)) {
-      if (mode_get() == FOCUS_MESSAGES)
-        visual_exit();
-      mode_toggle();
-      if (mode_get() == FOCUS_MESSAGES)
-        visual_enter();
+      toggle_focus();
       render_all();
       continue;
     }

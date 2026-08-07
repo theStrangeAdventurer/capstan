@@ -38,10 +38,10 @@ return {
     max_duration_sec = 2700,
     stream_timeout_sec = 300,
     max_stream_retries = 1,
-    max_tool_calls = 80,
-    max_same_tool_call = 3,
+    max_tool_calls = 0,
+    max_same_tool_call = 0,
     max_same_shell_command = 0,
-    max_generated_output_checks = 1,
+    max_generated_output_checks = 0,
     completion_review = true,
     auto_compact_percent = 80,
   },
@@ -104,9 +104,8 @@ return {
   `max_same_tool_call`, `max_same_shell_command`, and
   `max_generated_output_checks` limit runaway agent/tool loops. Missing values
   fall back to the built-in defaults.
-  `max_same_shell_command = 0` disables the shell-specific repeated-command
-  guard. `max_generated_output_checks = 0` disables the soft generated-output
-  inspection limit; its default is one inspection per agent run.
+  Zero disables `max_tool_calls`, both repeated-call guards, and the soft
+  generated-output inspection limit; all four default to zero.
   `stream_timeout_sec` bounds one streaming model request (zero disables this
   per-request limit); `max_stream_retries` retries a transient transport or
   server failure only before it has emitted text, so a stalled transport cannot
@@ -154,7 +153,8 @@ return {
   `reasoning_effort`. The run-level effort override takes precedence over
   provider defaults.
 - `reasoning_efforts[model_id]` declares the ordered effort choices for a known
-  model. For model APIs that expose `supported_parameters`, the provider's
+  model. For model APIs that expose
+  `supported_parameters`, the provider's
   `default_reasoning_efforts` supplies the ordered choices after reasoning
   support is detected. These fields drive the mandatory second `/models`
   selection step; they are capability metadata, not prompt instructions.

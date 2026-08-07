@@ -11,6 +11,16 @@ static MunitResult test_default_tui(const MunitParameter params[], void *data) {
   return MUNIT_OK;
 }
 
+static MunitResult test_tui_yolo(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "--yolo"};
+  CliOptions opts = cli_parse(2, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_TUI);
+  munit_assert_int(opts.yolo, ==, 1);
+  return MUNIT_OK;
+}
+
 static MunitResult test_run_options(const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -87,7 +97,7 @@ static MunitResult test_benchmark_sets_presets(const MunitParameter params[],
   munit_assert_int(opts.benchmark, ==, 1);
   munit_assert_int(opts.no_mcp, ==, 1);
   munit_assert_int(opts.no_wiki, ==, 1);
-  munit_assert_int(opts.full_control, ==, 1);
+  munit_assert_int(opts.yolo, ==, 0);
   return MUNIT_OK;
 }
 
@@ -97,13 +107,13 @@ static MunitResult test_explicit_headless_controls(const MunitParameter params[]
   (void)data;
   char *argv[] = {"capstan", "run",      "--prompt", "hello",
                   "--no-mcp", "--no-wiki", "--no-preserve-reasoning",
-                  "--full-control"};
+                  "--yolo"};
   CliOptions opts = cli_parse(8, argv);
   munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
   munit_assert_int(opts.no_mcp, ==, 1);
   munit_assert_int(opts.no_wiki, ==, 1);
   munit_assert_int(opts.no_preserve_reasoning, ==, 1);
-  munit_assert_int(opts.full_control, ==, 1);
+  munit_assert_int(opts.yolo, ==, 1);
   munit_assert_int(opts.benchmark, ==, 0);
   return MUNIT_OK;
 }
@@ -128,8 +138,18 @@ static MunitResult test_acp_mode(const MunitParameter params[], void *data) {
   return MUNIT_OK;
 }
 
-static MunitResult test_acp_rejects_options(const MunitParameter params[],
-                                            void *data) {
+static MunitResult test_acp_yolo(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "acp", "--yolo"};
+  CliOptions opts = cli_parse(3, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_ACP);
+  munit_assert_int(opts.yolo, ==, 1);
+  return MUNIT_OK;
+}
+
+static MunitResult test_acp_rejects_other_options(
+    const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
   char *argv[] = {"capstan", "acp", "--json"};
@@ -163,6 +183,7 @@ static MunitResult test_max_turns_rejects_overflow(const MunitParameter params[]
 static MunitTest tests[] = {
     {"/default_tui", test_default_tui, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/tui_yolo", test_tui_yolo, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/run_options", test_run_options, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
     {"/session_id_requires_value", test_session_id_requires_value, NULL, NULL,
@@ -181,7 +202,8 @@ static MunitTest tests[] = {
     {"/prompt_conflict", test_prompt_conflict, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/acp_mode", test_acp_mode, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
-    {"/acp_rejects_options", test_acp_rejects_options, NULL, NULL,
+    {"/acp_yolo", test_acp_yolo, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/acp_rejects_other_options", test_acp_rejects_other_options, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/self_test_mode", test_self_test_mode, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

@@ -4,7 +4,8 @@
 typedef enum {
   PERMIT_CHOICE_ONCE = 0,
   PERMIT_CHOICE_ALWAYS = 1,
-  PERMIT_CHOICE_REJECT = 2
+  PERMIT_CHOICE_TOOL = 2,
+  PERMIT_CHOICE_REJECT = 3
 } PermitChoice;
 
 typedef enum {

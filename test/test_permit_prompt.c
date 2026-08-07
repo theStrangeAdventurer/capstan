@@ -12,7 +12,7 @@ static MunitResult test_navigation(const MunitParameter params[], void *data) {
   munit_assert_int(choice, ==, PERMIT_CHOICE_ALWAYS);
   munit_assert_int(permit_prompt_handle_key(POPUP_KEY_DOWN, &choice), ==,
                    PERMIT_PROMPT_CONTINUE);
-  munit_assert_int(choice, ==, PERMIT_CHOICE_REJECT);
+  munit_assert_int(choice, ==, PERMIT_CHOICE_TOOL);
   munit_assert_int(permit_prompt_handle_key('k', &choice), ==,
                    PERMIT_PROMPT_CONTINUE);
   munit_assert_int(choice, ==, PERMIT_CHOICE_ALWAYS);
@@ -47,6 +47,11 @@ static MunitResult test_shortcuts_confirm_explicit_choices(
   munit_assert_int(permit_prompt_handle_key('a', &choice), ==,
                    PERMIT_PROMPT_DONE);
   munit_assert_string_equal(permit_prompt_result(choice), "allow_session");
+
+  choice = PERMIT_CHOICE_ONCE;
+  munit_assert_int(permit_prompt_handle_key('t', &choice), ==,
+                   PERMIT_PROMPT_DONE);
+  munit_assert_string_equal(permit_prompt_result(choice), "allow_tool_run");
 
   choice = PERMIT_CHOICE_ONCE;
   munit_assert_int(permit_prompt_handle_key('n', &choice), ==,

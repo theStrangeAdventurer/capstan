@@ -62,9 +62,11 @@ Profile-specific model selection order for normal agent runs:
 4. `agent.profile_models` in `config.lua`
 5. selected global primary provider/model
 
-The TUI publishes the effective profile and provider/model status during
-startup, so the status line is visible before the first agent request. When no
-profile is configured or selected, `implement` is the real fallback profile:
+The TUI publishes the effective profile, provider/model, and reasoning effort
+during startup, so the status line is visible before the first agent request.
+The footer keeps the effort beside provider/model, and displays `default` when
+no explicit effective effort is sent. When no profile is configured or
+selected, `implement` is the real fallback profile:
 its system prompt and default reasoning apply.
 
 ## Architecture

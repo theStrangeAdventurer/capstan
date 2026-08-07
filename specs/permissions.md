@@ -23,17 +23,20 @@ name is used. The decision is one of:
 - `deny`: skip the tool and return a denial result.
 - `ask`: show the permit confirmation popup.
 
-The permit popup and ACP clients expose the same three choices:
+The TUI permit popup exposes four choices:
 
 - `Allow once`: allow this one tool call.
-- `Always allow`: allow the exact permission tool and target for the current
+- `Allow target`: allow the exact permission tool and target for the current
   conversation session.
+- `Allow tool`: allow every target requested by this permission tool for the
+  current conversation session.
 - `Reject`: deny this one tool call.
 
-`Always allow` is in-memory only. It applies to later user turns in the same
-TUI or ACP session and disappears when that session or process ends. For
-`shell`, the target is the active workspace root, so later shell commands in
-that workspace do not prompt again just because the command text changed.
+ACP exposes the equivalent client-defined choices it supports. Session grants
+are in-memory only and disappear when that session or process ends. For
+`shell`, the target is the active workspace root, so a target grant also allows
+later shell commands in that workspace. Parent session grants are shared with
+subagents, and grants made while a subagent batch runs update that same scope.
 
 For `wiki_ingest`, any positive popup choice persists the `file_read` permission
 for the approved source path. This makes the user's explicit ingest consent
@@ -46,8 +49,9 @@ Markdown root still requires the explicit `wiki_ingest` consent above.
 
 The selected choice can be changed with `k`, up arrow, `j`, or down arrow.
 `Enter` and `Tab` confirm the current choice. Mouse clicks on a choice select
-that choice; mouse clicks outside the permit popup are ignored. `y`, `a`, and
-`n` select `Allow once`, `Always allow`, and `Reject`. `Esc` rejects the call.
+that choice; mouse clicks outside the permit popup are ignored. `y`, `a`, `t`,
+and `n` select `Allow once`, `Allow target`, `Allow tool`, and `Reject`.
+`Esc` rejects the call.
 
 Declarative permission rules are configured in:
 
@@ -65,6 +69,8 @@ return {
   permissions = {
     { tool = "file_read", pattern = "~/narnia/tui-agent/*", allow = true },
     { tool = "fetch", pattern = "https://api.openai.com/*", allow = true },
+    { tool = "file_read", pattern = "~/.zshenv", allow = false },
+    { tool = "file_read", pattern = "*/.env*", allow = false },
   },
 }
 ```
@@ -92,17 +98,24 @@ prompt still take precedence. Saved `tool` and `pattern` values are escaped as
 Lua string contents so quotes, backslashes, control characters, and newlines
 cannot corrupt the state file.
 
-Session-scoped exact grants are held in the permission scope owned by the TUI
-or ACP session. Internal run-wide scopes are also used by headless full-control
-mode and shared child permission scopes for a `subagents` batch; none of these
-write persistent rules.
+Session-scoped target and tool grants are held in the permission scope owned by
+the TUI or ACP session. Subagents use that same scope rather than a disconnected
+copy. None of these grants write persistent rules.
 
-Headless `capstan run --full-control` creates a non-persisted run scope without
-showing prompts. It is workspace-only: file tools are allowed only for paths
-inside the workspace root. Shell commands run from the working directory and
-are denied when their statically visible path arguments escape the workspace
-root or use dynamic home/command substitution that cannot be bounded safely.
-`--benchmark` enables this mode and also skips MCP startup.
+`capstan --yolo`, `capstan run --yolo`, and `capstan acp --yolo`
+automatically allow every `ask` decision without a permission prompt for that
+process. Explicit matching
+`allow = false` rules remain denied. YOLO also bypasses the implicit `ask` for
+sensitive filenames; protecting such files in YOLO requires an explicit deny
+rule. YOLO is process-scoped rather than session-scoped, so it remains active
+after restoring a session or creating one with `/new`. It should be used only
+in a trusted workspace.
+
+`--benchmark` uses a separate internal non-persisted workspace-only scope: file
+tools are allowed only for paths inside the workspace root. Shell commands run
+from the working directory and are denied when their statically visible path
+arguments escape the workspace root or use dynamic home/command substitution
+that cannot be bounded safely. Benchmark mode also skips MCP startup.
 
 ## Default Policy
 
@@ -143,7 +156,7 @@ paths inside it. This keeps one rule useful for `shell` workspace targets and
 file paths. Newer rules take precedence, so place specific denies after broader
 allows when both could match. The older `"prefix *"` wildcard form is still
 accepted because it is now just normal `*` matching. Session-scoped
-`Always allow` also records the exact target, not a wildcard.
+`Allow target` also records the exact target, not a wildcard.
 
 ## Architecture
 

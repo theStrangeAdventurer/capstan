@@ -11,6 +11,7 @@ The status column shows current runtime information that is already available to
 the TUI:
 
 - active provider/model, or `not configured`
+- effective reasoning effort, or `default` when the provider/model chooses it
 - active profile, falling back to `implement`
 - active workspace directory, collapsed under `$HOME` as `~/...`
 - ready hint: `type your question or / + Tab for options`
@@ -39,7 +40,8 @@ ncurses-specific drawing stays in `src/tui.c`.
 
 The ANSI design artifact is a visual reference only. Runtime rendering uses
 static UTF-8 art strings and live values from `agent_provider_name()`,
-`agent_provider_model()`, `agent_profile_name()`, and `app_workdir()`.
+`agent_provider_model()`, `agent_reasoning_effort()`, `agent_profile_name()`,
+and `app_workdir()`.
 
 ## Tests
 

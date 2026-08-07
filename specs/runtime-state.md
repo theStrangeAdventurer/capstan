@@ -89,7 +89,7 @@ Profile model precedence for an active profile is:
 4. `config.lua` `agent.profile_models[profile]`;
 5. the selected global primary provider/model.
 
-`Always allow` permission choices are session-scoped and are not runtime state.
+Session permission grants are in-memory only and are not runtime state.
 Explicit workflows such as `wiki_ingest`, plus rules retained from older
 Capstan versions, may use the separate
 `$XDG_STATE_HOME/capstan/permissions.lua` file (or

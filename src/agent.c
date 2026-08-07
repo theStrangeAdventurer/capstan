@@ -18,6 +18,7 @@ unsigned long agent_messages_revision(void) { return g_messages_revision; }
 
 static char *g_provider_name = NULL;
 static char *g_provider_model = NULL;
+static char *g_reasoning_effort = NULL;
 static char *g_profile_name = NULL;
 static char *g_activity = NULL;
 static long long g_activity_started_ms = 0;
@@ -107,12 +108,16 @@ static int l_agent_set_activity(lua_State *L) {
 static int l_agent_set_provider_info(lua_State *L) {
   free(g_provider_name);
   free(g_provider_model);
+  free(g_reasoning_effort);
   g_provider_name = NULL;
   g_provider_model = NULL;
+  g_reasoning_effort = NULL;
   if (!lua_isnoneornil(L, 1))
     g_provider_name = my_strdup(luaL_checkstring(L, 1));
   if (!lua_isnoneornil(L, 2))
     g_provider_model = my_strdup(luaL_checkstring(L, 2));
+  if (!lua_isnoneornil(L, 3))
+    g_reasoning_effort = my_strdup(luaL_checkstring(L, 3));
   return 0;
 }
 
@@ -126,6 +131,7 @@ static int l_agent_set_profile_info(lua_State *L) {
 
 const char *agent_provider_name(void) { return g_provider_name; }
 const char *agent_provider_model(void) { return g_provider_model; }
+const char *agent_reasoning_effort(void) { return g_reasoning_effort; }
 const char *agent_profile_name(void) { return g_profile_name; }
 UsageStats agent_usage(void) { return g_usage; }
 void agent_reset_usage(void) { g_usage = (UsageStats){0, 0, 0, 0}; }

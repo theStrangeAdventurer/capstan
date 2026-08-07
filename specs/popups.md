@@ -26,6 +26,13 @@ choice row: `h`/`k` and left/up arrows move backward, while `j`/`l` and
 right/down arrows move forward. `Enter` and `Tab` confirm the highlighted
 choice.
 
+## Filterable lists
+
+Typing `/` and pressing `Tab` or `Enter` opens the command list with a `Find:`
+input. Printable keys fuzzy-filter and rank command names using the same finder
+as model, file, and session popups. Backspace edits the query; arrows navigate
+results; `Enter` or `Tab` inserts the selected command into the main input.
+
 ## Scrollbar
 
 List popups render a slim scrollbar only when the item count exceeds the visible

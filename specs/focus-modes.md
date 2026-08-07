@@ -1,8 +1,11 @@
 # Focus Modes
 
 The app has two focus modes: **INPUT** (default) and **MESSAGES**.
-Ctrl-F switches between them. Shift-Tab cycles the active agent profile. The
-status bar always shows the current mode.
+Ctrl-F or Option-Tab switches between them. Shift-Tab cycles the active agent
+profile. Returning to messages restores the last message cursor position within
+the current session. Creating or switching sessions resets it, so the next entry
+starts at the end of the new history. The status bar always shows the current
+mode.
 
 ## Focus states
 
@@ -18,7 +21,7 @@ status bar always shows the current mode.
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-F` | Toggle focus: INPUT ↔ MESSAGES |
+| `Ctrl-F` / `Option+Tab` | Toggle focus: INPUT ↔ MESSAGES |
 | `Shift+Tab` | Cycle active profile: fast -> implement -> plan |
 | Scroll wheel | Scroll message history |
 | Click in messages | Focus MESSAGES and place the message cursor |

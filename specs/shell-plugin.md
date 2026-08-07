@@ -52,8 +52,8 @@ Manual slash commands bypass model-tool permission prompts because the user
 directly chose the command. Model-initiated shell tool calls still go through
 normal shell permissions.
 
-In workspace-scoped full-control runs, statically visible shell paths must stay
-inside the workspace. This includes redirection targets both before and after
+In benchmark runs, statically visible shell paths must stay inside the
+workspace. This includes redirection targets both before and after
 the command token, such as `</workspace/input command` and
 `command >/workspace/output`. Static `cd` targets update the effective working
 directory used to validate later command segments, so paths such as `cmake ..`

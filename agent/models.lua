@@ -125,7 +125,9 @@ local function copy_reasoning_efforts(value)
 end
 
 local function item_supports_reasoning_effort(item)
-    for _, parameter in ipairs(item.supported_parameters or {}) do
+    if item.supported_parameters == nil then return nil end
+    if type(item.supported_parameters) ~= "table" then return false end
+    for _, parameter in ipairs(item.supported_parameters) do
         if parameter == "reasoning" or parameter == "reasoning_effort" then return true end
     end
     return false
@@ -138,10 +140,8 @@ local function model_reasoning_efforts(provider, item)
         local per_model = copy_reasoning_efforts(configured[id])
         if per_model then return per_model end
     end
-    if item_supports_reasoning_effort(item) then
-        return copy_reasoning_efforts(provider and provider.default_reasoning_efforts)
-    end
-    return nil
+    if item_supports_reasoning_effort(item) == false then return nil end
+    return copy_reasoning_efforts(provider and provider.default_reasoning_efforts)
 end
 
 local function normalize_models_response(decoded, provider)
@@ -253,8 +253,10 @@ function M.set(runtime, provider_name, model, reasoning_effort)
     provider.selected_reasoning_effort = normalized_effort
     runtime.provider = provider_name
     state.set_model(provider_name, model, normalized_effort)
-    if agent and agent.set_info then
-        agent.set_info(provider_name, provider.model)
+    if type(runtime.refresh_status) == "function" then
+        runtime.refresh_status()
+    elseif agent and agent.set_info then
+        agent.set_info(provider_name, provider.model, normalized_effort or "default")
     end
     return true, nil
 end

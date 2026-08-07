@@ -11,7 +11,8 @@ headless runs.
 - `/sessions` opens a filterable list sorted by most recent update. The active
   session is marked with `*`; Enter switches to the selected conversation.
 - Switching clears transient input, queued submissions, buffered plugin results,
-  scroll state, and token usage. Those values never cross session boundaries.
+  scroll state, message cursor state, and token usage. Those values never cross
+  session boundaries.
 - Switching commits the durable `active` pointer before replacing the live
   session. If that atomic write fails, the loaded candidate is discarded and
   both the current messages and in-memory active session remain unchanged.

@@ -34,7 +34,7 @@ configured provider's models API.
   provider/model override for that workflow profile. Plain `/models` targets
   the current active profile; explicit provider arguments target the global
   primary model.
-- Successful selection updates the provider/model status line through
+- Successful selection updates the provider/model/reasoning status line through
   `agent.set_info` when the effective active model changes.
 - The command is a no-history control command: its result is shown as UI
   feedback but is not sent to the model and does not trigger an agent request.
@@ -49,8 +49,11 @@ configured provider's models API.
 - `list()` fetches and normalizes the current provider's models.
 - `list_all()` fetches and normalizes models for all configured providers.
 - `reasoning_efforts(provider, model_id)` reports the normalized effort list.
-  Per-model provider metadata is authoritative; APIs can advertise support via
-  `supported_parameters`, with provider defaults supplying the allowed values.
+  A provider's explicit `default_reasoning_efforts` declaration applies when
+  its models endpoint omits OpenAI-style `supported_parameters` metadata. When
+  `supported_parameters` is present, that list is authoritative: defaults apply
+  only if it includes `reasoning` or `reasoning_effort`. A provider's explicit
+  per-model `reasoning_efforts` override remains authoritative.
 - `set(model_id, reasoning_effort?)` updates and persists the current
   provider's model.
 - `set_for(provider, model_id, reasoning_effort?)` updates and persists an
@@ -62,8 +65,8 @@ configured provider's models API.
 - `profile(profile_name)` returns a selected profile model, or `nil`.
 - `set_profile(profile_name, provider, model_id, reasoning_effort?)` updates
   and persists a profile model.
-- `effective(profile_name?)` reports the effective provider/model for a profile
-  or the current active profile.
+- `effective(profile_name?)` reports the effective provider/model and reasoning
+  effort for a profile or the current active profile.
 - `current_provider()` and `current_model()` report active runtime state.
 
 For OpenAI-compatible providers, the models endpoint is derived from the chat

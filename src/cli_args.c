@@ -50,17 +50,30 @@ CliOptions cli_parse(int argc, char **argv) {
     return opts;
   }
 
+  if (is_flag(argv[1], "--yolo")) {
+    if (argc != 2) {
+      opts.mode = CLI_MODE_ERROR;
+      opts.error = "--yolo does not accept additional TUI options";
+      return opts;
+    }
+    opts.yolo = 1;
+    return opts;
+  }
+
   int start = 1;
   if (strcmp(argv[1], "run") == 0) {
     opts.mode = CLI_MODE_RUN;
     start = 2;
   } else if (strcmp(argv[1], "acp") == 0) {
-    if (argc != 2) {
-      opts.mode = CLI_MODE_ERROR;
-      opts.error = "acp does not accept options";
+    opts.mode = CLI_MODE_ACP;
+    if (argc == 2)
+      return opts;
+    if (argc == 3 && is_flag(argv[2], "--yolo")) {
+      opts.yolo = 1;
       return opts;
     }
-    opts.mode = CLI_MODE_ACP;
+    opts.mode = CLI_MODE_ERROR;
+    opts.error = "acp accepts only --yolo";
     return opts;
   } else {
     opts.mode = CLI_MODE_ERROR;
@@ -141,13 +154,12 @@ CliOptions cli_parse(int argc, char **argv) {
       opts.no_wiki = 1;
     } else if (is_flag(arg, "--no-preserve-reasoning")) {
       opts.no_preserve_reasoning = 1;
-    } else if (is_flag(arg, "--full-control")) {
-      opts.full_control = 1;
+    } else if (is_flag(arg, "--yolo")) {
+      opts.yolo = 1;
     } else if (is_flag(arg, "--benchmark")) {
       opts.benchmark = 1;
       opts.no_mcp = 1;
       opts.no_wiki = 1;
-      opts.full_control = 1;
     } else if (is_flag(arg, "-h") || is_flag(arg, "--help")) {
       opts.mode = CLI_MODE_HELP;
     } else {

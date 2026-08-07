@@ -3,7 +3,7 @@
 
 #include <lua.h>
 
-int acp_run(const char *argv0);
+int acp_run(const char *argv0, int yolo);
 void acp_register(lua_State *L);
 
 #endif

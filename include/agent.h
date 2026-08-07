@@ -43,6 +43,7 @@ void agent_auto_compact(lua_State *L);
 int agent_should_auto_compact(lua_State *L, const char *additional_text);
 const char *agent_provider_name(void);
 const char *agent_provider_model(void);
+const char *agent_reasoning_effort(void);
 const char *agent_profile_name(void);
 UsageStats agent_usage(void);
 void agent_reset_usage(void);

@@ -4,6 +4,8 @@
 int visual_cursor_visible(void);
 int visual_is_active(void);
 void visual_enter(void);
+void visual_resume(void);
+void visual_reset(void);
 void visual_exit(void);
 void visual_enter_selection(void);
 void visual_exit_selection(void);

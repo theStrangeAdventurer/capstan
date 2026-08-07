@@ -15,6 +15,7 @@ static int g_texts_owned = 0;
 
 static struct {
     int active;
+    int initialized;
     int selecting;
     int cursor_line;
     int cursor_col;
@@ -37,6 +38,38 @@ void visual_enter(void) {
     g_visual.cursor_line = line;
     const LineInfo *li = linemap_get(g_visual.cursor_line);
     g_visual.cursor_col = li ? li->char_count : 0;
+    g_visual.initialized = 1;
+}
+
+void visual_resume(void) {
+    if (!g_visual.initialized) {
+        visual_enter();
+        return;
+    }
+    g_visual.active = 1;
+    g_visual.selecting = 0;
+    int count = linemap_count();
+    if (count <= 0) {
+        g_visual.cursor_line = 0;
+        g_visual.cursor_col = 0;
+        return;
+    }
+    if (g_visual.cursor_line >= count)
+        g_visual.cursor_line = count - 1;
+    while (g_visual.cursor_line > 0 && is_padding_line(g_visual.cursor_line))
+        g_visual.cursor_line--;
+    const LineInfo *li = linemap_get(g_visual.cursor_line);
+    if (g_visual.cursor_col > (li ? li->char_count : 0))
+        g_visual.cursor_col = li ? li->char_count : 0;
+}
+
+void visual_reset(void) {
+    memset(&g_visual, 0, sizeof(g_visual));
+    if (g_texts_owned)
+        free(g_texts);
+    g_texts = NULL;
+    g_texts_count = 0;
+    g_texts_owned = 0;
 }
 
 void visual_exit(void) {

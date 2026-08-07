@@ -6,8 +6,11 @@ Capstan exposes an ACP v1 agent over newline-delimited JSON-RPC 2.0 on standard
 input and standard output:
 
 ```sh
-capstan acp
+capstan acp [--yolo]
 ```
+
+`--yolo` automatically permits interactive permission decisions for every ACP
+session in the process while preserving explicit deny rules.
 
 The mode is intended for IDEs and external orchestrators. Standard output is
 reserved for protocol messages; diagnostics and runtime errors go to standard

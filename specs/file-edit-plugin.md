@@ -21,7 +21,7 @@ structured `path`, `old_text`, `new_text`, and optional `replace_all` arguments.
 - In the TUI transcript, removed diff lines are rendered with a dark red
   background and added diff lines with a dark green background when terminal
   colors are available. The same highlighting applies to Markdown fenced
-  `diff` code blocks.
+  `diff` code blocks and remains active across terminal-width soft wraps.
 
 ## Rationale
 

@@ -67,6 +67,7 @@ void start_screen_build_status(const StartScreenStatus *status,
 
   const char *provider = status ? status->provider : NULL;
   const char *model = status ? status->model : NULL;
+  const char *reasoning_effort = status ? status->reasoning_effort : NULL;
   const char *profile = status ? status->profile : NULL;
   const char *workdir = status ? status->workdir : NULL;
 
@@ -78,6 +79,12 @@ void start_screen_build_status(const StartScreenStatus *status,
   else
     snprintf(model_line, sizeof(model_line), "not configured");
   start_screen_truncate(model_line, out->model, sizeof(out->model), 32);
+
+  start_screen_truncate(reasoning_effort && reasoning_effort[0]
+                            ? reasoning_effort
+                            : "default",
+                        out->reasoning_effort,
+                        sizeof(out->reasoning_effort), 16);
 
   start_screen_truncate(profile && profile[0] ? profile : "implement",
                         out->profile, sizeof(out->profile), 24);

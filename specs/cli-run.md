@@ -17,7 +17,8 @@ capstan run --no-wiki --prompt-file task.md --workdir /tmp/capstan-eval
 echo "Summarize this repo" | capstan run --json
 ```
 
-- `capstan` with no command still opens the TUI.
+- `capstan` with no command still opens the TUI. `capstan --yolo` opens it with
+  permission prompts disabled for all model tool calls in that process.
 - `capstan run` reads input from `--prompt`, `--prompt-file`, or stdin when
   stdin is not a TTY.
 - `--provider`, `--model`, `--workdir`, and `--workspace` override only this process run.
@@ -51,9 +52,11 @@ echo "Summarize this repo" | capstan run --json
   assistant tool calls for this run. Preservation is enabled by default so a
   reasoning model can continue an interrupted tool-use turn. This diagnostic
   override can degrade continuity or trigger a provider protocol error.
-- `--full-control` grants workspace-scoped tool permissions for this run.
-- `--benchmark` enables `--no-mcp --no-wiki --full-control` and an isolated
-  runtime. It uses the embedded base prompt and built-in tools, but excludes a
+- `--yolo` automatically allows permission decisions except explicit denies
+  for this process.
+- `--benchmark` enables `--no-mcp --no-wiki`, an internal workspace-only
+  permission scope, and an isolated runtime. It uses the embedded base prompt
+  and built-in tools, but excludes a
   local system-prompt override, project/user/common skills, `AGENTS.md`, global
   config plugins, and config/plugin hooks so eval tasks cannot inherit unrelated
   owner or repository policy.

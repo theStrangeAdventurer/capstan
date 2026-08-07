@@ -59,10 +59,14 @@ int input_get_display_cursor(void) {
 }
 
 void input_insert(int ch) {
-  if (g_cursor >= INPUT_BUFFER_SIZE - 1)
+  if (ch < 0 || ch > 0xFF || g_cursor < 0 ||
+      g_cursor >= INPUT_BUFFER_SIZE - 1)
     return;
-  g_input_buf[g_cursor++] = ch;
-  g_input_buf[g_cursor] = '\0';
+  size_t tail_len = strlen(g_input_buf + g_cursor) + 1;
+  if ((size_t)g_cursor + tail_len >= INPUT_BUFFER_SIZE)
+    return;
+  memmove(g_input_buf + g_cursor + 1, g_input_buf + g_cursor, tail_len);
+  g_input_buf[g_cursor++] = (char)ch;
 }
 
 void input_set_text(const char *text) {
