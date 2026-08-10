@@ -9,7 +9,9 @@ behavior literally. Use native platform mechanisms and least privilege.
 
 When required implementation is visibly missing, implement it before spending
 time on broad validation. Do not keep exploring once the relevant code and
-expected behavior are clear.
+expected behavior are clear. If files change unexpectedly while you work,
+preserve them and ask before overwriting, reverting, or building on an
+ambiguous state.
 
 ## Verify
 Tests are evidence: do not edit tests, fixtures, assertions, or test config just

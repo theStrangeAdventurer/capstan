@@ -80,7 +80,10 @@ into the Polyglot score.
 
 See the [standalone visual report](BENCHMARK_REPORT.html) for all 72 Polyglot
 attempts, resource charts, methodology, and limitations, or read the
-[Markdown report](BENCHMARK_REPORT.md).
+[Markdown report](BENCHMARK_REPORT.md). Run a comparable update with the
+checked-in [benchmark tooling](benchmarks/README.md); it clones the pinned
+external corpus locally and keeps generated results out of Git. The historical
+quality result itself used a dirty Capstan worktree, as documented in the report.
 
 ## Install
 
@@ -199,6 +202,71 @@ return {
 Environment variables and explicit run flags take precedence where supported.
 Model choices made through `/models` are persisted as runtime state rather than
 rewritten into `config.lua`.
+
+### Agent Limits And Subagents
+
+A **turn** is one model response. One response may contain several tool calls;
+a later response that receives their results consumes the next turn. Configure
+root-agent and delegated-agent limits independently:
+
+```lua
+return {
+  agent = {
+    max_turns = 80, -- root agent; positive values only
+    max_duration_sec = 2700,
+    max_tool_calls = 0,          -- 0 disables this guard
+    max_same_tool_call = 0,      -- 0 disables this guard
+    max_same_shell_command = 0,  -- 0 disables this guard
+  },
+  subagents = {
+    max_concurrent = 3,      -- default child batch concurrency
+    max_concurrent_cap = 4,  -- upper bound for a model-requested concurrency
+    max_tasks = 8,           -- maximum tasks in one subagents call
+    max_turns = 6,           -- default turns per child task
+    max_turns_cap = 24,      -- upper bound for a model-requested child budget
+    max_attempts = 3,        -- total transient-request attempts per child
+  },
+}
+```
+
+`subagents.max_turns_cap` is the upper bound you asked about: if the
+orchestrator requests `max_turns = 200` for a child, the child receives at most
+the configured cap (24 in this example). Omitted child budgets use
+`subagents.max_turns`. The built-in defaults are 6 turns per child and a cap of
+200. `capstan run --max-turns N` overrides the root run only; child budgets
+continue to use the `subagents` configuration. See [configuration details](specs/config.md)
+and [subagent behavior](specs/subagents.md).
+
+### Permissions And `--yolo`
+
+Permissions apply to model-initiated tools; slash commands you type yourself
+are direct user actions. Add durable allow or deny rules to the same config:
+
+```lua
+return {
+  permissions = {
+    { tool = "file_read", pattern = "~/code/project/*", allow = true },
+    { tool = "file_write", pattern = "~/code/project/*", allow = true },
+    { tool = "fetch", pattern = "https://api.github.com/*", allow = true },
+    -- Put specific denies after broad allows: later matching rules win.
+    { tool = "file_read", pattern = "~/code/project/.env*", allow = false },
+  },
+}
+```
+
+Rules use `tool`, glob-style `pattern`, and `allow`. An explicit deny always
+wins over `--yolo`; use it to protect sensitive files. Start a trusted local
+session without confirmation prompts with:
+
+```sh
+capstan --yolo
+capstan run --yolo --prompt "Run the project test suite"
+```
+
+`--yolo` auto-allows only otherwise-`ask` model tool calls for that process. It
+does not persist permissions and should be used only in a trusted workspace.
+For matching, session grants, sensitive-file handling, and the default policy,
+see [Permissions](specs/permissions.md).
 
 ## Agent Profiles
 

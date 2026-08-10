@@ -1,0 +1,3 @@
+agent,bin,resolved_bin,exists,size_bytes,size_human,self_exit,self_elapsed_sec,self_log
+capstan,capstan,<home>/.local/bin/capstan,1,917784,896K,0,2.452698,<home>/Benchmarks/results/20260628-174237/raw/capstan.self-test.stderr
+opencode,opencode,<home>/.opencode/bin/opencode,1,119322722,114M,,,

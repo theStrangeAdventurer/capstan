@@ -2,6 +2,11 @@ build
 vendor/ncurses-build
 vendor/ncurses-install
 
+# Benchmark corpus, generated reports, logs, and private local configs
+benchmarks/work/
+benchmarks/results/
+benchmarks/polyglot/promptfoo/config.local.yaml
+
 # Build artifacts
 vendor/ncurses-src/obj_s/
 vendor/ncurses-src/obj_g/
@@ -40,3 +45,4 @@ specs/.obsidian/
 compile_commands.json
 .cache
 .playwright-mcp
+__pycache__/

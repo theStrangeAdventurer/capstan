@@ -82,27 +82,20 @@ comparison, so the two datasets are presented side by side but never merged.
 | Capstan revision | `b7a664ef`, dirty worktree | earlier local build |
 | OpenCode | 1.18.2 | local build measured at 114 MiB |
 
-The Promptfoo evaluation ID is `eval-ANr-2026-07-31T10:33:38`. Sanitized
-machine-readable measurements are committed with this report:
+The Promptfoo evaluation ID is `eval-ANr-2026-07-31T10:33:38`.
+Machine-readable historical data is committed with this report:
 
 - [`benchmarks/polyglot-mini-v2-20260731.csv`](benchmarks/polyglot-mini-v2-20260731.csv)
   contains all 72 quality attempts;
 - [`benchmarks/runtime-footprint-20260628.csv`](benchmarks/runtime-footprint-20260628.csv)
-  contains all 30 resource measurements.
+  contains all 30 resource measurements;
+- [`benchmarks/historical/`](benchmarks/historical/README.md) contains the
+  sanitized full Promptfoo export and runtime-runner metadata. The compact CSV
+  files are the preserved numeric source for the published aggregates.
 
-The original, unsanitized Promptfoo artifacts remain machine-local:
-
-```text
-/Users/alxd/Benchmarks/promptfoo-results/20260731-103332/report.html
-/Users/alxd/Benchmarks/promptfoo-results/20260731-103332/results.json
-/Users/alxd/Benchmarks/promptfoo-work/eval-ANr-2026-07-31T10-33-38/
-```
-
-The resource benchmark raw artifacts are under:
-
-```text
-/Users/alxd/Benchmarks/results/20260628-174237/
-```
+Promptfoo's cache/database and per-run stdout/stderr logs are not committed:
+those are not needed to verify the published aggregates and may contain
+machine-local paths or model output.
 
 ## Limitations
 

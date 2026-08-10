@@ -47,7 +47,9 @@ return {
   },
   subagents = {
     max_concurrent = 3,
+    max_concurrent_cap = 8,
     max_tasks = 8,
+    max_attempts = 3,
     max_turns = 6,
     max_turns_cap = 200,
     max_result_bytes = 16384,
@@ -162,11 +164,13 @@ return {
   `reasoning_content` may set `reasoning_history_field = "reasoning_content"`;
   other providers default to `reasoning` when no structured details are
   returned.
-- `subagents.max_concurrent`, `max_tasks`, `max_turns`, `max_turns_cap`, and
-  `max_result_bytes`
-  limit delegated internal runs. `max_turns` is the default per-task turn budget
-  when a subagent task omits its own value; explicit task budgets are respected
-  up to `max_turns_cap`. `max_result_bytes` bounds each successful child result
+- `subagents.max_concurrent`, `max_concurrent_cap`, `max_tasks`,
+  `max_attempts`, `max_turns`, `max_turns_cap`, and `max_result_bytes` limit
+  delegated internal runs. `max_turns` is the default per-task turn budget when
+  a subagent task omits its own value; explicit task budgets are respected only
+  up to `max_turns_cap`. Likewise, an explicit batch concurrency is limited by
+  `max_concurrent_cap`. `max_attempts` limits retry attempts for transient child
+  transport failures, including the initial attempt. `max_result_bytes` bounds each successful child result
   before it is inserted into the parent model context; failed child output is
   discarded and only a short single-line error is retained.
 - `redaction.names` is a case-insensitive list of field or header names whose

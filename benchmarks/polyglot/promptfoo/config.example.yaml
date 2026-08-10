@@ -1,0 +1,55 @@
+# Copy this file to config.local.yaml in this directory, replace every <...>
+# placeholder, then pass it to run.sh with --config. Do not commit it.
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+
+description: Aider Polyglot mini-v2 — Capstan vs OpenCode
+
+prompts:
+  - "{{prompt}}"
+
+providers:
+  - id: file://provider.py:call_capstan
+    label: Capstan
+    config:
+      provider_name: capstan
+      model: deepseek-v4-pro
+      corpus: <absolute-path-to-polyglot-corpus>
+      output_root: <absolute-path-to-private-work-directory>
+      agent_timeout: 240
+      test_timeout: 300
+      agent_command: >-
+        <absolute-path-to-capstan> run --benchmark --no-wiki
+        --provider deepseek --model deepseek-v4-pro --profile implement
+        --reasoning-effort medium --max-turns 40 --prompt-file {prompt_file}
+        --workdir {workdir} --workspace {workdir} --json
+
+  - id: file://provider.py:call_opencode
+    label: OpenCode
+    config:
+      provider_name: opencode
+      model: deepseek/deepseek-v4-pro
+      corpus: <absolute-path-to-polyglot-corpus>
+      output_root: <absolute-path-to-private-work-directory>
+      agent_timeout: 240
+      test_timeout: 300
+      agent_command: >-
+        python3 <absolute-path-to-capstan-repository>/benchmarks/polyglot/scripts/run_opencode.py
+        --prompt-file {prompt_file} --workdir {workdir}
+        --model deepseek/deepseek-v4-pro --variant medium
+
+tests:
+  - path: file://tests.py:generate_tests
+    config:
+      corpus: <absolute-path-to-polyglot-corpus>
+
+defaultTest:
+  assert:
+    - type: python
+      value: file://assert_result.py:check_upstream_tests
+      metric: upstream_tests
+
+commandLineOptions:
+  maxConcurrency: 1
+  repeat: 3
+  cache: false
+  share: false

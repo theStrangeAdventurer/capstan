@@ -272,6 +272,7 @@ Feature specs:
 - [ACP](specs/acp.md)
 - [Agent control](specs/agent-control.md)
 - [Agent profiles](specs/agent-profiles.md)
+- [Benchmarks](specs/benchmarks.md)
 - [Agent loop](specs/agent-loop.md)
 - [CLI run mode](specs/cli-run.md)
 - [CI binaries](specs/ci-binaries.md)

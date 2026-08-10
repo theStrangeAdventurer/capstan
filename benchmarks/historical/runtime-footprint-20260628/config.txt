@@ -1,0 +1,17 @@
+timestamp=20260628-174237
+runs=5
+workdir=<home>/narnia/tui-agent
+tasks_dir=<tmp>/capstan-bench-tasks-3
+time_flag=-l
+agent_a_name=capstan
+agent_a_bin=capstan
+agent_a_cmd={bin} run --benchmark --provider openrouter --model deepseek/deepseek-v4-pro --prompt-file {prompt_file} --workdir {workdir}
+agent_a_self_cmd={bin} --self-test-embedded
+agent_b_name=opencode
+agent_b_bin=opencode
+agent_b_cmd=python3 <home>/Benchmarks/opencode_prompt_file.py --bin {bin} --model openrouter/deepseek/deepseek-v4-pro --workdir {workdir} --prompt-file {prompt_file}
+agent_b_self_cmd=
+isolated_home=0
+idle_seconds=0
+reset_cmd=
+order_mode=alternating

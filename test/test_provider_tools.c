@@ -1156,6 +1156,11 @@ static MunitResult test_default_profile_is_implement(
   lua_State *L = new_provider_state();
   reset_captures(L);
 
+  char system_prompt[8192];
+  read_file("ai/system_prompt.txt", system_prompt, sizeof(system_prompt));
+  lua_pushstring(L, system_prompt);
+  lua_setglobal(L, "system_prompt");
+
   int rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 1);
@@ -1165,6 +1170,8 @@ static MunitResult test_default_profile_is_implement(
   call_agent_entry(L);
 
   munit_assert_true(strstr(captured_body, "Active Profile: Implement") != NULL);
+  munit_assert_true(strstr(captured_body, "form one concrete hypothesis before editing") != NULL);
+  munit_assert_true(strstr(captured_body, "preserve them and ask before overwriting") != NULL);
   munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"medium\"") != NULL);
   munit_assert_true(strstr(captured_logs, "[agent] profile=implement") != NULL);
 
@@ -1671,6 +1678,46 @@ static MunitResult test_subagents_respect_explicit_small_max_turns(
   lua_getglobal(L, "subagent_turn_limit");
   munit_assert_int((int)lua_tointeger(L, -1), ==, 2);
   lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_subagents_cap_model_requested_limits(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "capstan.config = capstan.config or {}\n"
+      "capstan.config.subagents = {max_turns_cap = 3, max_concurrent_cap = 2}\n"
+      "subagent_capped_turns = {}\n"
+      "capstan.agent.run = function(opts, callbacks)\n"
+      "  table.insert(subagent_capped_turns, opts.max_turns)\n"
+      "  callbacks.on_done({ok = true, text = 'done', turns = 1})\n"
+      "  return true, nil\n"
+      "end\n"
+      "local available = tools.collect()\n"
+      "tools.handle_tool_calls({}, available, {{id='call_subs_capped_limits', name='subagents', arguments='{\\\"max_concurrent\\\":50,\\\"tasks\\\":[{\\\"id\\\":\\\"one\\\",\\\"task\\\":\\\"one\\\",\\\"max_turns\\\":50},{\\\"id\\\":\\\"two\\\",\\\"task\\\":\\\"two\\\",\\\"max_turns\\\":50}]}' }}, '', function() end, {tools = available, depth = 0})\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "subagent_capped_turns");
+  lua_rawgeti(L, -1, 1);
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 3);
+  lua_pop(L, 1);
+  lua_rawgeti(L, -1, 2);
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 3);
+  lua_pop(L, 2);
+  munit_assert_true(strstr(captured_agent_appends, "running 2 concurrent") != NULL);
 
   reset_captures(L);
   lua_close(L);
@@ -6027,6 +6074,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/subagents_respect_explicit_small_max_turns",
      test_subagents_respect_explicit_small_max_turns, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/subagents_cap_model_requested_limits",
+     test_subagents_cap_model_requested_limits, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/subagents_pass_shared_instructions_to_children",
      test_subagents_pass_shared_instructions_to_children, NULL, NULL,

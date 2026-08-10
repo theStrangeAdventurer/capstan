@@ -22,6 +22,7 @@ Configuration defaults:
 return {
   subagents = {
     max_concurrent = 3,
+    max_concurrent_cap = 8,
     max_tasks = 8,
     max_attempts = 3,
     max_turns = 6,

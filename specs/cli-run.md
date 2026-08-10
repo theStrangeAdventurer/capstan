@@ -34,8 +34,9 @@ echo "Summarize this repo" | capstan run --json
   are `fast`, `implement`, and `plan`. Profiles can set default reasoning
   effort, append profile-specific system instructions, and restrict available
   model tools. `plan` is read-only for model tools: it keeps inspection tools
-  such as `file_read`, `fetch`, and `logs`, and removes write, shell, and
-  subagent tools.
+  such as `file_read`, `fetch`, `logs`, and `subagents`, and removes write and
+  shell tools. Plan subagents inherit the read-only profile and cannot spawn
+  nested subagents.
 - `--reasoning-effort` overrides the run's reasoning effort. Accepted values
   are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
   `--effort` is a short alias. The runtime maps this into request-level

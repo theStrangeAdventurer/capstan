@@ -10,8 +10,14 @@ tools.
 | Profile | Purpose | Default reasoning | Tool policy |
 |---------|---------|-------------------|-------------|
 | `fast` | Low-overhead work for simple tasks | `low` | Normal tools |
-| `implement` | Focused code changes | `medium` | Normal tools |
+| `implement` | Focused code changes with evidence-driven scoped-change discipline | `medium` | Normal tools |
 | `plan` | Read-only exploration and planning | `high` | Inspection tools and read-only subagents |
+
+`implement` tells the model to establish expected behavior from the relevant
+test, specification, or caller; form a concrete hypothesis; run an early,
+focused check when useful; and inspect failures before another speculative
+change. It must stop broad exploration and validation after the required
+behavior is evidenced.
 
 `plan` keeps model-initiated `file_read`, `fetch`, `logs`, and `subagents`
 tools. It removes write tools and shell from the model tool list, and the
