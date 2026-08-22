@@ -68,6 +68,7 @@ local function config_table(name)
 end
 
 local active_profile_name = nil
+local interactive_run_options = {}
 
 local function configured_profile()
     local configured = config_table("agent")
@@ -223,15 +224,15 @@ local function prepare_provider(opts, profile)
 end
 
 local function effective_model_info(profile_name)
-    local profile = profiles.get(profile_name) or effective_profile({})
-    local active, provider_name = prepare_provider({}, profile)
+    local profile = profiles.get(profile_name) or effective_profile(interactive_run_options)
+    local active, provider_name = prepare_provider(interactive_run_options, profile)
     if not active then
         return nil, provider_name
     end
     return {
         provider = provider_name,
         model = active.model,
-        reasoning_effort = effective_reasoning_effort(active, nil, profile),
+        reasoning_effort = effective_reasoning_effort(active, interactive_run_options, profile),
         profile = profile and profile.name or nil,
     }, nil
 end
@@ -817,6 +818,24 @@ _G.capstan.agent = {
     run = function(opts, callbacks)
         return M.run(opts, callbacks)
     end,
+    configure_interactive = function(opts)
+        opts = type(opts) == "table" and opts or {}
+        if opts.provider and not M.providers[opts.provider] then
+            return nil, "unknown provider: " .. tostring(opts.provider)
+        end
+        interactive_run_options = {}
+        local fields = {
+            "provider", "model", "reasoning_effort", "max_turns",
+            "preserve_reasoning",
+        }
+        for _, field in ipairs(fields) do
+            if opts[field] ~= nil then
+                interactive_run_options[field] = opts[field]
+            end
+        end
+        publish_agent_status()
+        return true
+    end,
     set_profile = function(name)
         local normalized = profiles.normalize(name)
         if not normalized then return nil, "unknown profile" end
@@ -1134,12 +1153,16 @@ end
 -- Entry point called from C via agent_build_and_dispatch. Receives message
 -- history as a Lua table, runs the full agent cycle with UI-visible streaming.
 _G.agent_entry = function(messages)
-    M.run({
+    local opts = {
         messages = messages,
         update_status = true,
         update_usage = true,
         permission_scope = interactive_permission_scope(),
-    }, {
+    }
+    for field, value in pairs(interactive_run_options) do
+        opts[field] = value
+    end
+    M.run(opts, {
         on_text = function(chunk)
             agent.append(chunk, "agent")
         end,

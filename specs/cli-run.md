@@ -7,29 +7,44 @@ as the TUI.
 ## Behavior
 
 ```sh
+capstan --yolo --provider deepseek --model deepseek-chat --profile implement --effort medium
+capstan --workdir /tmp/repo/task --workspace /tmp/repo --no-mcp --no-wiki
+capstan --session-id "release prep"
 capstan run --prompt "Inspect the build failure"
 capstan run --prompt-file task.md --provider openrouter --model anthropic/claude-sonnet-4
 capstan run --prompt-file task.md --reasoning-effort low
 capstan run --profile plan --prompt-file task.md
-capstan run --session-id "my fucking bench" --prompt-file task.md
+capstan run --session-id "my benchmark" --prompt-file task.md
+capstan run --session-id "my benchmark" --prompt "Continue the analysis"
 capstan run --benchmark --prompt-file task.md --workdir /tmp/repo/task --workspace /tmp/repo
 capstan run --no-wiki --prompt-file task.md --workdir /tmp/capstan-eval
 echo "Summarize this repo" | capstan run --json
 ```
 
-- `capstan` with no command still opens the TUI. `capstan --yolo` opens it with
-  permission prompts disabled for all model tool calls in that process.
+- `capstan` with no command opens the TUI. Interactive mode accepts
+  `--provider`, `--model`, `--profile`, `--reasoning-effort`/`--effort`,
+  `--workdir`, `--workspace`, `--session-id`, `--max-turns`, `--no-mcp`,
+  `--no-wiki`, `--no-preserve-reasoning`, and
+  `--yolo` in any combination. Runtime overrides apply only to the current
+  process; session selection updates the workspace's active session.
+- `--prompt`, `--prompt-file`, `--json`, and `--benchmark` are headless-only
+  and require `capstan run`.
+- `capstan --yolo` opens the TUI with permission prompts disabled for all model
+  tool calls in that process.
 - `capstan run` reads input from `--prompt`, `--prompt-file`, or stdin when
   stdin is not a TTY.
 - `--provider`, `--model`, `--workdir`, and `--workspace` override only this process run.
   They do not update runtime state.
 - `--workdir` sets the base for relative file paths and shell commands.
   `--workspace` sets the containing project/instruction/permission root.
-- `--session-id ID` persists the one-shot prompt and response as a new
-  workspace-scoped session, pins both its ID and title to the exact supplied
-  value, and isolates runtime logs beneath that ID. IDs may contain quoted
-  spaces but not path separators, controls, leading dots, or edge spaces. An
-  existing ID is an error; CLI mode never resumes or overwrites it implicitly.
+- `--session-id ID` selects a workspace-scoped session. If it exists, TUI
+  restores it as the active conversation and `capstan run` sends the stored
+  history plus the new prompt. If it does not exist, Capstan creates it with a
+  stable ID and explicit title matching the supplied value, then uses it
+  immediately. The flag also isolates runtime logs beneath that stable ID.
+  IDs may contain quoted spaces and UTF-8 text, but not path separators,
+  controls, leading dots, or edge spaces. Invalid or malformed existing
+  sessions fail closed without being overwritten.
 - `--profile` selects an agent workflow profile for this run. Accepted values
   are `fast`, `implement`, and `plan`. Profiles can set default reasoning
   effort, append profile-specific system instructions, and restrict available
@@ -42,7 +57,9 @@ echo "Summarize this repo" | capstan run --json
   `--effort` is a short alias. The runtime maps this into request-level
   `reasoning.effort` for compatible providers. Explicit `--reasoning-effort`
   takes precedence over profile defaults.
-- `--max-turns` caps model-tool continuation rounds; the default is `200`.
+- `--max-turns` caps model-tool continuation rounds; the default is `200` in
+  headless runs and takes precedence over the `agent.max_turns` config value,
+  which governs interactive runs (built-in default `80`).
 - `--no-mcp` skips configured MCP server startup for this process run.
 - `--no-wiki` skips wiki initialization for this process run. Capstan does not
   create the default wiki directory, read wiki files, add wiki metadata or

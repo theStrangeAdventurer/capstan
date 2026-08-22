@@ -48,6 +48,8 @@ settings.
 - text, image, and embedded text-resource prompt blocks
 - configured model selection, `mode` (`fast`, `implement`, `plan`), and
   reasoning `effort` options
+- a fixed 200-turn continuation guard per prompt (the run-guard default for
+  ACP sessions, not configurable per session)
 - legacy `session/set_mode` compatibility and `current_mode_update`
 - built-in and user plugin commands through `available_commands_update`
 

@@ -4,29 +4,76 @@
 #include <stdlib.h>
 #include <string.h>
 
-const char *START_SCREEN_ART[] = {
-    "          ⣀⣠⣤⣤⠶⠶⠖⣲⣶⠶⢤⣀                ",
-    "      ⣀⣤⣶⠿⠛⠉⠁  ⢰⠋⣻⣿⠉⡆⠉⢻⣆              ",
-    "   ⢀⣴⣾⡿⠋⠁⣀⣤⣴⣶⡿⠿⠿⠷⠿⠿⠷⠷⣦⣠⣿⠃        ",
-    "  ⣴⣿⣿⣿⣧⡶⢿⢛⣫⣥⣶⣶⣿⣛⣿⣿⣿⣿⣿⣿⣿⣧⣤⣀       ",
-    "  ⠻⠿⣿⣟⣩⠷⢾⣿⡟⠛⠫⠽⢿⣦⣤⣄⣠⢀⣄⣩⣿⡿⠟⠋            ",
-    "   ⢤⣼⡿⣫⣝⢻⣿⡁⡀ ⠉⠉⠉⠽⠋⠁ ⠻⡙⠻⡅             ",
-    "  ⢤⣾⣿⣧⡐⠿⠘⣿⡷⠘⢗  ⣀⠴⠷⠒⢶⡶⠧⣰⡇             ",
-    "   ⠐⣻⣿⣿⡗⠺⣿⡃ ⠻⣶⣮⣥⣦⡴⠶⣛⡻⢶⣤⣵⣶⠟⢀⣀⣀    ",
-    " ⣤⣶⣿⣿⣿⣿⣷ ⠛⠿⣷⣦⣄⣿⡋⠁ ⠈⠉⠉ ⣿⡟⠯⣶⣿⣿⣿⠇   ",
-    "  ⠉⠛⢿⣿⣿⣿⣿⣶⡄⠙⢿⣿⣿⣿⣶⣶⣶⣶⣶⣶⣿⣿⣿⣾⠭⠉⠁         ",
-    "     ⠈⠛⢿⣿⣿⣿⡀ ⠙⣿⣿⡟⠋⢁⣴⣿⣿⣿⣿⣧⡄           ",
-    "        ⠙⢿⣿⣧⠠⠞⠋⠁⣀⣴⣿⣿⡿⠟⠋⠉              ",
-    "          ⠉⠛⠧ ⠠⠾⠟⠛⠉                   ",
+static const char *START_SCREEN_WORDMARK[] = {
+    "0111110 0011100 1111110 0111110 1111111 0011100 1100011",
+    "1100000 1100011 1100011 1100000 0011100 1100011 1111011",
+    "1100000 1111111 1111110 0111110 0011100 1111111 1101111",
+    "1100000 1100011 1100000 0000011 0011100 1100011 1100111",
+    "0111110 1100011 1100000 1111110 0011100 1100011 1100011",
 };
 
-const int START_SCREEN_ART_LINES =
-    (int)(sizeof(START_SCREEN_ART) / sizeof(START_SCREEN_ART[0]));
+int start_screen_wordmark_pixel(int row, int column) {
+  if (row < 0 || row >= START_SCREEN_WORDMARK_ROWS || column < 0 ||
+      column >= START_SCREEN_WORDMARK_COLUMNS)
+    return 0;
+  return START_SCREEN_WORDMARK[row][column] == '1';
+}
+
+int start_screen_wordmark_grain(int row, int column) {
+  if (!start_screen_wordmark_pixel(row, column))
+    return 0;
+  unsigned int hash = (unsigned int)(row + 1) * 37u +
+                      (unsigned int)(column + 3) * 17u;
+  return hash % 11u == 0u;
+}
+
+int start_screen_animation_tick(long long elapsed_ms) {
+  const int sweep_ms = 900;
+  const int pause_ms = 450;
+  const int travel = START_SCREEN_WORDMARK_COLUMNS + 28;
+  long long cycle_ms = sweep_ms + pause_ms;
+  long long phase = elapsed_ms % cycle_ms;
+  if (phase < 0)
+    phase += cycle_ms;
+  if (phase >= sweep_ms)
+    return travel - 1;
+
+  long long accelerated = phase * phase * phase;
+  long long duration = (long long)sweep_ms * sweep_ms * sweep_ms;
+  return (int)(accelerated * (travel - 1) / duration);
+}
+
+int start_screen_gradient_level(int row, int column, int tick) {
+  if (row < 0 || row >= START_SCREEN_WORDMARK_ROWS || column < 0 ||
+      column >= START_SCREEN_WORDMARK_COLUMNS)
+    return 0;
+
+  int cycle = START_SCREEN_WORDMARK_COLUMNS + 28;
+  int highlight = tick % cycle;
+  if (highlight < 0)
+    highlight += cycle;
+  highlight -= 14;
+
+  int distance = column + row - highlight;
+  if (distance < 0)
+    distance = -distance;
+  if (distance == 0)
+    return 6;
+  if (distance == 1)
+    return 5;
+  if (distance <= 3)
+    return 4;
+  if (distance <= 5)
+    return 3;
+  if (distance <= 7)
+    return 2;
+  return 1;
+}
 
 StartScreenLayout start_screen_layout_for_size(int height, int width) {
-  if (height >= 15 && width >= 81)
+  if (height >= 20 && width >= 64)
     return START_SCREEN_WIDE;
-  if (height >= 10 && width >= 48)
+  if (height >= 12 && width >= 48)
     return START_SCREEN_COMPACT;
   return START_SCREEN_MINIMAL;
 }
@@ -95,5 +142,5 @@ void start_screen_build_status(const StartScreenStatus *status,
                         sizeof(out->workdir), 32);
 
   snprintf(out->ready, sizeof(out->ready),
-           "type your question or / + Tab for options");
+           "Type message · / + Tab for commands · Shift+Tab: fast / implement / plan");
 }

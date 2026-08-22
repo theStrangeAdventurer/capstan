@@ -604,6 +604,22 @@ int session_load(const char *id, Session *session) {
   return ok;
 }
 
+int session_load_or_create_named(Session *session, const char *id,
+                                 int *created) {
+  if (created)
+    *created = 0;
+  if (session_load(id, session))
+    return 1;
+  if (session_create_named(session, id)) {
+    if (created)
+      *created = 1;
+    return 1;
+  }
+  /* Another process may have created the same session between our load and
+     exclusive create. Retry the load, but never replace an invalid file. */
+  return session_load(id, session);
+}
+
 int session_delete(const char *id) {
   char path[PATH_MAX];
   return session_path(id, path, sizeof(path)) && unlink(path) == 0;

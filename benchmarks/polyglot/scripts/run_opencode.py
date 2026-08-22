@@ -96,13 +96,16 @@ def main() -> int:
         )
         if args.reasoning_effort:
             env["OPENCODE_CONFIG_CONTENT"] = reasoning_override(args.model, args.reasoning_effort)
-        return subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=workdir,
             env=env,
             stdin=subprocess.DEVNULL,
-            check=False,
-        ).returncode
+        )
+        pid_file = os.environ.get("CAPSTAN_BENCH_AGENT_PID_FILE")
+        if pid_file:
+            Path(pid_file).write_text(f"{process.pid}\n", encoding="ascii")
+        return process.wait()
 
 
 if __name__ == "__main__":

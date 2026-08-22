@@ -7,7 +7,18 @@ permissions, profiles, skills, ACP, MCP, and parallel subagents in one compact
 executable. It is designed to stay inspectable, fast to start, and easy to adapt
 without rebuilding the core.
 
-<!-- Add the public hero screenshot or GIF here. -->
+## Competitive results, dramatically lower local overhead
+
+In the latest local Aider Polyglot comparison, Capstan passed **35/36** upstream
+test runs versus OpenCode's **36/36**, while using about **10x less median local
+CPU** and **58x less median main-process RSS** (18.6 MiB vs 1073.2 MiB).
+Both agents used DeepSeek V4 Pro with medium reasoning across the same 12 tasks,
+repeated three times.
+
+[See the full benchmark, methodology, and limitations.](benchmarks/REPORT.md)
+Results are workload-, model-, and machine-specific.
+
+![Capstan terminal demo](docs/assets/demo.gif)
 
 ## Highlights
 
@@ -96,25 +107,26 @@ tool-provided images.
 
 ## Benchmark: Capstan vs OpenCode
 
-The latest 72-attempt Aider Polyglot comparison used the same OpenRouter route,
-DeepSeek V4 Pro model, medium reasoning, public prompts, upstream tests, and
-240-second timeout for both agents.
+The latest 72-attempt Aider Polyglot comparison used direct DeepSeek V4 Pro,
+medium reasoning, public prompts, upstream tests, and a 240-second timeout for
+both agents.
 
 | Metric | Capstan | OpenCode |
 |---|---:|---:|
-| Upstream tests passed | 32/36 (88.9%) | 33/36 (91.7%) |
-| Median agent wall time | **83.2s** | 83.4s |
-| Median local CPU time | **1.38s** | 20.96s |
-| Median inclusive peak RSS | **123.8 MiB** | 1044.6 MiB |
+| Upstream tests passed | 35/36 (97.2%) | **36/36 (100%)** |
+| Median agent wall time | 48.7s | **46.3s** |
+| Median local CPU time | **1.64s** | 16.44s |
+| Median main-process peak RSS | **18.6 MiB** | 1073.2 MiB |
+| Highest main-process peak RSS | **29.8 MiB** | 1163.9 MiB |
 
-On this workload, solution quality and median wall time are effectively at
-parity. Capstan used about **15x less local CPU** and **8.4x less inclusive peak
-RSS**. The RSS metric can include compiler and test-runner child processes on
-macOS; it is not the idle memory of the executable alone.
+On this workload, Capstan used about **10x less median local CPU** and **58x
+less median main-process RSS**. The harness samples only the primary agent PID
+every 50 ms, excluding child compilers, test runners, and tool processes.
+OpenCode completed every attempt; Capstan had one agent timeout.
 
 See the [full report](benchmarks/REPORT.md),
-[raw attempt data](benchmarks/polyglot-openrouter-medium-20260809.csv), and
-[reproducible harness](benchmarks/README.md). Benchmark results are
+[raw attempt data](benchmarks/polyglot-deepseek-medium-primary-rss-20260821.csv),
+and [reproducible harness](benchmarks/README.md). Benchmark results are
 workload-, provider-, model-, and machine-specific.
 
 ## Profiles
@@ -175,7 +187,8 @@ Runtime environment overrides use Capstan-specific names:
 
 Provider credential variables remain provider-native, such as
 `DEEPSEEK_API_KEY` and `OPENROUTER_API_KEY`. CLI flags (`--provider`, `--model`,
-`--reasoning-effort`) override normal runtime choices for one headless run.
+`--reasoning-effort`) override normal runtime choices for the current TUI or
+headless process.
 
 ### Local models with Ollama
 
@@ -374,7 +387,10 @@ The TUI stores sessions per workspace:
 - queued input waits in a bounded FIFO while the agent is active;
 - `/wiki` manages portable Markdown context.
 
-Headless runs are ephemeral unless `--session-id` is provided.
+Use `--session-id ID` in either mode to select a workspace-scoped conversation.
+Capstan resumes it when it exists, or creates it with that stable key/title when
+it does not. Invalid or corrupted sessions fail rather than being overwritten.
+Headless runs without the flag remain ephemeral.
 
 ## Build From Source
 

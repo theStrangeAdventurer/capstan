@@ -265,7 +265,9 @@ The limits apply across providers and can be changed with top-level
 `tool_output.max_bytes` and `tool_output.max_lines`.
 
 Agent runs also carry an automatic guard to catch runaway loops before the next
-tool executes. By default the guard stops after 80 turns or 2700 seconds. Total
+tool executes. In interactive runs the guard stops after 80 turns or 2700
+seconds by default; headless `capstan run` and ACP sessions use a 200-turn
+budget instead (see [CLI run mode](cli-run.md)). Total
 tool-call and repeated-call limits are disabled by default because legitimate
 coding workflows often need many or repeated reads, edits, and validations.
 They can be enabled with `agent.max_tool_calls`, `agent.max_same_tool_call`, and

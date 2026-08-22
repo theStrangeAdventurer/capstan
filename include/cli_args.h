@@ -22,6 +22,7 @@ typedef struct {
   const char *workspace;
   const char *session_id;
   int max_turns;
+  int max_turns_set;
   int json;
   int no_mcp;
   int no_wiki;

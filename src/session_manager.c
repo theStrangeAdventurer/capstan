@@ -171,15 +171,30 @@ int session_manager_switch(const char *id) {
   return 1;
 }
 
-int session_manager_init(const char *workspace_root) {
+int session_manager_init_selected(const char *workspace_root,
+                                  const char *session_id) {
   session_free(&g_active);
   g_initialized = 0;
   log_set_session_id(NULL);
   if (!session_store_init(workspace_root))
     return 0;
   g_initialized = 1;
-  char active_id[SESSION_ID_SIZE];
+
   Session loaded;
+  if (session_id) {
+    int created = 0;
+    if (!session_load_or_create_named(&loaded, session_id, &created) ||
+        !session_set_active(loaded.id)) {
+      if (created)
+        session_delete(session_id);
+      session_free(&loaded);
+      goto fail;
+    }
+    install_loaded(&loaded);
+    return 1;
+  }
+
+  char active_id[SESSION_ID_SIZE];
   if (session_get_active(active_id, sizeof(active_id)) &&
       session_load(active_id, &loaded)) {
     /* Startup is installing the session already named by the durable pointer;
@@ -187,7 +202,18 @@ int session_manager_init(const char *workspace_root) {
     install_loaded(&loaded);
     return 1;
   }
-  return session_manager_new();
+  if (session_manager_new())
+    return 1;
+
+fail:
+  session_free(&g_active);
+  g_initialized = 0;
+  log_set_session_id(NULL);
+  return 0;
+}
+
+int session_manager_init(const char *workspace_root) {
+  return session_manager_init_selected(workspace_root, NULL);
 }
 
 void session_manager_tick(void) {

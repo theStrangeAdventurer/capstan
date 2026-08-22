@@ -21,6 +21,65 @@ static MunitResult test_tui_yolo(const MunitParameter params[], void *data) {
   return MUNIT_OK;
 }
 
+static MunitResult test_tui_combines_runtime_options(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "--yolo", "--provider", "deepseek",
+                  "--model", "deepseek-chat", "--profile", "plan",
+                  "--effort", "high", "--workdir", "/tmp",
+                  "--workspace", "/", "--max-turns", "7", "--no-mcp",
+                  "--no-wiki", "--no-preserve-reasoning"};
+  CliOptions opts = cli_parse(19, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_TUI);
+  munit_assert_int(opts.yolo, ==, 1);
+  munit_assert_string_equal(opts.provider, "deepseek");
+  munit_assert_string_equal(opts.model, "deepseek-chat");
+  munit_assert_string_equal(opts.profile, "plan");
+  munit_assert_string_equal(opts.reasoning_effort, "high");
+  munit_assert_string_equal(opts.workdir, "/tmp");
+  munit_assert_string_equal(opts.workspace, "/");
+  munit_assert_int(opts.max_turns, ==, 7);
+  munit_assert_int(opts.max_turns_set, ==, 1);
+  munit_assert_int(opts.no_mcp, ==, 1);
+  munit_assert_int(opts.no_wiki, ==, 1);
+  munit_assert_int(opts.no_preserve_reasoning, ==, 1);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tui_session_option(const MunitParameter params[],
+                                            void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "--session-id", "named session"};
+  CliOptions opts = cli_parse(3, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_TUI);
+  munit_assert_string_equal(opts.session_id, "named session");
+  return MUNIT_OK;
+}
+
+static MunitResult test_rejects_removed_set_session_id(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "--set-session-id", "new"};
+  CliOptions opts = cli_parse(3, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_ERROR);
+  munit_assert_not_null(opts.error);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tui_rejects_headless_options(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "--json"};
+  CliOptions opts = cli_parse(2, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_ERROR);
+  munit_assert_not_null(opts.error);
+  return MUNIT_OK;
+}
+
 static MunitResult test_run_options(const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -184,6 +243,14 @@ static MunitTest tests[] = {
     {"/default_tui", test_default_tui, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
     {"/tui_yolo", test_tui_yolo, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tui_combines_runtime_options", test_tui_combines_runtime_options, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tui_session_option", test_tui_session_option, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/rejects_removed_set_session_id", test_rejects_removed_set_session_id,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tui_rejects_headless_options", test_tui_rejects_headless_options, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/run_options", test_run_options, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
     {"/session_id_requires_value", test_session_id_requires_value, NULL, NULL,

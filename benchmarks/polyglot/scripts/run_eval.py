@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import re
@@ -204,17 +205,93 @@ def _max_rss_bytes(max_rss: int | float) -> int:
     return int(max_rss if sys.platform == "darwin" else max_rss * 1024)
 
 
-def _wait4(process: subprocess.Popen, timeout: int) -> tuple[int, bool, object]:
-    """Wait for one process group leader and return its exact resource usage."""
+class _DarwinTaskInfo(ctypes.Structure):
+    _fields_ = [
+        ("virtual_size", ctypes.c_uint64),
+        ("resident_size", ctypes.c_uint64),
+        ("total_user", ctypes.c_uint64),
+        ("total_system", ctypes.c_uint64),
+        ("threads_user", ctypes.c_uint64),
+        ("threads_system", ctypes.c_uint64),
+        ("policy", ctypes.c_int32),
+        ("faults", ctypes.c_int32),
+        ("pageins", ctypes.c_int32),
+        ("cow_faults", ctypes.c_int32),
+        ("messages_sent", ctypes.c_int32),
+        ("messages_received", ctypes.c_int32),
+        ("syscalls_mach", ctypes.c_int32),
+        ("syscalls_unix", ctypes.c_int32),
+        ("context_switches", ctypes.c_int32),
+        ("thread_count", ctypes.c_int32),
+        ("running_threads", ctypes.c_int32),
+        ("priority", ctypes.c_int32),
+    ]
+
+
+_PROC_PIDINFO = None
+
+
+def _darwin_proc_pidinfo():
+    global _PROC_PIDINFO
+    if _PROC_PIDINFO is None:
+        proc_pidinfo = ctypes.CDLL("/usr/lib/libproc.dylib").proc_pidinfo
+        proc_pidinfo.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        proc_pidinfo.restype = ctypes.c_int
+        _PROC_PIDINFO = proc_pidinfo
+    return _PROC_PIDINFO
+
+
+def _pid_rss_bytes(pid: int) -> int | None:
+    """Return current RSS for exactly one PID, excluding all descendants."""
+    if sys.platform == "darwin":
+        info = _DarwinTaskInfo()
+        size = ctypes.sizeof(info)
+        if _darwin_proc_pidinfo()(pid, 4, 0, ctypes.byref(info), size) != size:
+            return None
+        return int(info.resident_size)
+    if sys.platform.startswith("linux"):
+        try:
+            status = Path(f"/proc/{pid}/status").read_text(encoding="ascii")
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            return None
+        match = re.search(r"^VmRSS:\s+(\d+)\s+kB$", status, re.MULTILINE)
+        return int(match.group(1)) * 1024 if match else None
+    return None
+
+
+def _reported_agent_pid(pid_file: Path, default_pid: int) -> int:
+    try:
+        value = int(pid_file.read_text(encoding="ascii").strip())
+        return value if value > 0 else default_pid
+    except (FileNotFoundError, ValueError, OSError):
+        return default_pid
+
+
+def _wait4(
+    process: subprocess.Popen, timeout: int, agent_pid_file: Path
+) -> tuple[int, bool, object, int]:
+    """Wait for a process group and sample only its reported primary agent PID."""
     deadline = time.monotonic() + timeout
     timed_out = False
     termination_deadline = None
+    agent_peak_rss_bytes = 0
     while True:
+        agent_pid = _reported_agent_pid(agent_pid_file, process.pid)
+        rss_bytes = _pid_rss_bytes(agent_pid)
+        if rss_bytes is not None:
+            agent_peak_rss_bytes = max(agent_peak_rss_bytes, rss_bytes)
+
         pid, status, usage = os.wait4(process.pid, os.WNOHANG)
         if pid == process.pid:
             return_code = os.waitstatus_to_exitcode(status)
             process.returncode = return_code
-            return return_code, timed_out, usage
+            return return_code, timed_out, usage, agent_peak_rss_bytes
 
         now = time.monotonic()
         if not timed_out and now >= deadline:
@@ -235,27 +312,39 @@ def _wait4(process: subprocess.Popen, timeout: int) -> tuple[int, bool, object]:
 
 def run_process(command: list[str], cwd: Path, timeout: int, log_path: Path) -> dict:
     started = time.monotonic()
-    with log_path.open("w", encoding="utf-8") as log:
-        log.write("$ " + shlex.join(command) + "\n\n")
-        log.flush()
-        process = subprocess.Popen(
-            command,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            text=True,
-            start_new_session=True,
-        )
-        return_code, timed_out, usage = _wait4(process, timeout)
-    max_rss_bytes = _max_rss_bytes(usage.ru_maxrss)
+    agent_pid_file = log_path.with_name(log_path.stem + "-primary.pid")
+    agent_pid_file.unlink(missing_ok=True)
+    env = os.environ.copy()
+    env["CAPSTAN_BENCH_AGENT_PID_FILE"] = str(agent_pid_file)
+    try:
+        with log_path.open("w", encoding="utf-8") as log:
+            log.write("$ " + shlex.join(command) + "\n\n")
+            log.flush()
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+            )
+            return_code, timed_out, usage, agent_peak_rss_bytes = _wait4(
+                process, timeout, agent_pid_file
+            )
+    finally:
+        agent_pid_file.unlink(missing_ok=True)
+    wait4_max_rss_bytes = _max_rss_bytes(usage.ru_maxrss)
     resources = {
-        "measurement": "wait4",
+        "measurement": "primary_pid_sample_50ms",
         "user_cpu_seconds": round(usage.ru_utime, 4),
         "system_cpu_seconds": round(usage.ru_stime, 4),
         "cpu_seconds": round(usage.ru_utime + usage.ru_stime, 4),
-        "max_rss_bytes": max_rss_bytes,
-        "max_rss_mib": round(max_rss_bytes / (1024 * 1024), 3),
+        "max_rss_bytes": agent_peak_rss_bytes,
+        "max_rss_mib": round(agent_peak_rss_bytes / (1024 * 1024), 3),
+        "wait4_max_rss_bytes": wait4_max_rss_bytes,
+        "wait4_max_rss_mib": round(wait4_max_rss_bytes / (1024 * 1024), 3),
     }
     return {
         "command": command,

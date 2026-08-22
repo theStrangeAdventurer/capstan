@@ -50,16 +50,6 @@ CliOptions cli_parse(int argc, char **argv) {
     return opts;
   }
 
-  if (is_flag(argv[1], "--yolo")) {
-    if (argc != 2) {
-      opts.mode = CLI_MODE_ERROR;
-      opts.error = "--yolo does not accept additional TUI options";
-      return opts;
-    }
-    opts.yolo = 1;
-    return opts;
-  }
-
   int start = 1;
   if (strcmp(argv[1], "run") == 0) {
     opts.mode = CLI_MODE_RUN;
@@ -75,7 +65,7 @@ CliOptions cli_parse(int argc, char **argv) {
     opts.mode = CLI_MODE_ERROR;
     opts.error = "acp accepts only --yolo";
     return opts;
-  } else {
+  } else if (argv[1][0] != '-') {
     opts.mode = CLI_MODE_ERROR;
     opts.error = "unknown command";
     return opts;
@@ -143,8 +133,10 @@ CliOptions cli_parse(int argc, char **argv) {
         }
         if (!opts.error && parsed <= 0)
           opts.error = "--max-turns must be a positive integer";
-        if (!opts.error)
+        if (!opts.error) {
           opts.max_turns = parsed;
+          opts.max_turns_set = 1;
+        }
       }
     } else if (is_flag(arg, "--json")) {
       opts.json = 1;
@@ -163,7 +155,7 @@ CliOptions cli_parse(int argc, char **argv) {
     } else if (is_flag(arg, "-h") || is_flag(arg, "--help")) {
       opts.mode = CLI_MODE_HELP;
     } else {
-      opts.error = "unknown run option";
+      opts.error = "unknown option";
     }
 
     if (opts.error) {
@@ -175,6 +167,12 @@ CliOptions cli_parse(int argc, char **argv) {
   if (opts.prompt && opts.prompt_file) {
     opts.mode = CLI_MODE_ERROR;
     opts.error = "use only one of --prompt or --prompt-file";
+  }
+
+  if (opts.mode == CLI_MODE_TUI &&
+      (opts.prompt || opts.prompt_file || opts.json || opts.benchmark)) {
+    opts.mode = CLI_MODE_ERROR;
+    opts.error = "--prompt, --prompt-file, --json, and --benchmark require capstan run";
   }
 
   return opts;

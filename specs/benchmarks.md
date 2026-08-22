@@ -16,7 +16,9 @@ credentials.
   `benchmarks/work/` and detaches it at the pinned corpus commit;
 - `scripts/run_eval.py` owns public-prompt construction, isolated agent and
   scoring worktrees, upstream-test execution, timeouts, result classification,
-  and agent-process resource measurement;
+  and agent-process resource measurement. Peak agent RSS is sampled every 50
+  ms from only the primary agent PID, excluding child tool processes; raw
+  `wait4` peak RSS is retained separately for workload diagnostics;
 - `scripts/run_opencode.py` adapts OpenCode while isolating extension surfaces.
   For OpenRouter it requires `--reasoning-effort` to make a temporary,
   per-model `reasoning.effort` variant; a bare OpenCode `--variant` may be

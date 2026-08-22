@@ -209,6 +209,55 @@ static MunitResult test_failed_active_write_keeps_current_session(
   return MUNIT_OK;
 }
 
+static MunitResult test_selected_session_create_and_resume(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  const char *old_xdg = getenv("XDG_STATE_HOME");
+  char *saved_xdg = old_xdg ? my_strdup(old_xdg) : NULL;
+  char temp[] = "/tmp/capstan-selected-session-test-XXXXXX";
+  int temp_fd = mkstemp(temp);
+  munit_assert_int(temp_fd, >=, 0);
+  close(temp_fd);
+  munit_assert_int(unlink(temp), ==, 0);
+  munit_assert_int(mkdir(temp, 0700), ==, 0);
+  munit_assert_int(setenv("XDG_STATE_HOME", temp, 1), ==, 0);
+
+  clear_messages();
+  munit_assert_true(session_manager_init_selected(
+      "/repo/selected-session", "custom key"));
+  munit_assert_string_equal(session_manager_active_id(), "custom key");
+  munit_assert_string_equal(session_manager_active_title(), "custom key");
+  munit_assert_string_equal(log_session_id(), "custom key");
+  char *text = my_strdup("persisted message");
+  munit_assert_not_null(text);
+  add_message(text, text, MSG_USER);
+  munit_assert_true(session_manager_save());
+  session_manager_shutdown();
+  clear_messages();
+
+  munit_assert_true(session_manager_init_selected(
+      "/repo/selected-session", "custom key"));
+  munit_assert_string_equal(session_manager_active_id(), "custom key");
+  Messages *messages = get_messages();
+  munit_assert_size(messages->size, ==, 1);
+  munit_assert_string_equal(messages->items[0]->text, "persisted message");
+  session_manager_shutdown();
+  clear_messages();
+
+  if (saved_xdg) {
+    munit_assert_int(setenv("XDG_STATE_HOME", saved_xdg, 1), ==, 0);
+    free(saved_xdg);
+  } else {
+    munit_assert_int(unsetenv("XDG_STATE_HOME"), ==, 0);
+  }
+  char cleanup[PATH_MAX + 16];
+  snprintf(cleanup, sizeof(cleanup), "rm -rf '%s'", temp);
+  munit_assert_int(system(cleanup), ==, 0);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/append_agent_without_agent_message",
      test_append_agent_without_agent_message_creates_agent, NULL, NULL,
@@ -225,6 +274,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/failed_active_write_keeps_current_session",
      test_failed_active_write_keeps_current_session, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/selected_session_create_and_resume",
+     test_selected_session_create_and_resume, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

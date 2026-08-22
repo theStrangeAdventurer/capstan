@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 BufferedPluginResults g_buffered_results = {0};
 static int g_tool_status_color_pair = 0;
@@ -67,11 +68,28 @@ void init_tui(void) {
     init_pair(10, COLOR_BLUE, -1);
     init_pair(11, COLOR_BLACK, COLOR_WHITE);
     if (COLORS >= 256) {
+      init_pair(14, 141, -1);
+      init_pair(15, 176, -1);
+      init_pair(16, 177, -1);
+      init_pair(17, 183, -1);
+      init_pair(18, 189, -1);
+      init_pair(19, 195, -1);
+    } else {
+      init_pair(14, COLOR_MAGENTA, -1);
+      init_pair(15, COLOR_MAGENTA, -1);
+      init_pair(16, COLOR_WHITE, -1);
+      init_pair(17, COLOR_WHITE, -1);
+      init_pair(18, COLOR_WHITE, -1);
+      init_pair(19, COLOR_WHITE, -1);
+    }
+    if (COLORS >= 256) {
       init_pair(12, 65, -1);
       init_pair(13, 95, -1);
+      init_pair(20, 179, -1);
     } else {
       init_pair(12, COLOR_GREEN, -1);
       init_pair(13, COLOR_RED, -1);
+      init_pair(20, COLOR_YELLOW, -1);
     }
     g_diff_add_color_pair = 12;
     g_diff_del_color_pair = 13;
@@ -144,7 +162,7 @@ static int profile_color_pair(const char *profile) {
   if (strcmp(profile, "fast") == 0)
     return 8;
   if (strcmp(profile, "implement") == 0)
-    return 9;
+    return 20;
   if (strcmp(profile, "plan") == 0)
     return 10;
   return 0;
@@ -238,8 +256,10 @@ static void render_status_pair(WINDOW *win, int y, int x, const char *label,
   int dim = dim_gray_attr();
   wattron(win, dim);
   mvwaddstr(win, y, x, label);
-  mvwadd_clipped(win, y, x + 9, value, value_width);
   wattroff(win, dim);
+  wattron(win, A_BOLD);
+  mvwadd_clipped(win, y, x + 9, value, value_width);
+  wattroff(win, A_BOLD);
 }
 
 static void render_profile_pair(WINDOW *win, int y, int x, const char *profile,
@@ -266,17 +286,11 @@ static void render_start_screen_minimal(WINDOW *win, int height, int width) {
     return;
 
   int title_y = height / 2 - 1;
-  int tagline_y = title_y + 1;
   int title_x = centered_x(width, APP_BANNER_TITLE);
-  int tagline_x = centered_x(width, APP_BANNER_TAGLINE);
 
   wattron(win, A_BOLD | COLOR_PAIR(1));
   mvwaddstr(win, title_y, title_x, APP_BANNER_TITLE);
   wattroff(win, A_BOLD | COLOR_PAIR(1));
-
-  wattron(win, dim_gray_attr());
-  mvwaddstr(win, tagline_y, tagline_x, APP_BANNER_TAGLINE);
-  wattroff(win, dim_gray_attr());
 }
 
 static void render_start_screen_frame(WINDOW *win, int y, int x, int frame_h,
@@ -297,61 +311,79 @@ static void render_start_screen_frame(WINDOW *win, int y, int x, int frame_h,
   wattroff(win, dim);
 }
 
+static int start_screen_current_animation_tick(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    return 0;
+  long long elapsed_ms = now.tv_sec * 1000LL + now.tv_nsec / 1000000LL;
+  return start_screen_animation_tick(elapsed_ms);
+}
+
+static void render_start_screen_wordmark(WINDOW *win, int y, int x) {
+  int tick = start_screen_current_animation_tick();
+  for (int row = 0; row < START_SCREEN_WORDMARK_ROWS; row++) {
+    for (int column = 0; column < START_SCREEN_WORDMARK_COLUMNS; column++) {
+      if (!start_screen_wordmark_pixel(row, column))
+        continue;
+      int level = start_screen_gradient_level(row, column, tick);
+      int pair = 14;
+      if (level == 1 && start_screen_wordmark_grain(row, column))
+        pair = 15;
+      else if (level > 1)
+        pair = 14 + level - 1;
+      int attrs = COLOR_PAIR(pair);
+      if (level == 6)
+        attrs |= A_BOLD;
+      wattron(win, attrs);
+      mvwaddstr(win, y + row, x + column, "█");
+      wattroff(win, attrs);
+    }
+  }
+}
+
 static void render_start_screen_wide(WINDOW *win, int height, int width,
                                      const StartScreenStatusLines *lines) {
-  int frame_w = width < 104 ? width : 104;
-  int frame_h = 15;
+  int frame_w = width < 88 ? width : 88;
+  int frame_h = 20;
   int frame_y = (height - frame_h) / 2;
   int frame_x = (width - frame_w) / 2;
-  int art_x = frame_x + 1;
-  int art_w = 38;
-  int status_x = frame_x + 41;
-  int status_right = frame_x + frame_w - 2;
+  int wordmark_w = START_SCREEN_WORDMARK_COLUMNS;
+  int wordmark_x = frame_x + (frame_w - wordmark_w) / 2;
+  int status_x = frame_x + 4;
+  int status_right = frame_x + frame_w - 4;
   int value_w = status_right - (status_x + 9) + 1;
+  int dim = dim_gray_attr();
 
   render_start_screen_frame(win, frame_y, frame_x, frame_h, frame_w);
 
-  wattron(win, COLOR_PAIR(11));
-  for (int i = 0; i < START_SCREEN_ART_LINES && i < frame_h - 2; i++) {
-    mvwhline(win, frame_y + 1 + i, art_x, ' ', art_w);
-    mvwaddstr(win, frame_y + 1 + i, art_x, START_SCREEN_ART[i]);
-  }
-  wattroff(win, COLOR_PAIR(11));
-
-  wattron(win, A_BOLD | COLOR_PAIR(1));
-  mvwaddstr(win, frame_y + 3, status_x, "◉ CAPSTAN");
-  wattroff(win, A_BOLD | COLOR_PAIR(1));
-  int dim = dim_gray_attr();
   wattron(win, dim);
-  mvwadd_clipped(win, frame_y + 3, status_x + 10, APP_VERSION,
-                 frame_x + frame_w - status_x - 12);
+  mvwadd_clipped(win, frame_y + 1,
+                 status_right - (int)strlen(APP_VERSION) + 1, APP_VERSION,
+                 (int)strlen(APP_VERSION));
   wattroff(win, dim);
 
-  wattron(win, dim);
-  mvwadd_clipped(win, frame_y + 4, status_x, APP_BANNER_TAGLINE,
-                 frame_x + frame_w - status_x - 2);
-  wattroff(win, dim);
+  render_start_screen_wordmark(win, frame_y + 2, wordmark_x);
 
-  render_status_pair(win, frame_y + 6, status_x, "model", lines->model,
+  render_status_pair(win, frame_y + 9, status_x, "model", lines->model,
                      value_w);
-  render_status_pair(win, frame_y + 7, status_x, "effort",
+  render_status_pair(win, frame_y + 10, status_x, "effort",
                      lines->reasoning_effort, value_w);
-  render_profile_pair(win, frame_y + 8, status_x, lines->profile, value_w);
-  render_status_pair(win, frame_y + 9, status_x, "workdir", lines->workdir,
+  render_profile_pair(win, frame_y + 11, status_x, lines->profile, value_w);
+  render_status_pair(win, frame_y + 12, status_x, "workdir", lines->workdir,
                      value_w);
 
   wattron(win, COLOR_PAIR(2));
-  mvwaddstr(win, frame_y + 12, status_x, "ready");
+  mvwaddstr(win, frame_y + 15, status_x, "● ready");
   wattroff(win, COLOR_PAIR(2));
   wattron(win, dim);
-  mvwadd_clipped(win, frame_y + 12, status_x + 9, lines->ready, value_w);
+  mvwadd_clipped(win, frame_y + 16, status_x, lines->ready, value_w + 9);
   wattroff(win, dim);
 }
 
 static void render_start_screen_compact(WINDOW *win, int height, int width,
                                         const StartScreenStatusLines *lines) {
   int frame_w = width < 70 ? width : 70;
-  int frame_h = height < 10 ? height : 10;
+  int frame_h = height < 12 ? height : 12;
   int frame_y = (height - frame_h) / 2;
   int frame_x = (width - frame_w) / 2;
   int inner_w = frame_w - 4;
@@ -363,16 +395,16 @@ static void render_start_screen_compact(WINDOW *win, int height, int width,
 
   render_start_screen_frame(win, frame_y, frame_x, frame_h, frame_w);
 
+  int dim = dim_gray_attr();
+  wattron(win, dim);
+  mvwadd_clipped(win, frame_y + 1,
+                 frame_x + frame_w - (int)strlen(APP_VERSION) - 2,
+                 APP_VERSION, (int)strlen(APP_VERSION));
+  wattroff(win, dim);
+
   wattron(win, A_BOLD | COLOR_PAIR(1));
   mvwaddstr(win, frame_y + 2, frame_x + 2, "◉ CAPSTAN");
   wattroff(win, A_BOLD | COLOR_PAIR(1));
-  int dim = dim_gray_attr();
-  wattron(win, dim);
-  mvwadd_clipped(win, frame_y + 2, frame_x + 12, APP_VERSION, inner_w - 10);
-  wattroff(win, dim);
-  wattron(win, dim);
-  mvwadd_clipped(win, frame_y + 3, frame_x + 2, APP_BANNER_TAGLINE, inner_w);
-  wattroff(win, dim);
 
   render_status_pair(win, frame_y + 5, frame_x + 2, "model", lines->model,
                      inner_w - 9);
@@ -382,6 +414,10 @@ static void render_start_screen_compact(WINDOW *win, int height, int width,
                       inner_w - 9);
   render_status_pair(win, frame_y + 8, frame_x + 2, "workdir", lines->workdir,
                      inner_w - 9);
+
+  wattron(win, COLOR_PAIR(2));
+  mvwaddstr(win, frame_y + 10, frame_x + 2, "● ready");
+  wattroff(win, COLOR_PAIR(2));
 }
 
 static void render_start_screen(WINDOW *win, int height, int width) {

@@ -144,6 +144,10 @@ static MunitResult test_permissions_and_corruption(
   fclose(f);
   Session loaded;
   munit_assert_false(session_load(session.id, &loaded));
+  int created = 1;
+  munit_assert_false(
+      session_load_or_create_named(&loaded, session.id, &created));
+  munit_assert_false(created);
   session_free(&session);
   return MUNIT_OK;
 }
@@ -265,6 +269,32 @@ static MunitResult test_named_session_is_exact_and_not_active(
   return MUNIT_OK;
 }
 
+static MunitResult test_load_or_create_named(const MunitParameter params[],
+                                              void *data) {
+  (void)params;
+  (void)data;
+  munit_assert_true(session_store_init("/repo/load-or-create"));
+
+  Session created_session;
+  int created = 0;
+  munit_assert_true(session_load_or_create_named(
+      &created_session, "stable key", &created));
+  munit_assert_true(created);
+  munit_assert_string_equal(created_session.id, "stable key");
+  snprintf(created_session.title, sizeof(created_session.title), "Kept title");
+  munit_assert_true(session_save(&created_session));
+  session_free(&created_session);
+
+  Session loaded;
+  created = 1;
+  munit_assert_true(
+      session_load_or_create_named(&loaded, "stable key", &created));
+  munit_assert_false(created);
+  munit_assert_string_equal(loaded.title, "Kept title");
+  session_free(&loaded);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/round_trip", test_round_trip, setup, teardown, MUNIT_TEST_OPTION_NONE,
      NULL},
@@ -282,6 +312,8 @@ static MunitTest tests[] = {
     {"/title", test_title, setup, teardown, MUNIT_TEST_OPTION_NONE, NULL},
     {"/named_session_is_exact_and_not_active",
      test_named_session_is_exact_and_not_active, setup, teardown,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/load_or_create_named", test_load_or_create_named, setup, teardown,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

@@ -344,7 +344,7 @@ static void handle_mouse_event(MEVENT *event) {
 
 static void print_help(void) {
   printf("Usage:\n");
-  printf("  capstan [--yolo]\n");
+  printf("  capstan [options]\n");
   printf("  capstan run [--prompt TEXT | --prompt-file PATH] [options]\n");
   printf("  capstan acp [--yolo]\n\n");
   printf("Options:\n");
@@ -355,7 +355,7 @@ static void print_help(void) {
   printf("                      Reasoning effort: none, minimal, low, medium, high, xhigh, max\n");
   printf("  --workdir PATH      Override command and relative-file directory\n");
   printf("  --workspace PATH    Override workspace root and permission boundary\n");
-  printf("  --session-id ID     Persist this run and isolate its logs by session\n");
+  printf("  --session-id ID     Resume or create a workspace session\n");
   printf("  --max-turns N       Limit agent continuation rounds (default: 200)\n");
   printf("  --no-mcp           Do not start configured MCP servers for this run\n");
   printf("  --no-wiki          Do not load or initialize wiki context for this run\n");
@@ -505,11 +505,13 @@ static int headless_session_begin(const CliOptions *opts, const char *prompt,
                                   Session *session, char *error,
                                   size_t error_size) {
   memset(session, 0, sizeof(*session));
-  if (!opts->session_id)
+  const char *id = opts->session_id;
+  int created = 0;
+  if (!id)
     return 1;
-  if (!session_id_valid(opts->session_id)) {
+  if (!session_id_valid(id)) {
     snprintf(error, error_size,
-             "invalid --session-id: use a non-empty name under %d bytes "
+             "invalid session ID: use a non-empty name under %d bytes "
              "without slashes, control characters, or edge spaces",
              SESSION_ID_SIZE);
     return 0;
@@ -518,44 +520,108 @@ static int headless_session_begin(const CliOptions *opts, const char *prompt,
     snprintf(error, error_size, "could not initialize session storage");
     return 0;
   }
-  if (!session_create_named(session, opts->session_id)) {
+  if (!session_load_or_create_named(session, id, &created)) {
     snprintf(error, error_size,
-             "session '%s' already exists or could not be created",
-             opts->session_id);
+             "session '%s' could not be loaded or created", id);
     return 0;
   }
 
-  session->messages = calloc(1, sizeof(SessionMessage));
-  if (!session->messages) {
-    session_delete(session->id);
+  SessionMessage *grown =
+      realloc(session->messages,
+              (session->message_count + 1) * sizeof(SessionMessage));
+  if (!grown) {
+    if (created)
+      session_delete(session->id);
     session_free(session);
     snprintf(error, error_size, "could not allocate session history");
     return 0;
   }
-  session->messages[0].role = SESSION_ROLE_USER;
-  session->messages[0].text = my_strdup(prompt);
-  session->messages[0].raw_text = my_strdup(prompt);
-  if (!session->messages[0].text || !session->messages[0].raw_text) {
-    session_delete(session->id);
+  session->messages = grown;
+  SessionMessage *message = &session->messages[session->message_count];
+  memset(message, 0, sizeof(*message));
+  message->role = SESSION_ROLE_USER;
+  message->text = my_strdup(prompt);
+  message->raw_text = my_strdup(prompt);
+  if (!message->text || !message->raw_text) {
+    free(message->text);
+    free(message->raw_text);
+    memset(message, 0, sizeof(*message));
+    if (created)
+      session_delete(session->id);
     session_free(session);
     snprintf(error, error_size, "could not allocate session history");
     return 0;
   }
-  session->message_count = 1;
+  session->message_count++;
+  session->updated_at = time(NULL);
   if (!session_save(session)) {
-    session_delete(session->id);
+    if (created)
+      session_delete(session->id);
     session_free(session);
-    snprintf(error, error_size, "could not save session '%s'",
-             opts->session_id);
+    snprintf(error, error_size, "could not save session '%s'", id);
     return 0;
   }
   if (!log_set_session_id(session->id)) {
-    session_delete(session->id);
+    if (created)
+      session_delete(session->id);
     session_free(session);
     snprintf(error, error_size, "could not initialize session log scope");
     return 0;
   }
   return 1;
+}
+
+static void lua_push_session_message(lua_State *l,
+                                     const SessionMessage *message) {
+  lua_newtable(l);
+  lua_pushstring(l, message->role == SESSION_ROLE_USER ? "user"
+                                                       : "assistant");
+  lua_setfield(l, -2, "role");
+
+  const char *text = message->raw_text ? message->raw_text
+                                       : (message->text ? message->text : "");
+  if (message->role == SESSION_ROLE_USER && message->image_count > 0) {
+    lua_newtable(l);
+    lua_newtable(l);
+    lua_pushstring(l, "text");
+    lua_setfield(l, -2, "type");
+    lua_pushstring(l, text);
+    lua_setfield(l, -2, "text");
+    lua_rawseti(l, -2, 1);
+    for (size_t i = 0; i < message->image_count; i++) {
+      const SessionImage *image = &message->images[i];
+      lua_newtable(l);
+      lua_pushstring(l, "image_url");
+      lua_setfield(l, -2, "type");
+      lua_newtable(l);
+      lua_pushfstring(l, "data:%s;base64,%s", image->mime_type, image->data);
+      lua_setfield(l, -2, "url");
+      lua_setfield(l, -2, "image_url");
+      lua_rawseti(l, -2, (lua_Integer)i + 2);
+    }
+  } else {
+    lua_pushstring(l, text);
+  }
+  lua_setfield(l, -2, "content");
+}
+
+static void lua_push_headless_messages(lua_State *l, const Session *session,
+                                       const char *prompt) {
+  lua_newtable(l);
+  if (session->id[0]) {
+    for (size_t i = 0; i < session->message_count; i++) {
+      lua_push_session_message(l, &session->messages[i]);
+      lua_rawseti(l, -2, (lua_Integer)i + 1);
+    }
+    return;
+  }
+
+  lua_newtable(l);
+  lua_pushstring(l, "user");
+  lua_setfield(l, -2, "role");
+  lua_pushstring(l, prompt);
+  lua_setfield(l, -2, "content");
+  lua_rawseti(l, -2, 1);
 }
 
 static int headless_session_finish(Session *session,
@@ -652,13 +718,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   lua_getfield(L, -1, "run");
 
   lua_newtable(L);
-  lua_newtable(L);
-  lua_newtable(L);
-  lua_pushstring(L, "user");
-  lua_setfield(L, -2, "role");
-  lua_pushstring(L, prompt);
-  lua_setfield(L, -2, "content");
-  lua_rawseti(L, -2, 1);
+  lua_push_headless_messages(L, &headless_session, prompt);
   lua_setfield(L, -2, "messages");
   if (opts->provider) {
     lua_pushstring(L, opts->provider);
@@ -943,6 +1003,61 @@ done:
   lua_settop(l, top);
 }
 
+static int lua_agent_configure_interactive(lua_State *l,
+                                           const CliOptions *opts,
+                                           char *error, size_t error_size) {
+  int top = lua_gettop(l);
+  int ok = 0;
+  const char *message = NULL;
+
+  lua_getglobal(l, "capstan");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "agent");
+  if (!lua_istable(l, -1))
+    goto done;
+  lua_getfield(l, -1, "configure_interactive");
+  if (!lua_isfunction(l, -1))
+    goto done;
+
+  lua_newtable(l);
+  if (opts->provider) {
+    lua_pushstring(l, opts->provider);
+    lua_setfield(l, -2, "provider");
+  }
+  if (opts->model) {
+    lua_pushstring(l, opts->model);
+    lua_setfield(l, -2, "model");
+  }
+  if (opts->reasoning_effort) {
+    lua_pushstring(l, opts->reasoning_effort);
+    lua_setfield(l, -2, "reasoning_effort");
+  }
+  if (opts->max_turns_set) {
+    lua_pushinteger(l, opts->max_turns);
+    lua_setfield(l, -2, "max_turns");
+  }
+  if (opts->no_preserve_reasoning) {
+    lua_pushboolean(l, 0);
+    lua_setfield(l, -2, "preserve_reasoning");
+  }
+
+  if (lua_pcall(l, 1, 2, 0) != LUA_OK) {
+    message = lua_tostring(l, -1);
+    goto done;
+  }
+  ok = lua_toboolean(l, -2);
+  if (!ok)
+    message = lua_tostring(l, -1);
+
+done:
+  if (!ok && error && error_size > 0)
+    snprintf(error, error_size, "%s",
+             message ? message : "interactive options are unavailable");
+  lua_settop(l, top);
+  return ok;
+}
+
 static const char *next_profile_name(const char *current) {
   const char *profiles[] = {"fast", "implement", "plan"};
   size_t count = sizeof(profiles) / sizeof(profiles[0]);
@@ -990,6 +1105,14 @@ int main(int argc, char *argv[]) {
     return acp_run(argv[0], cli.yolo);
 
   app_workdir_init(argv[0]);
+  if (cli.workdir && !app_workdir_set(cli.workdir)) {
+    fprintf(stderr, "capstan: invalid --workdir: %s\n", cli.workdir);
+    return 2;
+  }
+  if (cli.workspace && !app_workspace_set(cli.workspace)) {
+    fprintf(stderr, "capstan: invalid --workspace: %s\n", cli.workspace);
+    return 2;
+  }
 
   setlocale(LC_ALL, "");
   if (!verify_terminal())
@@ -1008,8 +1131,23 @@ int main(int argc, char *argv[]) {
   init_tui();
   popup_init();
 
-  plugins_init();
+  PluginsInitOptions plugin_options = {.disable_mcp = cli.no_mcp,
+                                       .disable_wiki = cli.no_wiki};
+  plugins_init_with_options(&plugin_options);
   load_embedded_plugins();
+
+  char cli_error[256] = "";
+  if (!lua_agent_configure_interactive(L, &cli, cli_error,
+                                       sizeof(cli_error))) {
+    terminal_disable_bracketed_paste();
+    terminal_reset_mouse_modes();
+    endwin();
+    plugins_cleanup();
+    fprintf(stderr, "capstan: %s\n", cli_error);
+    return 2;
+  }
+  if (cli.profile)
+    lua_agent_set_profile(L, cli.profile);
   if (cli.yolo)
     lua_agent_set_yolo(L, 1);
 
@@ -1019,8 +1157,18 @@ int main(int argc, char *argv[]) {
 
   input_init();
   input_history_load(app_workspace_root());
-  if (!session_manager_init(app_workspace_root()))
+  if (!session_manager_init_selected(app_workspace_root(), cli.session_id)) {
+    if (cli.session_id) {
+      terminal_disable_bracketed_paste();
+      terminal_reset_mouse_modes();
+      endwin();
+      plugins_cleanup();
+      fprintf(stderr, "capstan: could not load or create session '%s'\n",
+              cli.session_id);
+      return 2;
+    }
     popup_show_message("Sessions", "Sessions are unavailable", 1);
+  }
   scroll_reset();
   render_all();
   long long last_idle_render_ms = main_now_ms();
@@ -1117,6 +1265,18 @@ int main(int argc, char *argv[]) {
         dispatch_tab();
       render_all();
       continue;
+    }
+
+    if (ch == '/') {
+      if (mode_get() == FOCUS_INPUT) {
+        const char *text = input_get_text();
+        if (text[0] == '\0') {
+          input_insert(ch);
+          dispatch_tab();
+          render_all();
+          continue;
+        }
+      }
     }
 
     if (mode_get() == FOCUS_MESSAGES) {

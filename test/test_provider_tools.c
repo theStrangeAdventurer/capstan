@@ -927,6 +927,60 @@ static void send_reasoning_detail_fragment(lua_State *L, const char *text,
 static void send_text_delta(lua_State *L, const char *text);
 static void send_text_done(lua_State *L, const char *text);
 
+static MunitResult test_interactive_options_override_request(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dostring(
+      L,
+      "local ok, err = capstan.agent.configure_interactive({"
+      "provider = 'openrouter', model = 'cli/model', "
+      "reasoning_effort = 'high', max_turns = 7, "
+      "preserve_reasoning = false}) "
+      "assert(ok, err)");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  call_agent_entry(L);
+
+  munit_assert_true(strstr(captured_body, "\"model\":\"cli/model\"") !=
+                    NULL);
+  munit_assert_true(strstr(captured_body, "\"effort\":\"high\"") !=
+                    NULL);
+  munit_assert_string_equal(last_agent_provider, "openrouter");
+  munit_assert_string_equal(last_agent_model, "cli/model");
+  munit_assert_string_equal(last_agent_reasoning_effort, "high");
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_interactive_options_reject_unknown_provider(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dostring(
+      L,
+      "local ok, err = capstan.agent.configure_interactive({provider = "
+      "'missing'}) "
+      "assert(ok == nil and err:find('unknown provider', 1, true))");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int(post_stream_calls, ==, 0);
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_request_enables_auto_tool_choice(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -6190,6 +6244,12 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/failed_response_skips_session_title",
      test_failed_response_skips_session_title, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/interactive_options_override_request",
+     test_interactive_options_override_request, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/interactive_options_reject_unknown_provider",
+     test_interactive_options_reject_unknown_provider, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/request_enables_auto_tool_choice", test_request_enables_auto_tool_choice,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

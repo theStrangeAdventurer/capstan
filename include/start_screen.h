@@ -22,7 +22,7 @@ typedef struct {
   char reasoning_effort[32];
   char profile[64];
   char workdir[160];
-  char ready[64];
+  char ready[128];
 } StartScreenStatusLines;
 
 StartScreenLayout start_screen_layout_for_size(int height, int width);
@@ -32,7 +32,17 @@ void start_screen_truncate(const char *value, char *out, size_t out_size,
 void start_screen_build_status(const StartScreenStatus *status,
                                StartScreenStatusLines *out);
 
-extern const char *START_SCREEN_ART[];
-extern const int START_SCREEN_ART_LINES;
+#define START_SCREEN_WORDMARK_ROWS 5
+#define START_SCREEN_WORDMARK_LETTERS 7
+#define START_SCREEN_WORDMARK_LETTER_COLUMNS 7
+#define START_SCREEN_WORDMARK_LETTER_GAP 1
+#define START_SCREEN_WORDMARK_COLUMNS                                           \
+  (START_SCREEN_WORDMARK_LETTERS * START_SCREEN_WORDMARK_LETTER_COLUMNS +       \
+   (START_SCREEN_WORDMARK_LETTERS - 1) * START_SCREEN_WORDMARK_LETTER_GAP)
+
+int start_screen_wordmark_pixel(int row, int column);
+int start_screen_wordmark_grain(int row, int column);
+int start_screen_animation_tick(long long elapsed_ms);
+int start_screen_gradient_level(int row, int column, int tick);
 
 #endif

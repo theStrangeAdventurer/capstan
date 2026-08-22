@@ -29,15 +29,17 @@ headless runs.
   has switched sessions before it completes. At most one title request may be
   in flight for a session.
 - Empty assistant streaming placeholders are not persisted.
-- `capstan run --session-id "my fucking bench"` creates a new session whose
-  stable ID and title are exactly the supplied value. The title is marked
-  explicit, so background title generation never replaces it. The prompt is
-  persisted before provider work begins and non-empty assistant output is
-  persisted when the run finishes.
-- Named headless runs are create-only. An invalid or already existing ID fails
-  closed before provider work, preventing accidental history replacement or
-  ambiguous implicit resume behavior. Headless runs without `--session-id`
-  remain one-shot and do not read or write sessions.
+- `--session-id "release prep"` selects that workspace session in either mode.
+  If it exists, Capstan restores its complete visible/model history. If it does
+  not exist, Capstan creates it with a stable ID and explicit title exactly
+  matching the supplied value, then makes it active. Background title
+  generation never replaces an explicit title.
+- Headless mode persists the new prompt before provider work, sends the complete
+  stored history (including user images), and persists non-empty assistant
+  output when the run finishes. Invalid IDs, malformed existing session files,
+  and storage errors fail closed without overwriting history.
+- Headless runs without `--session-id` remain one-shot and do not read or write
+  sessions.
 
 ## Storage
 
@@ -87,6 +89,8 @@ the fixed 64-byte identifier field.
 
 `make test` covers workspace isolation, active pointers, sorting, title
 creation, Unicode/multiline `text` and `raw_text` round trips, empty-placeholder
-filtering, explicit named sessions, duplicate rejection, malformed versions,
-oversized-row rejection, and `0600`/`0700` permissions. `make test-build`
-provides the linked binary and embedded-runtime smoke checks.
+filtering, explicit named sessions, load-or-create selection, malformed
+versions, oversized-row rejection, and `0600`/`0700` permissions. `make test-http-lua`
+covers selected-session creation and restoration through the TUI
+session manager. `make test-build` verifies create-then-resume headless
+persistence in an isolated HOME as part of the linked-binary smoke checks.

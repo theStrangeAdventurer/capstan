@@ -48,6 +48,8 @@ const char *session_store_dir(void);
 int session_id_valid(const char *id);
 int session_create(Session *session);
 int session_create_named(Session *session, const char *id);
+int session_load_or_create_named(Session *session, const char *id,
+                                 int *created);
 int session_save(const Session *session);
 int session_load(const char *id, Session *session);
 int session_delete(const char *id);

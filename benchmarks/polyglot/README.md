@@ -101,9 +101,12 @@ Remove `--dry-run` after inspecting the plan.
 ## Results and reporting
 
 Each output directory contains `metadata.json`, `results.json`, `summary.md`,
-and per-task agent and validator logs. `run_eval.py` measures the complete
-agent process tree with `wait4`; it records agent wall time, user/system CPU,
-and peak RSS while excluding the later validator process.
+and per-task agent and validator logs. `run_eval.py` samples the primary agent
+PID every 50 ms, so the reported peak RSS excludes test runners and other tool
+processes. The OpenCode adapter reports the actual OpenCode PID instead of its
+Python wrapper. Raw `wait4` peak RSS remains in `results.json` as
+`wait4_max_rss_*` for diagnosing workload spikes; CPU remains `wait4` resource
+usage. The later validator process is measured separately.
 
 Record the following with results: clean Capstan revision, OpenCode version,
 corpus commit, OS/CPU, provider/model, reasoning setting, timeouts, task count,

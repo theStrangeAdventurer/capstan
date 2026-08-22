@@ -202,8 +202,8 @@ make -C "$LUA_DIR" test CC="$CC" 2>/dev/null || true
 [ -f "$LUA_DIR/src/liblua.a" ] || die "Lua library not built"
 ok "Lua build complete"
 
-# ── 4. Build tui-agent ───────────────────────────────────────────
-banner "[4/4] Building tui-agent"
+# ── 4. Build capstan ─────────────────────────────────────────────
+banner "[4/4] Building capstan"
 
 rm -rf build
 make -j"$JOBS"

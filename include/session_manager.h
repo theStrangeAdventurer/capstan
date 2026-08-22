@@ -5,6 +5,8 @@
 #include <stddef.h>
 
 int session_manager_init(const char *workspace_root);
+int session_manager_init_selected(const char *workspace_root,
+                                  const char *session_id);
 int session_manager_new(void);
 int session_manager_switch(const char *id);
 int session_manager_save(void);

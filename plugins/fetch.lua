@@ -43,7 +43,7 @@ local function normalize_url(url)
 	return url
 end
 
-local DEFAULT_USER_AGENT = "Capstan/1.0 (+https://github.com/theStrangeAdventurer/tui-agent)"
+local DEFAULT_USER_AGENT = "Capstan/1.0 (+https://github.com/theStrangeAdventurer/capstan)"
 
 local function fetch_headers()
 	local user_agent = os.getenv("CAPSTAN_PLUGIN_FETCH_UA")

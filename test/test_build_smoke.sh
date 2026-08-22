@@ -36,6 +36,43 @@ printf '%s\n' "$output" | grep -q "self-improvement" && {
   exit 1
 }
 
+if (
+  cd "$rundir"
+  HOME="$homedir" "$bindir/capstan" run --session-id "smoke session" \
+    --prompt "first prompt" --provider smoke-missing --no-mcp --no-wiki \
+    >/dev/null 2>&1
+); then
+  echo "unknown provider unexpectedly succeeded with new smoke session" >&2
+  exit 1
+fi
+session_file=$(find "$homedir/.local/state/capstan/sessions" \
+  -name 'smoke session.jsonl' -type f -print | head -n 1)
+if [ -z "$session_file" ]; then
+  echo "named smoke session was not persisted" >&2
+  exit 1
+fi
+if (
+  cd "$rundir"
+  HOME="$homedir" "$bindir/capstan" run --session-id "smoke session" \
+    --prompt "second prompt" --provider smoke-missing --no-mcp --no-wiki \
+    >/dev/null 2>&1
+); then
+  echo "unknown provider unexpectedly succeeded while resuming smoke session" >&2
+  exit 1
+fi
+[ "$(grep -c '\"role\":\"user\"' "$session_file")" -eq 2 ] || {
+  echo "resumed smoke session did not preserve both prompts" >&2
+  exit 1
+}
+grep -q 'first prompt' "$session_file" || {
+  echo "resumed smoke session lost its original prompt" >&2
+  exit 1
+}
+grep -q 'second prompt' "$session_file" || {
+  echo "resumed smoke session did not persist its new prompt" >&2
+  exit 1
+}
+
 mkdir -p "$homedir/.config/capstan"
 cat >"$homedir/.config/capstan/config.lua" <<'EOF'
 return {

@@ -16,7 +16,7 @@ conversation context.
 - Blocking HTTP responses are bounded by the shared HTTP layer's timeout and
   response-size limits.
 - Requests send a `User-Agent` header:
-  `Capstan/1.0 (+https://github.com/theStrangeAdventurer/tui-agent)`.
+  `Capstan/1.0 (+https://github.com/theStrangeAdventurer/capstan)`.
 - Set `CAPSTAN_PLUGIN_FETCH_UA` to a non-empty value to override the default
   fetch `User-Agent`.
 - The LLM-facing result includes the URL, HTTP status, and response body.

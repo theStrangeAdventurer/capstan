@@ -108,6 +108,9 @@ return {
   `max_same_tool_call`, `max_same_shell_command`, and
   `max_generated_output_checks` limit runaway agent/tool loops. Missing values
   fall back to the built-in defaults.
+  `agent.max_turns` (built-in default `80`) governs interactive runs; headless
+  `capstan run` and ACP sessions override it with a 200-turn budget unless
+  `--max-turns` is passed.
   Zero disables `max_tool_calls`, both repeated-call guards, and the soft
   generated-output inspection limit; all four default to zero.
   `stream_timeout_sec` bounds one streaming model request (zero disables this

@@ -190,7 +190,7 @@ static MunitResult test_fetch_success(const MunitParameter params[], void *data)
   munit_assert_string_equal(last_url, "https://example.com/data");
   munit_assert_string_equal(
       last_user_agent,
-      "Capstan/1.0 (+https://github.com/theStrangeAdventurer/tui-agent)");
+      "Capstan/1.0 (+https://github.com/theStrangeAdventurer/capstan)");
   munit_assert_string_equal(lua_tostring(L, -2),
                             "Fetched https://example.com/data (HTTP 200, 5 bytes)");
   const char *llm = lua_tostring(L, -1);
