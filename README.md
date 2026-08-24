@@ -2,6 +2,8 @@
 
 **A lightweight, extensible terminal coding agent built in C with an embedded Lua runtime.**
 
+![Capstan terminal demo](docs/assets/demo.gif)
+
 Capstan combines a native ncurses interface, headless automation, explicit tool
 permissions, profiles, skills, ACP, MCP, and parallel subagents in one compact
 executable. It is designed to stay inspectable, fast to start, and easy to adapt
@@ -17,8 +19,6 @@ repeated three times.
 
 [See the full benchmark, methodology, and limitations.](benchmarks/REPORT.md)
 Results are workload-, model-, and machine-specific.
-
-![Capstan terminal demo](docs/assets/demo.gif)
 
 ## Highlights
 
