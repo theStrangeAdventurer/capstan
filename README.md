@@ -2,6 +2,8 @@
 
 **A lightweight, extensible terminal coding agent built in C with an embedded Lua runtime.**
 
+*If you find this project interesting, consider giving it a ⭐ — it helps more people discover Capstan.*
+
 ![Capstan terminal demo](docs/assets/demo.gif)
 
 Capstan combines a native ncurses interface, headless automation, explicit tool
