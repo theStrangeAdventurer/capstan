@@ -9,6 +9,12 @@ Capstan loads an optional unified Lua config from:
 The file must return a table. Missing config is normal and startup continues
 with built-in defaults.
 
+A commented, copyable starter configuration is maintained at
+[`examples/config.lua`](../examples/config.lua). It uses environment variables
+for credentials, leaves optional MCP integration disabled, and includes explicit
+`.env` deny rules that remain effective with `--yolo`. Users should replace its
+example workspace path before enabling unattended access.
+
 ## Shape
 
 ```lua

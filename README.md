@@ -152,29 +152,42 @@ user actions.
 
 ## Configuration
 
-Capstan loads:
+Capstan works without a config file: set `DEEPSEEK_API_KEY` and run `capstan`.
+To keep provider, agent, permission, Wiki, and optional MCP settings in one
+place, copy the complete starter config:
 
-```text
-~/.config/capstan/config.lua
+```sh
+mkdir -p "$HOME/.config/capstan"
+curl -fsSL \
+  https://raw.githubusercontent.com/theStrangeAdventurer/capstan/main/examples/config.lua \
+  -o "$HOME/.config/capstan/config.lua"
+${EDITOR:-vi} "$HOME/.config/capstan/config.lua"
 ```
 
-A minimal OpenRouter configuration:
+The example is safe to copy as-is: it reads API keys from environment variables,
+keeps MCP disabled, and explicitly denies `.env` file access. Before relying on
+its broad workspace permissions, replace `~/code/my-project` with the directory
+you actually want Capstan to modify.
 
-```lua
-return {
-  provider = "openrouter",
-  providers = {
-    openrouter = {
-      endpoint = "https://openrouter.ai/api/v1/chat/completions",
-      api_key = os.getenv("OPENROUTER_API_KEY"),
-      model = "anthropic/claude-sonnet-4",
-    },
-  },
-  agent = {
-    profile = "implement",
-  },
-}
+For the default DeepSeek setup:
+
+```sh
+export DEEPSEEK_API_KEY=...
+capstan
 ```
+
+For OpenRouter, change `provider = "deepseek"` to `provider = "openrouter"` in
+`config.lua`, then run:
+
+```sh
+export OPENROUTER_API_KEY=...
+capstan
+```
+
+See the commented [`examples/config.lua`](examples/config.lua) for the complete
+copyable configuration and [`specs/config.md`](specs/config.md) for every field
+and its behavior. Keep credentials in environment variables; do not put API keys
+directly in `config.lua`.
 
 Runtime environment overrides use Capstan-specific names:
 
