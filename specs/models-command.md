@@ -2,8 +2,9 @@
 
 ## Behavior
 
-`/models<Tab>` opens a fuzzy-search popup listing models returned by every
-configured provider's models API.
+The start screen explicitly points users to `/models` as the interactive way to
+choose a model. Typing `/models` and pressing Tab opens a fuzzy-search popup
+listing models returned by every configured provider's models API.
 
 - Popup entries include the provider name and model label. Full catalogs come
   from provider API responses or an explicit provider `models` list. If neither
@@ -30,8 +31,8 @@ configured provider's models API.
   model is stored as both provider and model so background features such as
   compacting can use a cheaper model from a different provider. Weak model
   selection does not change the active provider.
-- `/models --profile <fast|plan|implement> <provider> <model-id>` sets a
-  provider/model override for that workflow profile. Plain `/models` targets
+- `/models --profile <profile> <provider> <model-id>` sets a provider/model
+  override for that workflow profile. Plain `/models` targets
   the current active profile; explicit provider arguments target the global
   primary model.
 - Successful selection updates the provider/model/reasoning status line through

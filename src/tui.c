@@ -159,8 +159,6 @@ static int dim_gray_attr(void) {
 static int profile_color_pair(const char *profile) {
   if (!profile)
     return 0;
-  if (strcmp(profile, "fast") == 0)
-    return 8;
   if (strcmp(profile, "implement") == 0)
     return 20;
   if (strcmp(profile, "plan") == 0)

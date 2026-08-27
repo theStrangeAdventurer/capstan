@@ -246,7 +246,7 @@ provider-boundary safeguard for old persisted sessions and plugin/tool output;
 invalid local bytes must not turn into an opaque provider validation error.
 
 Profiles are workflow policy. `agent.profile`, `capstan run --profile`, and the
-TUI slash commands `/fast`, `/implement`, and `/plan` select named profiles.
+TUI slash commands `/implement` and `/plan` select the built-in profiles.
 Profiles can append system prompt guidance, choose a default reasoning effort,
 and filter model tools. `plan` is read-only for model-initiated tools: it keeps
 inspection tools such as `file_read`, `fetch`, and `logs`, and removes write,

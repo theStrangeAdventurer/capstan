@@ -129,7 +129,7 @@ function plugin.handler(ctx)
 		"Profile models",
 	}
 	local profile_names = capstan and capstan.agent and capstan.agent.profiles and
-		capstan.agent.profiles() or {"fast", "implement", "plan"}
+		capstan.agent.profiles() or {"implement", "plan"}
 	for _, name in ipairs(profile_names) do table.insert(lines, profile_line(name)) end
 
 	return ctx:replace(table.concat(lines, "\n"))

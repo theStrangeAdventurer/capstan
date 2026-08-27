@@ -24,7 +24,7 @@ mode.
 | Key | Action |
 |-----|--------|
 | `Ctrl-F` / `Option+Tab` | Toggle focus: INPUT ↔ MESSAGES |
-| `Shift+Tab` | Cycle active profile: fast -> implement -> plan |
+| `Shift+Tab` | Cycle active profile: implement -> plan |
 | Scroll wheel | Scroll message history |
 | Click in messages | Focus MESSAGES and place the message cursor |
 | Click in input | Focus INPUT, including while a blocking operation is active |

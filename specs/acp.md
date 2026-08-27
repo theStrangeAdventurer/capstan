@@ -46,8 +46,8 @@ settings.
 - `session/update` notifications for text, tools, and commands
 - `session/request_permission` with allow-once, allow-always, and reject
 - text, image, and embedded text-resource prompt blocks
-- configured model selection, `mode` (`fast`, `implement`, `plan`), and
-  reasoning `effort` options
+- configured model selection, `mode` (`implement`, `plan`), and reasoning
+  `effort` options
 - a fixed 200-turn continuation guard per prompt (the run-guard default for
   ACP sessions, not configurable per session)
 - legacy `session/set_mode` compatibility and `current_mode_update`
@@ -155,7 +155,7 @@ changing the protocol surface again.
 
 Expose profile metadata and model/config option metadata from their current
 runtime owners, then build ACP `modes` and `configOptions` from those APIs rather
-than duplicating `fast`, `implement`, and `plan` in the adapter.
+than duplicating `implement` and `plan` in the adapter.
 
 **Почему это надо сделать:** duplicated lists drift when profiles or model
 settings change. Dynamic metadata keeps ACP clients consistent with the CLI and

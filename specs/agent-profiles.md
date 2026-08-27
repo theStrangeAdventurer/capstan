@@ -1,7 +1,7 @@
 # Agent Profiles
 
 Profile policy is owned by `agent/profiles.lua`. Built-in definitions live in
-`profiles/fast.lua`, `profiles/implement.lua`, and `profiles/plan.lua` and are
+`profiles/implement.lua` and `profiles/plan.lua` and are
 embedded in the standalone binary.
 
 ## User profiles
@@ -62,7 +62,6 @@ tools.
 
 | Profile | Purpose | Default reasoning | Tool policy |
 |---------|---------|-------------------|-------------|
-| `fast` | Low-overhead work for simple tasks | `low` | Normal tools |
 | `implement` | Focused code changes with evidence-driven scoped-change discipline | `medium` | Normal tools |
 | `plan` | Read-only exploration and planning | `high` | Inspection tools and read-only subagents |
 
@@ -91,7 +90,6 @@ capstan run --profile plan --prompt-file task.md
 The TUI exposes no-history control commands:
 
 ```text
-/fast
 /implement
 /plan
 ```
@@ -99,15 +97,14 @@ The TUI exposes no-history control commands:
 These commands update the active profile for later TUI turns without adding the
 command text to model history. A TUI `--profile` option selects the initial
 profile but does not pin it, so commands and Shift-Tab can change it. Shift-Tab cycles the complete registry by
-ascending `order` (then name), including user profiles. With the review example
-above, the built-in sequence continues from `plan` to `review` and then `fast`.
+ascending `order` (then name), including user profiles. With the review example above, the sequence continues from `plan` to `review` and then `implement`.
 
 ## Precedence
 
 Profile selection order:
 
 1. `capstan run --profile ...`
-2. TUI runtime state set by `/fast`, `/implement`, or `/plan`
+2. TUI runtime state set by `/implement` or `/plan`
 3. `agent.profile` in `config.lua`
 4. `implement`
 

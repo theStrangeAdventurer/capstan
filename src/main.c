@@ -838,7 +838,7 @@ static int run_embedded_self_test(void) {
 
   const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
                             "/logs", "/skills", "/models", "/info", "/mcp",
-                            "/plan", "/implement", "/fast", "/auth",
+                            "/plan", "/implement", "/auth",
                             "/logout", "/connect", "/vcs"};
   int ok = 1;
 

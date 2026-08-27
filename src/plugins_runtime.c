@@ -104,7 +104,6 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.shell_safe", "agent/shell_safe.lua");
   preload_embedded_asset(L, "agent.mcp", "agent/mcp.lua");
   preload_embedded_asset(L, "agent.profiles", "agent/profiles.lua");
-  preload_embedded_asset(L, "profiles.fast", "profiles/fast.lua");
   preload_embedded_asset(L, "profiles.implement", "profiles/implement.lua");
   preload_embedded_asset(L, "profiles.plan", "profiles/plan.lua");
   lua_pop(L, 2);

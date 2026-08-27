@@ -100,7 +100,6 @@ local function load_module(module)
     if not registered then error(err) end
 end
 
-load_module("profiles.fast")
 load_module("profiles.implement")
 load_module("profiles.plan")
 

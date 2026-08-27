@@ -24,7 +24,7 @@ the TUI:
 - effective reasoning effort, or `default` when the provider/model chooses it
 - active profile, falling back to `implement`
 - active workspace directory, collapsed under `$HOME` as `~/...`
-- ready hint: `Type message · / + Tab for commands · Shift+Tab: fast / implement / plan`
+- ready hint: `Type message · /models: choose model · Shift+Tab: profiles`
 
 The compact layout uses `◉ CAPSTAN`; the wide layout places the version in the
 frame's top-right interior. Local builds default to `local`; release builds

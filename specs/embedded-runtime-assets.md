@@ -17,7 +17,7 @@ vendored Lua modules, plugins, and gated built-in skills without also copying
 - Agent runtime files listed in `AGENT_RUNTIME_ASSETS`, built-in profile
   definitions listed in `PROFILE_ASSETS`, and core plugins listed in
   `CORE_PLUGIN_ASSETS` in the Makefile are loaded from embedded assets first.
-- Built-in `fast`, `implement`, and `plan` profiles therefore work without a
+- Built-in `implement` and `plan` profiles therefore work without a
   repository checkout. Trusted user definitions from
   `~/.config/capstan/profiles/*.lua` load afterward in lexical filename order
   and may add profiles or patch embedded definitions.

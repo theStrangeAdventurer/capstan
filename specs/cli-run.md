@@ -46,7 +46,7 @@ echo "Summarize this repo" | capstan run --json
   controls, leading dots, or edge spaces. Invalid or malformed existing
   sessions fail closed without being overwritten.
 - `--profile` selects an agent workflow profile for this run. Accepted values
-  are `fast`, `implement`, and `plan`. Profiles can set default reasoning
+  are `implement` and `plan`. Profiles can set default reasoning
   effort, append profile-specific system instructions, and restrict available
   model tools. `plan` is read-only for model tools: it keeps inspection tools
   such as `file_read`, `fetch`, `logs`, and `subagents`, and removes write and

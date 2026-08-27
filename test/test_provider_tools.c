@@ -1617,29 +1617,23 @@ static MunitResult test_plan_profile_rejects_unavailable_tool_call(
   return MUNIT_OK;
 }
 
-static MunitResult test_fast_profile_applies_reasoning_and_prompt(
+static MunitResult test_builtin_profiles_are_plan_and_implement(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
   lua_State *L = new_provider_state();
-  reset_captures(L);
 
-  int rc = luaL_dofile(L, "agent/runtime.lua");
+  int rc = luaL_dostring(
+      L,
+      "capstan.runtime_options = {isolated = true}\n"
+      "local profiles = require('agent.profiles')\n"
+      "local names = profiles.names()\n"
+      "assert(#names == 2)\n"
+      "assert(names[1] == 'implement')\n"
+      "assert(names[2] == 'plan')\n"
+      "assert(profiles.get('fast') == nil)\n");
   munit_assert_int(rc, ==, LUA_OK);
-  lua_getglobal(L, "capstan");
-  lua_pushvalue(L, -2);
-  lua_setfield(L, -2, "agent_runtime");
-  lua_pop(L, 2);
 
-  call_agent_run_with_profile(L, "fast");
-
-  munit_assert_true(strstr(captured_body, "Active Profile: Fast") != NULL);
-  munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"low\"") != NULL);
-  munit_assert_true(strstr(captured_body, "\"name\":\"shell\"") != NULL);
-  munit_assert_true(strstr(captured_body, "\"name\":\"subagents\"") != NULL);
-  munit_assert_true(strstr(captured_logs, "[agent] profile=fast") != NULL);
-
-  reset_captures(L);
   lua_close(L);
   return MUNIT_OK;
 }
@@ -6461,8 +6455,8 @@ static MunitTest tests[] = {
     {"/plan_profile_rejects_unavailable_tool_call",
      test_plan_profile_rejects_unavailable_tool_call, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/fast_profile_applies_reasoning_and_prompt",
-     test_fast_profile_applies_reasoning_and_prompt, NULL, NULL,
+    {"/builtin_profiles_are_plan_and_implement",
+     test_builtin_profiles_are_plan_and_implement, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/subagents_tool_enabled_by_default", test_subagents_tool_enabled_by_default,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

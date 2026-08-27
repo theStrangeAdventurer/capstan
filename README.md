@@ -30,9 +30,9 @@ Results are workload-, model-, and machine-specific.
   CI, or `capstan acp` from an ACP-compatible editor.
 - **Controlled autonomy.** Workspace boundaries, sensitive-path checks,
   permission rules, profiles, and `--yolo` remain explicit.
-- **Profiles and subagents.** Switch between fast, implementation, and read-only
-  planning workflows; delegate focused tasks concurrently with bounded tools
-  and turns.
+- **Profiles and subagents.** Switch between implementation and read-only
+  planning workflows, add your own profiles, and delegate focused tasks
+  concurrently with bounded tools and turns.
 - **Skills and project instructions.** Reusable Markdown skills and layered
   `AGENTS.md` files teach workflows without hiding policy in the binary.
 - **Extensible in Lua.** Plugins can add slash commands, autocomplete, model
@@ -135,14 +135,13 @@ workload-, provider-, model-, and machine-specific.
 
 | Profile | Purpose | Default reasoning | Model tools |
 |---|---|---|---|
-| `fast` | Simple, low-overhead work | `low` | Normal tools |
 | `implement` | Focused code changes and verification | `medium` | Normal tools |
 | `plan` | Investigation and planning | `high` | Read-only tools |
 
 Controls:
 
 - press **Shift-Tab** to cycle every configured profile in the TUI;
-- run `/fast`, `/implement`, or `/plan` for the built-in profiles;
+- run `/implement` or `/plan` for the built-in profiles;
 - use `capstan run --profile <name>` in headless mode;
 - use `/models` to assign models and reasoning effort globally or per profile.
 

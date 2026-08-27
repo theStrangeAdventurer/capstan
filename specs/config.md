@@ -42,7 +42,6 @@ return {
   agent = {
     profile = "implement",
     profile_models = {
-      fast = { provider = "openrouter", model = "cheap/fast" },
       plan = { provider = "openrouter", model = "strong/planner" },
       implement = { provider = "openrouter", model = "strong/coder" },
     },
@@ -137,7 +136,7 @@ return {
   defaults are 300 seconds and one retry.
 - `agent.completion_review` controls one final, bounded review pass after a
   multi-file implementation phase without successful validation. It defaults
-  to enabled for the `implement` profile and disabled for `fast` and `plan`.
+  to enabled for the `implement` profile and disabled for `plan`.
   Successful validation suppresses the redundant pass until another workspace
   write invalidates that evidence. The review shares the same conversation and
   tools, runs at most once per root agent run, and is not run for subagents.
@@ -149,11 +148,11 @@ return {
   normal FIFO. The default is `80`; `0` disables automatic compacting. Values
   above `100` are treated as `100`. Auto-compact is skipped when the active
   model's context limit is unknown.
-- `agent.profile` sets the default workflow profile. Built-ins are `fast`,
-  `implement`, and `plan`; user profiles from `~/.config/capstan/profiles/*.lua`
+- `agent.profile` sets the default workflow profile. Built-ins are `implement`
+  and `plan`; user profiles from `~/.config/capstan/profiles/*.lua`
   are also accepted. Profiles may append system instructions, set a default
   reasoning effort, and restrict model tools. Shift-Tab cycles every configured
-  profile; `/fast`, `/implement`, and `/plan` remain built-in aliases.
+  profile; `/implement` and `/plan` remain built-in aliases.
   `capstan run --profile ...` selects any profile for one headless run. Unknown names
   fail before a provider request. When omitted, the profile marked `default`
   is used (`implement` in the built-in set).
