@@ -127,10 +127,10 @@ function plugin.handler(ctx)
 		"  weak model: " .. weak_model(),
 		"",
 		"Profile models",
-		profile_line("fast"),
-		profile_line("implement"),
-		profile_line("plan"),
 	}
+	local profile_names = capstan and capstan.agent and capstan.agent.profiles and
+		capstan.agent.profiles() or {"fast", "implement", "plan"}
+	for _, name in ipairs(profile_names) do table.insert(lines, profile_line(name)) end
 
 	return ctx:replace(table.concat(lines, "\n"))
 end

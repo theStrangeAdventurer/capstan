@@ -350,7 +350,7 @@ static void print_help(void) {
   printf("Options:\n");
   printf("  --provider NAME     Override provider for this run\n");
   printf("  --model ID          Override model for this run\n");
-  printf("  --profile NAME      Agent profile: fast, implement, plan\n");
+  printf("  --profile NAME      Configured agent profile\n");
   printf("  --reasoning-effort LEVEL\n");
   printf("                      Reasoning effort: none, minimal, low, medium, high, xhigh, max\n");
   printf("  --workdir PATH      Override command and relative-file directory\n");
@@ -689,6 +689,12 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   }
 
   setlocale(LC_ALL, "");
+  http_set_headless(1);
+  PluginsInitOptions plugin_options = {.disable_mcp = opts->no_mcp,
+                                       .disable_wiki = opts->no_wiki,
+                                       .isolated = opts->benchmark};
+  plugins_init_with_options(&plugin_options);
+
   Session headless_session = {0};
   char session_error[256] = "";
   if (!headless_session_begin(opts, prompt, &headless_session, session_error,
@@ -697,14 +703,10 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
       print_json_result(0, "", session_error);
     else
       fprintf(stderr, "capstan: %s\n", session_error);
+    plugins_cleanup();
     free(owned_prompt);
     return 1;
   }
-  http_set_headless(1);
-  PluginsInitOptions plugin_options = {.disable_mcp = opts->no_mcp,
-                                       .disable_wiki = opts->no_wiki,
-                                       .isolated = opts->benchmark};
-  plugins_init_with_options(&plugin_options);
   load_embedded_plugins();
   char global_plugins[512];
   if (!opts->benchmark &&
@@ -837,7 +839,7 @@ static int run_embedded_self_test(void) {
   const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
                             "/logs", "/skills", "/models", "/info", "/mcp",
                             "/plan", "/implement", "/fast", "/auth",
-                            "/logout", "/connect"};
+                            "/logout", "/connect", "/vcs"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);
@@ -1029,6 +1031,10 @@ static int lua_agent_configure_interactive(lua_State *l,
     lua_pushstring(l, opts->model);
     lua_setfield(l, -2, "model");
   }
+  if (opts->profile) {
+    lua_pushstring(l, opts->profile);
+    lua_setfield(l, -2, "profile");
+  }
   if (opts->reasoning_effort) {
     lua_pushstring(l, opts->reasoning_effort);
     lua_setfield(l, -2, "reasoning_effort");
@@ -1058,16 +1064,6 @@ done:
   return ok;
 }
 
-static const char *next_profile_name(const char *current) {
-  const char *profiles[] = {"fast", "implement", "plan"};
-  size_t count = sizeof(profiles) / sizeof(profiles[0]);
-  for (size_t i = 0; i < count; i++) {
-    if (current && strcmp(current, profiles[i]) == 0)
-      return profiles[(i + 1) % count];
-  }
-  return "fast";
-}
-
 static void cycle_agent_profile(lua_State *l) {
   char current[64];
   if (!lua_agent_get_profile(l, current, sizeof(current))) {
@@ -1075,7 +1071,30 @@ static void cycle_agent_profile(lua_State *l) {
     snprintf(current, sizeof(current), "%s",
              published && published[0] ? published : "implement");
   }
-  lua_agent_set_profile(l, next_profile_name(current));
+
+  int top = lua_gettop(l);
+  lua_getglobal(l, "capstan");
+  lua_getfield(l, -1, "agent");
+  lua_getfield(l, -1, "profiles");
+  if (!lua_isfunction(l, -1) || lua_pcall(l, 0, 1, 0) != LUA_OK ||
+      !lua_istable(l, -1)) {
+    lua_settop(l, top);
+    return;
+  }
+  size_t count = lua_rawlen(l, -1);
+  size_t selected = 1;
+  for (size_t i = 1; i <= count; i++) {
+    lua_rawgeti(l, -1, (lua_Integer)i);
+    const char *name = lua_tostring(l, -1);
+    if (name && strcmp(name, current) == 0)
+      selected = i == count ? 1 : i + 1;
+    lua_pop(l, 1);
+  }
+  lua_rawgeti(l, -1, (lua_Integer)selected);
+  const char *next = lua_tostring(l, -1);
+  if (next)
+    lua_agent_set_profile(l, next);
+  lua_settop(l, top);
 }
 
 int main(int argc, char *argv[]) {
@@ -1146,8 +1165,6 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "capstan: %s\n", cli_error);
     return 2;
   }
-  if (cli.profile)
-    lua_agent_set_profile(L, cli.profile);
   if (cli.yolo)
     lua_agent_set_yolo(L, 1);
 

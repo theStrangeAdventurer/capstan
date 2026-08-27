@@ -903,6 +903,11 @@ local function tool_call_target(tool_name, args)
     if tool_name == "shell" then
         return workspace.configured_workspace_root()
     end
+    local _, tool_spec = find_plugin_tool(tool_name)
+    if tool_spec and type(tool_spec.permission_target) == "function" then
+        local ok, target = pcall(tool_spec.permission_target, args or {})
+        if ok and type(target) == "string" and target ~= "" then return target end
+    end
     return args.command or args.path or args.url or args.uri or tool_name
 end
 

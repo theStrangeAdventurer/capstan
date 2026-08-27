@@ -1,6 +1,7 @@
 local json = require("vendor.rxi.json")
 local images = require("agent.images")
 local mcp_client = require("agent.mcp")
+local profiles = require("agent.profiles")
 
 local sessions = {}
 local next_session = 1
@@ -88,14 +89,37 @@ local function model_snapshot(profile)
     return current_provider, current_model, options
 end
 
+local function apply_profile_defaults(session, name, preserve_overrides)
+    local profile = profiles.get(name)
+    local provider, model, model_options = model_snapshot(name)
+    session.profile = name
+    if not preserve_overrides or not session.model_explicit then
+        session.provider = provider ~= "" and provider or nil
+        session.model = model ~= "" and model or nil
+    end
+    session.model_options = model_options
+    if not preserve_overrides or not session.effort_explicit then
+        session.effort = profile and profile.reasoning_effort or "medium"
+    end
+end
+
+local function profile_options(kind)
+    local out = {}
+    for _, name in ipairs(profiles.names()) do
+        local profile = profiles.get(name)
+        table.insert(out, kind == "mode" and {
+            id = name,
+            name = profile.label or name,
+            description = profile.description or profile.label or name,
+        } or {value = name, name = profile.label or name})
+    end
+    return out
+end
+
 local function mode_state(session)
     return {
         currentModeId = session.profile,
-        availableModes = array({
-            {id = "fast", name = "Fast", description = "Fast answers with a reduced tool set"},
-            {id = "implement", name = "Implement", description = "Implement and verify changes"},
-            {id = "plan", name = "Plan", description = "Analyze and propose a plan without editing"},
-        }),
+        availableModes = array(profile_options("mode")),
     }
 end
 
@@ -118,11 +142,7 @@ local function config_options(session)
         category = "mode",
         type = "select",
         currentValue = session.profile,
-        options = array({
-            {value = "fast", name = "Fast"},
-            {value = "implement", name = "Implement"},
-            {value = "plan", name = "Plan"},
-        }),
+        options = array(profile_options("config")),
     })
     table.insert(options, {
         id = "effort",
@@ -212,8 +232,8 @@ local function sync_session_runtime(session)
     end
     local effective = capstan.models and capstan.models.effective and
         capstan.models.effective(session.profile) or nil
-    if type(effective) == "table" and type(effective.provider) == "string" and
-        type(effective.model) == "string" then
+    if not session.model_explicit and type(effective) == "table" and
+        type(effective.provider) == "string" and type(effective.model) == "string" then
         session.provider = effective.provider
         session.model = effective.model
     end
@@ -509,18 +529,13 @@ handlers["session/new"] = function(id, params)
     end
     local profile = capstan.agent and capstan.agent.get_profile and
         capstan.agent.get_profile() or "implement"
-    local provider, model, model_options = model_snapshot(profile)
     local session = {
         id = session_id,
         cwd = cwd,
         messages = {},
-        profile = profile,
-        provider = provider ~= "" and provider or nil,
-        model = model ~= "" and model or nil,
-        model_options = model_options,
-        effort = "high",
         permission_scope = {allowed_tools = {}, allowed_targets = {}, full_control = false},
     }
+    apply_profile_defaults(session, profile)
     sessions[session_id] = session
     response(id, {
         sessionId = session_id,
@@ -547,9 +562,10 @@ handlers["session/set_config_option"] = function(id, params)
     if not session then return end
     local config_id = params.configId
     local value = params.value
-    if config_id == "mode" and (value == "fast" or value == "implement" or value == "plan") then
-        session.profile = value
-        notify(session.id, {sessionUpdate = "current_mode_update", modeId = value})
+    local normalized_mode = config_id == "mode" and profiles.normalize(value) or nil
+    if normalized_mode then
+        apply_profile_defaults(session, normalized_mode, true)
+        notify(session.id, {sessionUpdate = "current_mode_update", modeId = normalized_mode})
     elseif config_id == "model" and type(value) == "string" then
         local valid = false
         for _, option in ipairs(session.model_options or {}) do
@@ -562,10 +578,12 @@ handlers["session/set_config_option"] = function(id, params)
         end
         session.provider = provider
         session.model = model
+        session.model_explicit = true
     elseif config_id == "effort" and
         (value == "none" or value == "minimal" or value == "low" or value == "medium" or
          value == "high" or value == "xhigh" or value == "max") then
         session.effort = value
+        session.effort_explicit = true
     else
         rpc_error(id, -32602, "invalid config option")
         return
@@ -576,12 +594,12 @@ end
 handlers["session/set_mode"] = function(id, params)
     local session = find_session(params, id)
     if not session then return end
-    local mode = params.modeId
-    if mode ~= "fast" and mode ~= "implement" and mode ~= "plan" then
+    local mode = profiles.normalize(params.modeId)
+    if not mode then
         rpc_error(id, -32602, "invalid mode")
         return
     end
-    session.profile = mode
+    apply_profile_defaults(session, mode, true)
     notify(session.id, {sessionUpdate = "current_mode_update", modeId = mode})
     response(id, {})
 end

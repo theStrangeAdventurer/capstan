@@ -119,6 +119,51 @@ static MunitResult test_workdir_and_workspace_root_are_distinct(
   return MUNIT_OK;
 }
 
+static MunitResult test_workspace_root_uses_configured_marker(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char old_workdir[4096];
+  snprintf(old_workdir, sizeof(old_workdir), "%s", app_workdir());
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  char root[4096];
+  snprintf(root, sizeof(root), "/tmp/capstan-marker-%ld-%ld", (long)getpid(),
+           (long)tv.tv_usec);
+  munit_assert_int(mkdir(root, 0700), ==, 0);
+  char nested[4096], marker[4096];
+  snprintf(nested, sizeof(nested), "%s/nested", root);
+  snprintf(marker, sizeof(marker), "%s/.hg", root);
+  munit_assert_int(mkdir(nested, 0700), ==, 0);
+  munit_assert_int(mkdir(marker, 0700), ==, 0);
+  munit_assert_true(app_workdir_set(nested));
+  const char *markers[] = {".hg"};
+  munit_assert_true(app_workspace_markers_set(markers, 1));
+  char real_root[4096];
+  munit_assert_not_null(realpath(root, real_root));
+  munit_assert_string_equal(app_workspace_root(), real_root);
+  munit_assert_true(app_workdir_set(old_workdir));
+  const char *defaults[] = {".git"};
+  munit_assert_true(app_workspace_markers_set(defaults, 1));
+  rmdir(marker);
+  rmdir(nested);
+  rmdir(root);
+  return MUNIT_OK;
+}
+
+static MunitResult test_workspace_markers_reject_special_components(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  const char *dot[] = {"."};
+  const char *dotdot[] = {".."};
+  const char *mixed[] = {".hg", ".."};
+  munit_assert_false(app_workspace_markers_set(dot, 1));
+  munit_assert_false(app_workspace_markers_set(dotdot, 1));
+  munit_assert_false(app_workspace_markers_set(mixed, 2));
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/state_dir_uses_xdg_state_home", test_state_dir_uses_xdg_state_home, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
@@ -129,6 +174,12 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/workdir_and_workspace_root_are_distinct",
      test_workdir_and_workspace_root_are_distinct, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/workspace_root_uses_configured_marker",
+     test_workspace_root_uses_configured_marker, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/workspace_markers_reject_special_components",
+     test_workspace_markers_reject_special_components, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 

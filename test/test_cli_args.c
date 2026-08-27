@@ -124,14 +124,14 @@ static MunitResult test_effort_alias(const MunitParameter params[], void *data) 
   return MUNIT_OK;
 }
 
-static MunitResult test_profile_rejects_unknown(const MunitParameter params[],
-                                                void *data) {
+static MunitResult test_profile_accepts_custom_name(const MunitParameter params[],
+                                                     void *data) {
   (void)params;
   (void)data;
   char *argv[] = {"capstan", "run", "--profile", "architect"};
   CliOptions opts = cli_parse(4, argv);
-  munit_assert_int(opts.mode, ==, CLI_MODE_ERROR);
-  munit_assert_not_null(opts.error);
+  munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
+  munit_assert_string_equal(opts.profile, "architect");
   return MUNIT_OK;
 }
 
@@ -260,8 +260,8 @@ static MunitTest tests[] = {
     {"/reasoning_effort_rejects_unknown",
      test_reasoning_effort_rejects_unknown, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
-    {"/profile_rejects_unknown", test_profile_rejects_unknown, NULL, NULL,
-     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/profile_accepts_custom_name", test_profile_accepts_custom_name, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/benchmark_sets_presets", test_benchmark_sets_presets, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/explicit_headless_controls", test_explicit_headless_controls, NULL,

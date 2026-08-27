@@ -29,8 +29,9 @@ The runtime exposes these helpers to Lua:
 rewrite `config.lua`.
 
 Currently persisted runtime state includes the active provider, selected
-provider models, optional profile models, an optional weak model, and the
-reasoning-effort choice made with each model selection:
+provider models, optional profile models, an optional weak model, the
+reasoning-effort choice made with each model selection, and the VCS adapter
+selected for each canonical workspace root:
 
 ```lua
 return {
@@ -45,6 +46,9 @@ return {
     provider = "openrouter",
     model = "minimax/minimax-m3",
     reasoning_effort = "low",
+  },
+  vcs_by_workspace = {
+    ["/repo"] = "git",
   },
   profile_models = {
     plan = {

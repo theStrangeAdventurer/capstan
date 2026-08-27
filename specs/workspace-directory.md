@@ -13,9 +13,13 @@ Capstan keeps two related paths:
 The working directory is selected from `--workdir`, `CAPSTAN_WORKDIR`, binary
 project inference, launch `PWD`, and process `getcwd()`, in that order. The
 workspace root is selected separately from `--workspace`,
-`CAPSTAN_WORKSPACE`, the nearest ancestor containing `.git`, and finally the
-working directory. An explicit workspace root must be an existing absolute
-directory that contains the working directory.
+`CAPSTAN_WORKSPACE`, the nearest ancestor containing a configured marker, and
+finally the working directory. The default marker list is `{ ".git" }`;
+`workspace.markers` in `config.lua` replaces it completely. It must be a
+non-empty array of valid string components; invalid, mixed, or oversized arrays
+are rejected as a whole. Marker names must be single path components other than
+`.` and `..`, for example `{ ".hg" }`. An explicit workspace root
+must be an existing absolute directory that contains the working directory.
 
 Both paths are canonicalized with `realpath` when possible. Changing the
 working directory invalidates the inferred workspace root so it is recomputed.

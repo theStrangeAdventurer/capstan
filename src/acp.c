@@ -342,13 +342,13 @@ int acp_run(const char *argv0, int yolo) {
       (!getcwd(launch_cwd, sizeof(launch_cwd)) ||
        !app_workdir_set(launch_cwd)))
     app_workdir_init(argv0);
-  snprintf(g_acp_workspace, sizeof(g_acp_workspace), "%s",
-           app_workspace_root());
   setlocale(LC_ALL, "");
   http_set_headless(1);
 
   PluginsInitOptions options = {0};
   plugins_init_with_options(&options);
+  snprintf(g_acp_workspace, sizeof(g_acp_workspace), "%s",
+           app_workspace_root());
   load_embedded_plugins();
   if (yolo)
     set_yolo(L);

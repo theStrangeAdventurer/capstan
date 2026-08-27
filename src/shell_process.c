@@ -38,10 +38,11 @@ static void read_pipe(int fd, int *open, char *buffer, size_t *length,
   }
 }
 
-int shell_process_run(const char *command, const char *workdir, int timeout_sec,
-                      size_t max_stdout, size_t max_stderr,
-                      ShellProcessPump pump, ShellProcessResult *result) {
-  if (!command || !workdir || timeout_sec <= 0 || !result)
+static int process_run(const char *command, char *const argv[],
+                       const char *workdir, int timeout_sec,
+                       size_t max_stdout, size_t max_stderr,
+                       ShellProcessPump pump, ShellProcessResult *result) {
+  if ((!command && (!argv || !argv[0])) || !workdir || timeout_sec <= 0 || !result)
     return 0;
   memset(result, 0, sizeof(*result));
   result->exit_code = -1;
@@ -91,7 +92,10 @@ int shell_process_run(const char *command, const char *workdir, int timeout_sec,
     close(err_pipe[1]);
     if (chdir(workdir) != 0)
       _exit(127);
-    execl("/bin/sh", "sh", "-c", command, (char *)NULL);
+    if (argv)
+      execvp(argv[0], argv);
+    else
+      execl("/bin/sh", "sh", "-c", command, (char *)NULL);
     _exit(127);
   }
 
@@ -185,6 +189,21 @@ int shell_process_run(const char *command, const char *workdir, int timeout_sec,
   if (err_open)
     close(err_pipe[0]);
   return 1;
+}
+
+int shell_process_run(const char *command, const char *workdir, int timeout_sec,
+                      size_t max_stdout, size_t max_stderr,
+                      ShellProcessPump pump, ShellProcessResult *result) {
+  return process_run(command, NULL, workdir, timeout_sec, max_stdout,
+                     max_stderr, pump, result);
+}
+
+int shell_process_run_argv(char *const argv[], const char *workdir,
+                           int timeout_sec, size_t max_stdout,
+                           size_t max_stderr, ShellProcessPump pump,
+                           ShellProcessResult *result) {
+  return process_run(NULL, argv, workdir, timeout_sec, max_stdout,
+                     max_stderr, pump, result);
 }
 
 void shell_process_result_free(ShellProcessResult *result) {

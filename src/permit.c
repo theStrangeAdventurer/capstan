@@ -343,9 +343,49 @@ static int l_tools_shell(lua_State *L) {
   return 1;
 }
 
+static int l_tools_exec(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  size_t count = lua_rawlen(L, 1);
+  if (count == 0 || count > 128)
+    return luaL_error(L, "exec argv must contain 1..128 strings");
+  char **argv = calloc(count + 1, sizeof(*argv));
+  if (!argv)
+    return luaL_error(L, "out of memory");
+  for (size_t i = 0; i < count; i++) {
+    lua_rawgeti(L, 1, (lua_Integer)i + 1);
+    if (lua_type(L, -1) != LUA_TSTRING) {
+      free(argv);
+      return luaL_error(L, "exec argv values must be strings");
+    }
+    argv[i] = (char *)lua_tostring(L, -1);
+    lua_pop(L, 1);
+  }
+  int timeout = (int)luaL_optinteger(L, 2, PERMIT_DEFAULT_SHELL_TIMEOUT);
+  if (timeout <= 0)
+    timeout = PERMIT_DEFAULT_SHELL_TIMEOUT;
+  ShellProcessResult result;
+  int started = shell_process_run_argv(argv, app_workspace_root(), timeout,
+      PERMIT_MAX_STDOUT, PERMIT_MAX_STDERR, tui_pump_blocking, &result);
+  free(argv);
+  lua_newtable(L);
+  lua_pushinteger(L, started ? result.exit_code : -1);
+  lua_setfield(L, -2, "exit");
+  lua_pushstring(L, started ? result.stdout_text : "");
+  lua_setfield(L, -2, "stdout");
+  lua_pushstring(L, started ? result.stderr_text : "failed to start process");
+  lua_setfield(L, -2, "stderr");
+  lua_pushboolean(L, started && result.timed_out);
+  lua_setfield(L, -2, "timed_out");
+  if (started)
+    shell_process_result_free(&result);
+  return 1;
+}
+
 void tools_init(lua_State *L) {
   lua_newtable(L);
   lua_pushcfunction(L, l_tools_shell);
   lua_setfield(L, -2, "shell");
+  lua_pushcfunction(L, l_tools_exec);
+  lua_setfield(L, -2, "exec");
   lua_setglobal(L, "tools");
 }

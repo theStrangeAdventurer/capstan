@@ -168,7 +168,7 @@ static MunitResult test_build_status_values(const MunitParameter params[],
   munit_assert_string_equal(lines.profile, "plan");
   munit_assert_string_equal(lines.workdir, "~/narnia/tui-agent");
   munit_assert_string_equal(lines.ready,
-                            "Type message · / + Tab for commands · Shift+Tab: fast / implement / plan");
+                            "Type message · / + Tab for commands · Shift+Tab: switch profile");
   return MUNIT_OK;
 }
 

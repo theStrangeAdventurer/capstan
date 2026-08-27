@@ -21,6 +21,7 @@ void app_workdir_init(const char *argv0);
 int app_workdir_set(const char *path);
 const char *app_workdir(void);
 int app_workspace_set(const char *path);
+int app_workspace_markers_set(const char *const *markers, size_t count);
 const char *app_workspace_root(void);
 
 #endif

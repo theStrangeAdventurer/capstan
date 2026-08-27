@@ -170,7 +170,7 @@ function plugin.handler(ctx)
 	end
 
 	if not model or model == "" then
-		return ctx:replace("Usage: /models [--weak] [provider] <model> | /models --profile <fast|plan|implement> <provider> <model>")
+		return ctx:replace("Usage: /models [--weak] [provider] <model> | /models --profile <name> <provider> <model>")
 	end
 
 	if not models then

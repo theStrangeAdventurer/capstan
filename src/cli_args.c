@@ -28,12 +28,6 @@ static int is_reasoning_effort(const char *value) {
           strcmp(value, "max") == 0);
 }
 
-static int is_profile(const char *value) {
-  return value && (strcmp(value, "fast") == 0 ||
-                   strcmp(value, "implement") == 0 ||
-                   strcmp(value, "plan") == 0);
-}
-
 CliOptions cli_parse(int argc, char **argv) {
   CliOptions opts = cli_options_default();
 
@@ -93,8 +87,6 @@ CliOptions cli_parse(int argc, char **argv) {
       opts.profile = next_value(argc, argv, &i);
       if (!opts.profile)
         opts.error = "--profile requires a value";
-      else if (!is_profile(opts.profile))
-        opts.error = "--profile must be one of fast, implement, plan";
     } else if (is_flag(arg, "--reasoning-effort") ||
                is_flag(arg, "--effort")) {
       opts.reasoning_effort = next_value(argc, argv, &i);

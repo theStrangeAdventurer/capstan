@@ -1,5 +1,58 @@
 # Agent Profiles
 
+Profile policy is owned by `agent/profiles.lua`. Built-in definitions live in
+`profiles/fast.lua`, `profiles/implement.lua`, and `profiles/plan.lua` and are
+embedded in the standalone binary.
+
+## User profiles
+
+Capstan loads `~/.config/capstan/profiles/*.lua` in lexical filename order.
+Each file returns one table:
+
+```lua
+-- ~/.config/capstan/profiles/review.lua
+return {
+  name = "review",
+  label = "Review",
+  order = 40,
+  reasoning_effort = "high",
+  readonly = true,
+  completion_review = false,
+  allowed_tools = {
+    fetch = true,
+    file_read = true,
+    logs = true,
+    subagents = true,
+  },
+  prompt = [[
+## Active Profile: Review
+Review the current changes without modifying files. Focus on correctness,
+regressions, security, and missing tests. Report findings first, ordered by
+severity, with precise file and line references when possible. If there are no
+findings, say so explicitly and mention any remaining validation gaps.
+]],
+}
+```
+
+The profile is then available through Shift-Tab, `agent.profile = "review"`,
+and `capstan run --profile review`. `allowed_tools` is an allowlist for
+model-initiated tools; omitting it leaves all registered tools available.
+
+A definition with an existing `name` patches that profile. Missing fields are
+inherited, `prompt_append` appends instructions, and `replace = true` starts
+from an empty definition. A profile may set `default = true`. Invalid files are
+reported and skipped without removing the prior valid definition. Profile
+prompts must be strings or arrays of strings, `prompt_append` must be a string,
+and `allowed_tools` must map tool names to booleans. Project-local
+Lua profiles are not auto-loaded because repository Lua is executable code.
+
+Small patches may alternatively be placed under `agent.profiles` in
+`config.lua`. User profile files and inline patches are both ignored by isolated
+benchmark runs. Setting `default = false`, or replacing a profile without a
+default flag, removes its default status. `agent.system_prompt_append` adds
+global instructions before the active profile prompt. Profile order drives
+Shift-Tab, ACP modes, and `/info`.
+
 Agent profiles are named workflow policies for Capstan runs. They are separate
 from raw provider options: a profile can add system prompt guidance, set a
 default reasoning effort, select a profile-specific model, and restrict model
@@ -44,8 +97,10 @@ The TUI exposes no-history control commands:
 ```
 
 These commands update the active profile for later TUI turns without adding the
-command text to model history. In the TUI, Shift-Tab cycles profiles in this
-order: `fast` -> `implement` -> `plan` -> `fast`.
+command text to model history. A TUI `--profile` option selects the initial
+profile but does not pin it, so commands and Shift-Tab can change it. Shift-Tab cycles the complete registry by
+ascending `order` (then name), including user profiles. With the review example
+above, the built-in sequence continues from `plan` to `review` and then `fast`.
 
 ## Precedence
 

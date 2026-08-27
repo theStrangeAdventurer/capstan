@@ -26,6 +26,13 @@ return {
       default_reasoning_efforts = { "low", "medium", "high" },
     },
   },
+  workspace = {
+    markers = { ".git" },
+  },
+  vcs = {
+    default = "git",
+    adapters = {},
+  },
   permissions = {
     { tool = "file_read", pattern = "/repo *", allow = true },
   },
@@ -89,6 +96,10 @@ return {
   active provider selection, its model, and context limit. Provider-native API
   key variables such as `DEEPSEEK_API_KEY` and `OPENROUTER_API_KEY` override
   configured credentials.
+- `workspace.markers` replaces the default `{ ".git" }` marker list used to
+  infer the nearest workspace root.
+- `vcs.default` selects the default adapter; `vcs.adapters` declares additional
+  read-only argv-based adapters. See [VCS tool](vcs-tool.md).
 - `permissions` entries define editable permission defaults. Runtime prompt
   choices are persisted separately in state and load after config permissions.
 - `capabilities` contains explicit feature gates. Missing `subagents` is treated
@@ -138,12 +149,22 @@ return {
   normal FIFO. The default is `80`; `0` disables automatic compacting. Values
   above `100` are treated as `100`. Auto-compact is skipped when the active
   model's context limit is unknown.
-- `agent.profile` sets the default workflow profile. Accepted values are
-  `fast`, `implement`, and `plan`. Profiles may append system instructions,
-  set a default reasoning effort, and restrict model tools. Slash commands
-  `/fast`, `/implement`, and `/plan` change the profile for the current TUI
-  session; `capstan run --profile ...` overrides it for one headless run. When
-  omitted, Capstan uses the `implement` profile.
+- `agent.profile` sets the default workflow profile. Built-ins are `fast`,
+  `implement`, and `plan`; user profiles from `~/.config/capstan/profiles/*.lua`
+  are also accepted. Profiles may append system instructions, set a default
+  reasoning effort, and restrict model tools. Shift-Tab cycles every configured
+  profile; `/fast`, `/implement`, and `/plan` remain built-in aliases.
+  `capstan run --profile ...` selects any profile for one headless run. Unknown names
+  fail before a provider request. When omitted, the profile marked `default`
+  is used (`implement` in the built-in set).
+- `agent.system_prompt_append` accepts a string or ordered array of strings and
+  appends them after the base/project/skill prompt and before profile-specific
+  instructions. Existing `system_prompt.txt` still replaces the base prompt.
+- `agent.profiles` contains inline patches keyed by profile name. It is useful
+  for small prompt additions; separate profile files are preferred for complete
+  definitions. For example, a full read-only review profile belongs in
+  `~/.config/capstan/profiles/review.lua`; see the copyable example in
+  [Agent Profiles](agent-profiles.md#user-profiles).
 - `agent.profile_models` can set default provider/model pairs per workflow
   profile. A profile model is used for normal agent runs when that profile is
   active, without changing the global primary model. `weak_model` remains a

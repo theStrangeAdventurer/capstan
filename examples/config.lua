@@ -27,7 +27,12 @@ return {
   },
 
   agent = {
-    profile = "implement", -- "fast", "implement", or "plan"
+    profile = "implement", -- Built-in or ~/.config/capstan/profiles/*.lua name
+    system_prompt_append = nil, -- String or ordered array of additional instructions
+    profiles = {
+      -- Patch a file-defined profile without replacing unspecified fields:
+      -- implement = { prompt_append = "Always run focused tests." },
+    },
     reasoning_effort = "medium",
     max_turns = 80,
     max_duration_sec = 2700,

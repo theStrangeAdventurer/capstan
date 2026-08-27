@@ -23,10 +23,26 @@ static MunitResult test_timeout_kills_pipeline_process_group(
   return MUNIT_OK;
 }
 
+static MunitResult test_argv_does_not_invoke_shell(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"printf", "%s", "$(echo injected)", NULL};
+  ShellProcessResult result;
+  munit_assert_true(shell_process_run_argv(argv, "/tmp", 2, 1024, 1024,
+                                           NULL, &result));
+  munit_assert_int(result.exit_code, ==, 0);
+  munit_assert_string_equal(result.stdout_text, "$(echo injected)");
+  shell_process_result_free(&result);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     {"/timeout_kills_pipeline_process_group",
      test_timeout_kills_pipeline_process_group, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/argv_does_not_invoke_shell", test_argv_does_not_invoke_shell, NULL,
+     NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}};
 
 MunitSuite shell_process_suite = {"/shell_process", tests, NULL, 1,

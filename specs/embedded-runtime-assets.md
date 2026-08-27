@@ -14,9 +14,13 @@ vendored Lua modules, plugins, and gated built-in skills without also copying
   `~/.config/capstan/config.lua`.
 - `system_prompt` is a Lua global loaded from `~/.config/capstan/system_prompt.txt`
   when present, otherwise from the embedded `ai/system_prompt.txt` asset.
-- Agent runtime files listed in `AGENT_RUNTIME_ASSETS` and core built-in
-  plugins listed in `CORE_PLUGIN_ASSETS` in the Makefile are loaded from
-  embedded assets first.
+- Agent runtime files listed in `AGENT_RUNTIME_ASSETS`, built-in profile
+  definitions listed in `PROFILE_ASSETS`, and core plugins listed in
+  `CORE_PLUGIN_ASSETS` in the Makefile are loaded from embedded assets first.
+- Built-in `fast`, `implement`, and `plan` profiles therefore work without a
+  repository checkout. Trusted user definitions from
+  `~/.config/capstan/profiles/*.lua` load afterward in lexical filename order
+  and may add profiles or patch embedded definitions.
 - User plugins from `~/.config/capstan/plugins/*.lua` are loaded after embedded
   plugins and watched for hot reload. If a user plugin returns the same
   `plugin.id` as a built-in plugin, it replaces the built-in plugin.
@@ -24,7 +28,8 @@ vendored Lua modules, plugins, and gated built-in skills without also copying
   memory as `embedded:skills/self-improvement/SKILL.md` only when
   `capabilities.self_improvement = true` is set in
   `~/.config/capstan/config.lua`.
-- Runtime startup does not require a `plugins/` directory beside the binary.
+- Runtime startup does not require `plugins/`, `profiles/`, or `agent/`
+directories beside the binary.
 
 ## Architecture
 
@@ -41,6 +46,9 @@ chunk names in Lua errors. User Lua config still uses `luaL_dofile`.
 - Adding a new agent runtime module requires adding its Lua file to
   `AGENT_RUNTIME_ASSETS` and preloading it in `src/plugins.c` if it is required
   by module name from embedded execution.
+- Adding a built-in profile requires adding its Lua definition to
+  `PROFILE_ASSETS`; user profiles belong in `~/.config/capstan/profiles/` and
+  do not require rebuilding the binary.
 - Adding a new built-in plugin requires adding its Lua file to
   `CORE_PLUGIN_ASSETS` and rebuilding the binary.
 - Adding a new embedded built-in skill requires adding its files to

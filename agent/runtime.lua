@@ -78,16 +78,28 @@ local function configured_profile()
 end
 
 local function effective_profile(opts)
-    local name = profiles.normalize(opts and opts.profile) or active_profile_name or configured_profile() or "implement"
+    local name = profiles.normalize(opts and opts.profile) or active_profile_name or configured_profile() or profiles.default_name()
     return profiles.get(name)
+end
+
+local function append_system_prompt(system, value)
+    if type(value) == "string" and value ~= "" then
+        return system .. "\n\n" .. value
+    end
+    if type(value) == "table" then
+        for _, item in ipairs(value) do system = append_system_prompt(system, item) end
+    end
+    return system
 end
 
 -- Assembles the message list: prepends system_prompt, then copies all messages.
 local function build_messages(messages, profile)
     local msgs = {}
     local system = _G.system_prompt or ""
+    local configured = config_table("agent")
+    system = append_system_prompt(system, configured and configured.system_prompt_append)
     if profile and profile.prompt then
-        system = system .. "\n\n" .. profile.prompt
+        system = append_system_prompt(system, profile.prompt)
     end
     system = system .. string.format([[
 
@@ -399,6 +411,12 @@ end
 function M.run(opts, callbacks)
     opts = opts or {}
     callbacks = callbacks or {}
+    if opts.profile ~= nil and not profiles.normalize(opts.profile) then
+        local message = "Unknown profile: " .. tostring(opts.profile)
+        if callbacks.on_error then callbacks.on_error(message) end
+        if callbacks.on_done then callbacks.on_done({ok = false, error = message, text = ""}) end
+        return false, message
+    end
     local profile = effective_profile(opts)
     local active, provider_name = prepare_provider(opts, profile)
     if not active then
@@ -823,7 +841,11 @@ _G.capstan.agent = {
         if opts.provider and not M.providers[opts.provider] then
             return nil, "unknown provider: " .. tostring(opts.provider)
         end
+        if opts.profile and not profiles.normalize(opts.profile) then
+            return nil, "unknown profile: " .. tostring(opts.profile)
+        end
         interactive_run_options = {}
+        if opts.profile then active_profile_name = profiles.normalize(opts.profile) end
         local fields = {
             "provider", "model", "reasoning_effort", "max_turns",
             "preserve_reasoning",
@@ -844,7 +866,7 @@ _G.capstan.agent = {
         return normalized
     end,
     get_profile = function()
-        return active_profile_name or configured_profile() or "implement"
+        return active_profile_name or configured_profile() or profiles.default_name()
     end,
     clear_profile = function()
         active_profile_name = nil

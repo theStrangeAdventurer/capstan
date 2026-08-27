@@ -17,8 +17,13 @@ const char *APP_VERSION = APP_VERSION_VALUE;
 const char *APP_BANNER_TITLE = "◉ CAPSTAN";
 const char *APP_BANNER_TAGLINE = "pull context. hold course. ship code.";
 
+#define MAX_WORKSPACE_MARKERS 32
+
 static char g_workdir[PATH_MAX] = "";
 static char g_workspace_root[PATH_MAX] = "";
+static char *g_workspace_markers[MAX_WORKSPACE_MARKERS] = {NULL};
+static size_t g_workspace_marker_count = 0;
+static int g_workspace_explicit = 0;
 
 static int is_absolute_path(const char *path) {
   return path && path[0] == '/';
@@ -32,6 +37,28 @@ static int is_dir(const char *path) {
 static int path_exists(const char *path) {
   struct stat st;
   return stat(path, &st) == 0;
+}
+
+static void ensure_default_workspace_markers(void) {
+  if (g_workspace_marker_count == 0) {
+    g_workspace_markers[0] = malloc(5);
+    if (g_workspace_markers[0]) {
+      memcpy(g_workspace_markers[0], ".git", 5);
+      g_workspace_marker_count = 1;
+    }
+  }
+}
+
+static int workspace_has_marker(const char *dir) {
+  ensure_default_workspace_markers();
+  for (size_t i = 0; i < g_workspace_marker_count; i++) {
+    char path[PATH_MAX];
+    int n = snprintf(path, sizeof(path), "%s/%s", dir,
+                     g_workspace_markers[i]);
+    if (n > 0 && (size_t)n < sizeof(path) && path_exists(path))
+      return 1;
+  }
+  return 0;
 }
 
 static int path_is_within(const char *path, const char *root) {
@@ -61,6 +88,7 @@ static int set_workdir(const char *path) {
   const char *value = realpath(path, resolved) ? resolved : path;
   snprintf(g_workdir, sizeof(g_workdir), "%s", value);
   g_workspace_root[0] = '\0';
+  g_workspace_explicit = 0;
   return 1;
 }
 
@@ -161,15 +189,15 @@ static void workspace_root_init(void) {
     app_workdir_init(NULL);
 
   const char *env = getenv("CAPSTAN_WORKSPACE");
-  if (set_workspace_root(env))
+  if (set_workspace_root(env)) {
+    g_workspace_explicit = 1;
     return;
+  }
 
   char candidate[PATH_MAX];
   snprintf(candidate, sizeof(candidate), "%s", g_workdir);
   while (candidate[0]) {
-    char marker[PATH_MAX];
-    int n = snprintf(marker, sizeof(marker), "%s/.git", candidate);
-    if (n > 0 && (size_t)n < sizeof(marker) && path_exists(marker)) {
+    if (workspace_has_marker(candidate)) {
       set_workspace_root(candidate);
       return;
     }
@@ -181,7 +209,41 @@ static void workspace_root_init(void) {
   set_workspace_root(g_workdir);
 }
 
-int app_workspace_set(const char *path) { return set_workspace_root(path); }
+int app_workspace_set(const char *path) {
+  int ok = set_workspace_root(path);
+  if (ok)
+    g_workspace_explicit = 1;
+  return ok;
+}
+
+int app_workspace_markers_set(const char *const *markers, size_t count) {
+  if (!markers || count == 0 || count > MAX_WORKSPACE_MARKERS)
+    return 0;
+  char *copies[MAX_WORKSPACE_MARKERS] = {NULL};
+  for (size_t i = 0; i < count; i++) {
+    if (!markers[i] || !markers[i][0] || strchr(markers[i], '/') ||
+        strcmp(markers[i], ".") == 0 || strcmp(markers[i], "..") == 0)
+      goto fail;
+    size_t len = strlen(markers[i]) + 1;
+    copies[i] = malloc(len);
+    if (!copies[i])
+      goto fail;
+    memcpy(copies[i], markers[i], len);
+  }
+  for (size_t i = 0; i < g_workspace_marker_count; i++)
+    free(g_workspace_markers[i]);
+  memset(g_workspace_markers, 0, sizeof(g_workspace_markers));
+  for (size_t i = 0; i < count; i++)
+    g_workspace_markers[i] = copies[i];
+  g_workspace_marker_count = count;
+  if (!g_workspace_explicit)
+    g_workspace_root[0] = '\0';
+  return 1;
+fail:
+  for (size_t i = 0; i < count; i++)
+    free(copies[i]);
+  return 0;
+}
 
 const char *app_workspace_root(void) {
   workspace_root_init();

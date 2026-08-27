@@ -142,5 +142,5 @@ void start_screen_build_status(const StartScreenStatus *status,
                         sizeof(out->workdir), 32);
 
   snprintf(out->ready, sizeof(out->ready),
-           "Type message · / + Tab for commands · Shift+Tab: fast / implement / plan");
+           "Type message · / + Tab for commands · Shift+Tab: switch profile");
 }

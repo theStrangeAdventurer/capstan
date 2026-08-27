@@ -11,6 +11,7 @@
 #include "project_instructions.h"
 #include "skills.h"
 #include "wiki.h"
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <lauxlib.h>
@@ -97,11 +98,15 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.utf8", "agent/utf8.lua");
   preload_embedded_asset(L, "agent.hooks", "agent/hooks.lua");
   preload_embedded_asset(L, "agent.state", "agent/state.lua");
+  preload_embedded_asset(L, "agent.vcs", "agent/vcs.lua");
   preload_embedded_asset(L, "agent.auth", "agent/auth.lua");
   preload_embedded_asset(L, "agent.lua_serialize", "agent/lua_serialize.lua");
   preload_embedded_asset(L, "agent.shell_safe", "agent/shell_safe.lua");
   preload_embedded_asset(L, "agent.mcp", "agent/mcp.lua");
   preload_embedded_asset(L, "agent.profiles", "agent/profiles.lua");
+  preload_embedded_asset(L, "profiles.fast", "profiles/fast.lua");
+  preload_embedded_asset(L, "profiles.implement", "profiles/implement.lua");
+  preload_embedded_asset(L, "profiles.plan", "profiles/plan.lua");
   lua_pop(L, 2);
 }
 
@@ -383,6 +388,53 @@ static int l_capstan_config_path(lua_State *l) {
   return 1;
 }
 
+static int compare_paths(const void *left, const void *right) {
+  const char *const *a = left;
+  const char *const *b = right;
+  return strcmp(*a, *b);
+}
+
+static int l_capstan_profile_files(lua_State *l) {
+  char dir_path[512];
+  lua_newtable(l);
+  if (app_config_path(dir_path, sizeof(dir_path), "profiles") != 0)
+    return 1;
+  DIR *dir = opendir(dir_path);
+  if (!dir)
+    return 1;
+
+  char **paths = NULL;
+  size_t count = 0;
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    size_t name_len = strlen(entry->d_name);
+    if (name_len <= 4 || strcmp(entry->d_name + name_len - 4, ".lua") != 0)
+      continue;
+    size_t path_len = strlen(dir_path) + name_len + 2;
+    char *path = malloc(path_len);
+    if (!path)
+      continue;
+    char **grown = realloc(paths, (count + 1) * sizeof(*paths));
+    if (!grown) {
+      free(path);
+      continue;
+    }
+    paths = grown;
+    snprintf(path, path_len, "%s/%s", dir_path, entry->d_name);
+    paths[count++] = path;
+  }
+  closedir(dir);
+  if (count > 1)
+    qsort(paths, count, sizeof(*paths), compare_paths);
+  for (size_t i = 0; i < count; i++) {
+    lua_pushstring(l, paths[i]);
+    lua_rawseti(l, -2, (lua_Integer)i + 1);
+    free(paths[i]);
+  }
+  free(paths);
+  return 1;
+}
+
 static int l_capstan_config_dir(lua_State *l) {
   char path[512];
   if (app_config_dir(path, sizeof(path)) != 0) {
@@ -537,6 +589,9 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_pushcfunction(L, l_capstan_config_dir);
   lua_setfield(L, -2, "config_dir");
 
+  lua_pushcfunction(L, l_capstan_profile_files);
+  lua_setfield(L, -2, "profile_files");
+
   lua_pushcfunction(L, l_capstan_state_ensure_dir);
   lua_setfield(L, -2, "state_ensure_dir");
 
@@ -596,6 +651,59 @@ static void load_capstan_config(void) {
   lua_pop(L, 1);
 }
 
+static void apply_workspace_config(void) {
+  const char *markers[32];
+  size_t count = 0;
+  lua_getglobal(L, "capstan");
+  lua_getfield(L, -1, "config");
+  if (lua_istable(L, -1)) {
+    lua_getfield(L, -1, "workspace");
+    if (lua_istable(L, -1)) {
+      lua_getfield(L, -1, "markers");
+      if (!lua_isnil(L, -1)) {
+        int valid = lua_istable(L, -1);
+        size_t len = valid ? lua_rawlen(L, -1) : 0;
+        valid = valid && len > 0 && len <= 32;
+        if (valid) {
+          size_t entries = 0;
+          lua_pushnil(L);
+          while (lua_next(L, -2) != 0) {
+            entries++;
+            if (!lua_isinteger(L, -2)) {
+              valid = 0;
+            } else {
+              lua_Integer key = lua_tointeger(L, -2);
+              if (key < 1 || (size_t)key > len)
+                valid = 0;
+            }
+            lua_pop(L, 1);
+          }
+          if (entries != len)
+            valid = 0;
+        }
+        if (valid) {
+          for (size_t i = 1; i <= len; i++) {
+            lua_rawgeti(L, -1, (lua_Integer)i);
+            if (lua_type(L, -1) == LUA_TSTRING)
+              markers[count++] = lua_tostring(L, -1);
+            else
+              valid = 0;
+            lua_pop(L, 1);
+          }
+        }
+        if (!valid || !app_workspace_markers_set(markers, count))
+          fprintf(stderr, "Invalid workspace.markers in config.lua\n");
+      }
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  lua_pushstring(L, app_workspace_root());
+  lua_setfield(L, -2, "workspace_root");
+  lua_setglobal(L, "capstan");
+}
+
 static void load_capstan_state(void) {
   char path[512];
   lua_getglobal(L, "capstan");
@@ -652,6 +760,7 @@ void plugins_init_with_options(const PluginsInitOptions *options) {
   mcp_init(L);
   register_capstan_runtime(options);
   load_capstan_config();
+  apply_workspace_config();
   load_capstan_state();
   permit_init(L);
   log_init(L);

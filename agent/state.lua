@@ -72,6 +72,23 @@ function M.profile_models()
     return out
 end
 
+function M.vcs_for_workspace(workspace_root)
+    local st = state()
+    if type(st.vcs_by_workspace) ~= "table" then return nil end
+    local value = st.vcs_by_workspace[workspace_root]
+    return type(value) == "string" and value ~= "" and value or nil
+end
+
+function M.set_vcs_for_workspace(workspace_root, adapter)
+    if type(workspace_root) ~= "string" or workspace_root == "" then
+        return false, "workspace root is not available"
+    end
+    local st = state()
+    if type(st.vcs_by_workspace) ~= "table" then st.vcs_by_workspace = {} end
+    st.vcs_by_workspace[workspace_root] = adapter
+    return M.save()
+end
+
 function M.set_provider(provider_name)
     local st = state()
     st.provider = provider_name
@@ -178,6 +195,21 @@ function M.save()
         end
         file:write("  },\n")
     end
+    file:write("  vcs_by_workspace = {\n")
+    if type(st.vcs_by_workspace) == "table" then
+        local keys = {}
+        for workspace_root, adapter in pairs(st.vcs_by_workspace) do
+            if type(workspace_root) == "string" and type(adapter) == "string" then
+                table.insert(keys, workspace_root)
+            end
+        end
+        table.sort(keys)
+        for _, workspace_root in ipairs(keys) do
+            file:write("    [", serialize.quote(workspace_root), "] = ",
+                serialize.quote(st.vcs_by_workspace[workspace_root]), ",\n")
+        end
+    end
+    file:write("  },\n")
     file:write("  profile_models = {\n")
     if type(st.profile_models) == "table" then
         local keys = {}

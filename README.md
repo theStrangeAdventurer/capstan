@@ -141,14 +141,50 @@ workload-, provider-, model-, and machine-specific.
 
 Controls:
 
-- press **Shift-Tab** to cycle profiles in the TUI;
-- run `/fast`, `/implement`, or `/plan` directly;
+- press **Shift-Tab** to cycle every configured profile in the TUI;
+- run `/fast`, `/implement`, or `/plan` for the built-in profiles;
 - use `capstan run --profile <name>` in headless mode;
 - use `/models` to assign models and reasoning effort globally or per profile.
 
-The `plan` restriction is enforced before plugin and permission handling: write
-and shell tools are not sent to the model. Manual slash commands remain direct
-user actions.
+Built-in profiles are embedded as Lua definitions. Add or override profiles with
+trusted Lua files under `~/.config/capstan/profiles/*.lua`; files load in lexical
+filename order. For example, create a read-only review profile:
+
+```lua
+-- ~/.config/capstan/profiles/review.lua
+return {
+  name = "review",
+  label = "Review",
+  order = 40,
+  reasoning_effort = "high",
+  readonly = true,
+  completion_review = false,
+  allowed_tools = {
+    fetch = true,
+    file_read = true,
+    logs = true,
+    subagents = true,
+  },
+  prompt = [[
+## Active Profile: Review
+Review the current changes without modifying files. Focus on correctness,
+regressions, security, and missing tests. Report findings first, ordered by
+severity, with precise file and line references when possible. If there are no
+findings, say so explicitly and mention any remaining validation gaps.
+]],
+}
+```
+
+Select it with Shift-Tab, set `agent.profile = "review"`, or run
+`capstan run --profile review --prompt "Review the current changes"`. A file
+with an existing `name` patches that profile: omitted fields are inherited,
+`prompt_append` adds instructions, and `replace = true` starts from an empty
+definition. See [Agent Profiles](specs/agent-profiles.md) for the complete
+contract.
+
+Profile tool restrictions are enforced before plugin and permission handling:
+tools absent from `allowed_tools` are not sent to the model. Manual slash
+commands remain direct user actions.
 
 ## Configuration
 

@@ -981,6 +981,88 @@ static MunitResult test_interactive_options_reject_unknown_provider(
   return MUNIT_OK;
 }
 
+static MunitResult test_interactive_options_reject_unknown_profile(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dostring(
+      L,
+      "local ok, err = capstan.agent.configure_interactive({profile = "
+      "'missing'}) "
+      "assert(ok == nil and err:find('unknown profile', 1, true))");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int(post_stream_calls, ==, 0);
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_interactive_cli_profile_can_be_switched(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  rc = luaL_dostring(
+      L,
+      "assert(capstan.agent.configure_interactive({profile = 'implement'})) "
+      "assert(capstan.agent.set_profile('plan') == 'plan')");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  call_agent_entry(L);
+  munit_assert_string_equal(last_agent_profile, "plan");
+  munit_assert_null(strstr(captured_body, "\"name\":\"shell\""));
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_profiles_isolation_and_default_replacement(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  int rc = luaL_dostring(
+      L,
+      "package.loaded['agent.profiles'] = nil\n"
+      "capstan.runtime_options = {isolated = true}\n"
+      "capstan.config = {agent = {profiles = {evil = {default = true}}}}\n"
+      "local isolated = require('agent.profiles')\n"
+      "assert(isolated.get('evil') == nil)\n"
+      "assert(isolated.default_name() == 'implement')\n"
+      "package.loaded['agent.profiles'] = nil\n"
+      "capstan.runtime_options = {}\n"
+      "capstan.config = {agent = {profiles = {implement = {default = false}, "
+      "fast = {default = true}}}}\n"
+      "local configured = require('agent.profiles')\n"
+      "assert(configured.default_name() == 'fast')\n"
+      "package.loaded['agent.profiles'] = nil\n"
+      "capstan.config = {agent = {profiles = {\n"
+      "  bad_tools = {allowed_tools = false},\n"
+      "  bad_prompt = {prompt = true},\n"
+      "  nested_prompt = {prompt = {{'nested'}}},\n"
+      "  bad_append = {prompt_append = {}}\n"
+      "}}}\n"
+      "local validated = require('agent.profiles')\n"
+      "assert(validated.get('bad_tools') == nil)\n"
+      "assert(validated.get('bad_prompt') == nil)\n"
+      "assert(validated.get('nested_prompt') == nil)\n"
+      "assert(validated.get('bad_append') == nil)\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_request_enables_auto_tool_choice(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -3529,6 +3611,82 @@ static MunitResult test_transient_stream_error_retries_before_output(
   munit_assert_int(post_stream_calls, ==, 2);
   munit_assert_true(strstr(captured_logs,
                            "stream failed before output; retrying") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_vcs_unborn_diff_is_complete_and_disables_git_extensions(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dostring(
+      L,
+      "package.loaded['agent.vcs'] = nil\n"
+      "package.loaded['agent.state'] = {\n"
+      "  vcs_for_workspace = function() return nil end,\n"
+      "  set_vcs_for_workspace = function() return true end,\n"
+      "}\n"
+      "package.loaded['agent.workspace'] = {\n"
+      "  configured_workspace_root = function() return '/repo' end,\n"
+      "  real_workspace = function() return '/repo' end,\n"
+      "  normalize_path = function(path) return '/repo/' .. path end,\n"
+      "  realpath = function(path) return path end,\n"
+      "  path_is_within = function() return true end,\n"
+      "}\n"
+      "capstan.workspace_root = '/repo'\n"
+      "local calls = {}\n"
+      "tools = {exec = function(argv)\n"
+      "  table.insert(calls, argv)\n"
+      "  if #calls == 1 then return {exit = 1, stdout = '', stderr = ''} end\n"
+      "  if #calls == 2 then return {exit = 0, stdout = 'staged\\n', stderr = ''} end\n"
+      "  return {exit = 0, stdout = 'worktree\\n', stderr = ''}\n"
+      "end}\n"
+      "local vcs = require('agent.vcs')\n"
+      "local result, err = vcs.run('diff')\n"
+      "assert(result and not err and result.output == 'staged\\nworktree\\n')\n"
+      "assert(#calls == 3)\n"
+      "for _, argv in ipairs(calls) do\n"
+      "  assert(argv[2] == '--no-optional-locks')\n"
+      "  assert(argv[3] == '-c' and argv[4] == 'core.fsmonitor=false')\n"
+      "end\n"
+      "assert(table.concat(calls[2], ' '):find('--no-ext-diff', 1, true))\n"
+      "assert(table.concat(calls[2], ' '):find('--no-textconv', 1, true))\n"
+      "assert(table.concat(calls[3], ' '):find('--no-ext-diff', 1, true))\n"
+      "assert(table.concat(calls[3], ' '):find('--no-textconv', 1, true))\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_vcs_permission_target_uses_workspace_root(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_workdir(L, "/tmp/workspace/subdir");
+  set_capstan_workspace_root(L, "/tmp/workspace");
+
+  int rc = luaL_dostring(
+      L, "plugins.vcs = assert(loadfile('plugins/vcs.lua'))()");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  call_agent_entry(L);
+  send_tool_call(L, "call_vcs", "vcs",
+                 "{\\\"operation\\\":\\\"diff\\\",\\\"path\\\":\\\"src/main.c\\\"}");
+
+  munit_assert_string_equal(captured_permit_tool, "file_read");
+  munit_assert_string_equal(captured_permit_target,
+                            "/tmp/workspace/src/main.c");
 
   reset_captures(L);
   lua_close(L);
@@ -6251,6 +6409,15 @@ static MunitTest tests[] = {
     {"/interactive_options_reject_unknown_provider",
      test_interactive_options_reject_unknown_provider, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/interactive_options_reject_unknown_profile",
+     test_interactive_options_reject_unknown_profile, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/interactive_cli_profile_can_be_switched",
+     test_interactive_cli_profile_can_be_switched, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/profiles_isolation_and_default_replacement",
+     test_profiles_isolation_and_default_replacement, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/request_enables_auto_tool_choice", test_request_enables_auto_tool_choice,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/request_applies_reasoning_effort", test_request_applies_reasoning_effort,
@@ -6449,6 +6616,12 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/transient_stream_error_retries_before_output",
      test_transient_stream_error_retries_before_output, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/vcs_unborn_diff_is_complete_and_disables_git_extensions",
+     test_vcs_unborn_diff_is_complete_and_disables_git_extensions, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/vcs_permission_target_uses_workspace_root",
+     test_vcs_permission_target_uses_workspace_root, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_read_permission_target_uses_path",
      test_file_read_permission_target_uses_path, NULL, NULL,
