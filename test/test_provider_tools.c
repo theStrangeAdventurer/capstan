@@ -927,6 +927,139 @@ static void send_reasoning_detail_fragment(lua_State *L, const char *text,
 static void send_text_delta(lua_State *L, const char *text);
 static void send_text_done(lua_State *L, const char *text);
 
+static MunitResult test_model_start_callback_reports_effective_request_context(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  rc = luaL_dostring(
+      L,
+      "local ok, err = capstan.agent.run({"
+      "messages = {{role = 'user', content = 'inspect'}}, "
+      "reasoning_effort = 'high', preserve_reasoning = false}, {"
+      "on_model_start = function(turn, attempt, messages, tools, prompt, "
+      "provider, model, effort, profile, preserve, body_bytes, purpose) "
+      "model_start_snapshot = {turn = turn, attempt = attempt, "
+      "provider = provider, model = model, effort = effort, profile = profile, "
+      "preserve = preserve, body_bytes = body_bytes, purpose = purpose} end}) "
+      "assert(ok, err)");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "model_start_snapshot");
+  munit_assert_true(lua_istable(L, -1));
+  lua_getfield(L, -1, "turn");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "attempt");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "provider");
+  munit_assert_string_equal(lua_tostring(L, -1), "deepseek");
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "model");
+  munit_assert_true(lua_isstring(L, -1));
+  munit_assert_size(lua_rawlen(L, -1), >, 0);
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "effort");
+  munit_assert_string_equal(lua_tostring(L, -1), "high");
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "profile");
+  munit_assert_string_equal(lua_tostring(L, -1), "implement");
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "preserve");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "body_bytes");
+  munit_assert_int((int)lua_tointeger(L, -1), >, 0);
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "purpose");
+  munit_assert_string_equal(lua_tostring(L, -1), "agent");
+  lua_pop(L, 2);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_model_observer_failure_stops_run_cleanly(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "local ok, err = capstan.agent.run({"
+      "messages = {{role = 'user', content = 'inspect'}}}, {"
+      "on_model_start = function() error('observer boom') end, "
+      "on_done = function(result) observer_failure_result = result end}) "
+      "assert(ok, err)");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "observer_failure_result");
+  munit_assert_true(lua_istable(L, -1));
+  lua_getfield(L, -1, "ok");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "error");
+  munit_assert_not_null(strstr(lua_tostring(L, -1),
+                               "on_model_start failed"));
+  lua_pop(L, 2);
+  munit_assert_int(stream_callback_ref, ==, LUA_NOREF);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_sync_post_stream_failure_finishes_cleanly(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "http.post_stream = function() error('sync setup boom') end "
+      "local starts, finishes = 0, 0 "
+      "local ok, err = capstan.agent.run({"
+      "messages = {{role = 'user', content = 'inspect'}}}, {"
+      "on_model_start = function() starts = starts + 1 end, "
+      "on_model_done = function() finishes = finishes + 1 end, "
+      "on_done = function(result) sync_failure_result = result; "
+      "sync_failure_starts = starts; sync_failure_finishes = finishes end}) "
+      "assert(ok, err)");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "sync_failure_result");
+  munit_assert_true(lua_istable(L, -1));
+  lua_getfield(L, -1, "ok");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "error");
+  munit_assert_not_null(strstr(lua_tostring(L, -1),
+                               "HTTP stream setup failed"));
+  lua_pop(L, 2);
+  lua_getglobal(L, "sync_failure_starts");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  lua_getglobal(L, "sync_failure_finishes");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_interactive_options_override_request(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -3745,7 +3878,7 @@ static MunitResult test_file_read_inside_wiki_routes_without_permission(
       "}\n"
       "local tools = require('agent.tools')\n"
       "local available = tools.collect({disable_subagents = true})\n"
-      "tools.handle_tool_calls({}, available, {{id = 'wiki-file-read', name = 'file_read', arguments = '{\\\"path\\\":\\\"/tmp/capstan-internal-wiki/WIKI.md\\\"}'}}, '', function(msgs) _G.wiki_routed_result = msgs[#msgs].content end, {tools = available, silent_tools = true})\n");
+      "tools.handle_tool_calls({}, available, {{id = 'wiki-file-read', name = 'file_read', arguments = '{\\\"path\\\":\\\"/tmp/capstan-internal-wiki/WIKI.md\\\"}'}}, '', function(msgs) _G.wiki_routed_result = msgs[#msgs].content end, {tools = available, silent_tools = true, callbacks = {on_tool_start = function(tc) _G.wiki_trace_start = tc.name; _G.wiki_trace_path = tc.effective_arguments.path end, on_tool_done = function(tc) _G.wiki_trace_done = tc.name end}})\n");
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_int(permit_check_calls, ==, 0);
   munit_assert_int(permit_prompt_calls, ==, 0);
@@ -3756,6 +3889,202 @@ static MunitResult test_file_read_inside_wiki_routes_without_permission(
   lua_pop(L, 1);
   lua_getglobal(L, "wiki_routed_result");
   munit_assert_string_equal(lua_tostring(L, -1), "wiki llm");
+  lua_pop(L, 1);
+  lua_getglobal(L, "wiki_trace_start");
+  munit_assert_string_equal(lua_tostring(L, -1), "wiki_read");
+  lua_pop(L, 1);
+  lua_getglobal(L, "wiki_trace_done");
+  munit_assert_string_equal(lua_tostring(L, -1), "wiki_read");
+  lua_pop(L, 1);
+  lua_getglobal(L, "wiki_trace_path");
+  munit_assert_string_equal(lua_tostring(L, -1), "WIKI.md");
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_observer_failure_stops_before_execution(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "tools.handle_tool_calls({}, {}, {{id = 'observer-call', "
+      "name = 'missing_tool', arguments = '{}'}}, '', "
+      "function() tool_observer_continued = true end, {"
+      "callbacks = {on_tool_start = function() error('observer boom') end}, "
+      "stop_run = function(message) tool_observer_stopped = message end})");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "tool_observer_stopped");
+  munit_assert_true(lua_isstring(L, -1));
+  munit_assert_not_null(strstr(lua_tostring(L, -1),
+                               "on_tool_start failed"));
+  lua_pop(L, 1);
+  lua_getglobal(L, "tool_observer_continued");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_permission_error_finishes_tool_event(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  install_mock_now_ms(L, 100);
+  set_permit_decision("ask");
+
+  int rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "local combined = tools.collect({disable_subagents = true})\n"
+      "local ok, err = pcall(function()\n"
+      "  tools.handle_tool_calls({}, combined, {{id = 'permission-error', "
+      "name = 'fetch', arguments = '{\\\"url\\\":\\\"https://example.com\\\"}'}}, '', "
+      "function() permission_error_continued = true end, {callbacks = {\n"
+      "    on_tool_start = function() permission_error_starts = (permission_error_starts or 0) + 1 end,\n"
+      "    on_tool_done = function(_, result, tool_ok, _, wait_ms)\n"
+      "      permission_error_finishes = (permission_error_finishes or 0) + 1\n"
+      "      permission_error_result = result\n"
+      "      permission_error_tool_ok = tool_ok\n"
+      "      permission_error_wait_ms = wait_ms\n"
+      "    end,\n"
+      "    on_permission_request = function() MOCK_NOW_MS = MOCK_NOW_MS + 25; error('permission boom') end,\n"
+      "  }})\n"
+      "end)\n"
+      "permission_error_call_ok = ok\n"
+      "permission_error_call_error = err\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "permission_error_call_ok");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "permission_error_call_error");
+  munit_assert_not_null(strstr(lua_tostring(L, -1), "permission boom"));
+  lua_pop(L, 1);
+  lua_getglobal(L, "permission_error_starts");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  lua_getglobal(L, "permission_error_finishes");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  lua_getglobal(L, "permission_error_tool_ok");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "permission_error_wait_ms");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 25);
+  lua_pop(L, 1);
+  lua_getglobal(L, "permission_error_result");
+  munit_assert_not_null(strstr(lua_tostring(L, -1), "permission boom"));
+  lua_pop(L, 1);
+  lua_getglobal(L, "permission_error_continued");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_execution_error_finishes_tool_event(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  install_mock_now_ms(L, 100);
+  set_permit_decision("allow");
+
+  int rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "local combined = tools.collect({disable_subagents = true})\n"
+      "agent.set_activity = function() error('execution boom') end\n"
+      "local ok, err = pcall(function()\n"
+      "  tools.handle_tool_calls({}, combined, {{id = 'execution-error', "
+      "name = 'fetch', arguments = '{\\\"url\\\":\\\"https://example.com\\\"}'}}, '', "
+      "function() execution_error_continued = true end, {callbacks = {\n"
+      "    on_tool_start = function() execution_error_starts = (execution_error_starts or 0) + 1 end,\n"
+      "    on_tool_done = function(_, result, tool_ok)\n"
+      "      execution_error_finishes = (execution_error_finishes or 0) + 1\n"
+      "      execution_error_result = result\n"
+      "      execution_error_tool_ok = tool_ok\n"
+      "    end,\n"
+      "  }})\n"
+      "end)\n"
+      "execution_error_call_ok = ok\n"
+      "execution_error_call_error = err\n");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "execution_error_call_ok");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "execution_error_call_error");
+  munit_assert_not_null(strstr(lua_tostring(L, -1), "execution boom"));
+  lua_pop(L, 1);
+  lua_getglobal(L, "execution_error_starts");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  lua_getglobal(L, "execution_error_finishes");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 1);
+  lua_pop(L, 1);
+  lua_getglobal(L, "execution_error_tool_ok");
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "execution_error_result");
+  munit_assert_not_null(strstr(lua_tostring(L, -1), "execution boom"));
+  lua_pop(L, 1);
+  lua_getglobal(L, "execution_error_continued");
+  munit_assert_true(lua_isnil(L, -1));
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tool_observer_preserves_raw_and_effective_arguments(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+
+  int rc = luaL_dostring(
+      L,
+      "local tools = require('agent.tools')\n"
+      "local combined = tools.collect({disable_subagents = true})\n"
+      "tools.handle_tool_calls({}, combined, {{id = 'observer-call', "
+      "name = 'fetch', arguments = '{\\\"url\\\":\\\"https://example.com\\\"}'}}, '', "
+      "function() tool_observer_continued = true end, {"
+      "callbacks = {on_tool_start = function(call) "
+      "tool_observer_raw_type = type(call.arguments); "
+      "tool_observer_original = call.original_arguments; "
+      "tool_observer_effective_type = type(call.effective_arguments); "
+      "tool_observer_effective_url = call.effective_arguments.url end}})");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_getglobal(L, "tool_observer_raw_type");
+  munit_assert_string_equal(lua_tostring(L, -1), "string");
+  lua_pop(L, 1);
+  lua_getglobal(L, "tool_observer_original");
+  munit_assert_string_equal(lua_tostring(L, -1),
+                            "{\"url\":\"https://example.com\"}");
+  lua_pop(L, 1);
+  lua_getglobal(L, "tool_observer_effective_type");
+  munit_assert_string_equal(lua_tostring(L, -1), "table");
+  lua_pop(L, 1);
+  lua_getglobal(L, "tool_observer_effective_url");
+  munit_assert_string_equal(lua_tostring(L, -1), "https://example.com");
   lua_pop(L, 1);
 
   reset_captures(L);
@@ -5008,6 +5337,59 @@ static MunitResult test_tool_guard_stops_duration_before_tool_execution(
   return MUNIT_OK;
 }
 
+static MunitResult test_tool_guard_finishes_event_before_stopping_run(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_agent_config_number(L, "max_duration_sec", 1);
+  install_mock_now_ms(L, 0);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "guard_callback_order = {}\n"
+      "local function record(value) table.insert(guard_callback_order, value) end\n"
+      "local ok, err = capstan.agent.run({messages = {{role = 'user', content = 'inspect'}}}, {\n"
+      "  on_tool_start = function() record('tool_start') end,\n"
+      "  on_tool_done = function(_, result, tool_ok)\n"
+      "    assert(tool_ok == false)\n"
+      "    assert(result:find('agent run exceeded 1s', 1, true))\n"
+      "    record('tool_done')\n"
+      "  end,\n"
+      "  on_error = function() record('error') end,\n"
+      "  on_done = function() record('done') end,\n"
+      "})\n"
+      "assert(ok, err)\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+
+  set_mock_now_ms(L, 2000);
+  send_tool_call(L, "call_guard_callback_order", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  lua_getglobal(L, "guard_callback_order");
+  munit_assert_true(lua_istable(L, -1));
+  munit_assert_size(lua_rawlen(L, -1), ==, 4);
+  const char *expected[] = {"tool_start", "tool_done", "error", "done"};
+  for (int i = 0; i < 4; i++) {
+    lua_rawgeti(L, -1, i + 1);
+    munit_assert_string_equal(lua_tostring(L, -1), expected[i]);
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_tool_guard_default_duration_is_2700_seconds(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -5404,6 +5786,7 @@ static MunitResult test_minimax_normal_text_is_buffered_until_done(
   set_permit_decision("allow");
   set_capstan_provider_config(L);
   set_capstan_state_model(L, "openrouter", "minimax/minimax-m3");
+  install_mock_now_ms(L, 0);
 
   int rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
@@ -5425,6 +5808,33 @@ static MunitResult test_minimax_normal_text_is_buffered_until_done(
   rc = lua_pcall(L, 2, 0, 0);
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_string_equal(captured_agent_appends, "hello");
+
+  rc = luaL_dostring(
+      L,
+      "local stream = require('agent.stream') "
+      "minimax_metric_callback = stream.stream({"
+      "model = 'minimax/minimax-m3', suppress_agent_state = true}, "
+      "function(result, done) if done then minimax_metrics = result.metrics end end, "
+      "0, {})");
+  munit_assert_int(rc, ==, LUA_OK);
+  set_mock_now_ms(L, 100);
+  lua_getglobal(L, "minimax_metric_callback");
+  lua_pushstring(L, "data: {\"choices\":[{\"delta\":{\"content\":\"early\"}}]}\n\n");
+  lua_pushboolean(L, 0);
+  munit_assert_int(lua_pcall(L, 2, 0, 0), ==, LUA_OK);
+  set_mock_now_ms(L, 500);
+  lua_getglobal(L, "minimax_metric_callback");
+  lua_pushnil(L);
+  lua_pushboolean(L, 1);
+  munit_assert_int(lua_pcall(L, 2, 0, 0), ==, LUA_OK);
+  lua_getglobal(L, "minimax_metrics");
+  munit_assert_true(lua_istable(L, -1));
+  lua_getfield(L, -1, "first_output_ms");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 100);
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "first_text_ms");
+  munit_assert_int((int)lua_tointeger(L, -1), ==, 500);
+  lua_pop(L, 2);
 
   reset_captures(L);
   lua_close(L);
@@ -6168,6 +6578,46 @@ static MunitResult test_stream_chunk_hook_mutates_text(
   return MUNIT_OK;
 }
 
+static MunitResult test_stream_preserves_split_crlf_event(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int rc = luaL_dostring(
+      L,
+      "local stream = require('agent.stream') "
+      "split_crlf_text = '' "
+      "split_crlf_callback = stream.stream({"
+      "suppress_agent_state = true, "
+      "parse_sse_event = function(raw) "
+      "return {type = 'text', content = raw} end}, "
+      "function(result) "
+      "if result.type == 'text' then "
+      "split_crlf_text = split_crlf_text .. result.content end "
+      "end, 0, {})");
+  munit_assert_int(rc, ==, LUA_OK);
+
+  lua_getglobal(L, "split_crlf_callback");
+  lua_pushstring(L, "first\r");
+  lua_pushboolean(L, 0);
+  munit_assert_int(lua_pcall(L, 2, 0, 0), ==, LUA_OK);
+
+  lua_getglobal(L, "split_crlf_callback");
+  lua_pushstring(L, "\nsecond\r\n\r\n");
+  lua_pushboolean(L, 0);
+  munit_assert_int(lua_pcall(L, 2, 0, 0), ==, LUA_OK);
+
+  lua_getglobal(L, "split_crlf_text");
+  munit_assert_string_equal(lua_tostring(L, -1), "first\nsecond");
+  lua_pop(L, 1);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_provider_parse_sse_event_override(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -6397,6 +6847,15 @@ static MunitTest tests[] = {
     {"/failed_response_skips_session_title",
      test_failed_response_skips_session_title, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/model_start_callback_reports_effective_request_context",
+     test_model_start_callback_reports_effective_request_context, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/model_observer_failure_stops_run_cleanly",
+     test_model_observer_failure_stops_run_cleanly, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/sync_post_stream_failure_finishes_cleanly",
+     test_sync_post_stream_failure_finishes_cleanly, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/interactive_options_override_request",
      test_interactive_options_override_request, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -6623,6 +7082,18 @@ static MunitTest tests[] = {
     {"/file_read_inside_wiki_routes_without_permission",
      test_file_read_inside_wiki_routes_without_permission, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_observer_failure_stops_before_execution",
+     test_tool_observer_failure_stops_before_execution, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/permission_error_finishes_tool_event",
+     test_permission_error_finishes_tool_event, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/execution_error_finishes_tool_event",
+     test_execution_error_finishes_tool_event, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_observer_preserves_raw_and_effective_arguments",
+     test_tool_observer_preserves_raw_and_effective_arguments, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/no_wiki_hides_tools_and_disables_configured_path",
      test_no_wiki_hides_tools_and_disables_configured_path, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -6694,6 +7165,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_guard_stops_duration_before_tool_execution",
      test_tool_guard_stops_duration_before_tool_execution, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tool_guard_finishes_event_before_stopping_run",
+     test_tool_guard_finishes_event_before_stopping_run, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_guard_default_duration_is_2700_seconds",
      test_tool_guard_default_duration_is_2700_seconds, NULL, NULL,
@@ -6792,6 +7266,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/stream_chunk_hook_mutates_text",
      test_stream_chunk_hook_mutates_text, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/stream_preserves_split_crlf_event",
+     test_stream_preserves_split_crlf_event, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_parse_sse_event_override",
      test_provider_parse_sse_event_override, NULL, NULL,

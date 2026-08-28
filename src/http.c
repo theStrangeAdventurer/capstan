@@ -39,6 +39,8 @@ typedef struct {
   RespBuf response_headers;
   char err_buf[4096 + 1];
   size_t err_len;
+  size_t chunk_count;
+  size_t downloaded_bytes;
 } StreamCtx;
 
 static CURLM *multi_handle = NULL;
@@ -236,9 +238,16 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
   size_t total = size * count;
   if (total == 0)
     return 0;
+  ctx->chunk_count++;
+  ctx->downloaded_bytes += total;
 
   if (ctx->response_mode)
     return write_cb(chunk_ptr, size, count, &ctx->response);
+
+  long http_status = 0;
+  (void)curl_easy_getinfo(ctx->easy, CURLINFO_RESPONSE_CODE, &http_status);
+  int error_response = http_status > 0 &&
+                       (http_status < 200 || http_status >= 300);
 
   size_t room = sizeof(ctx->err_buf) - 1 - ctx->err_len;
   if (room > 0) {
@@ -247,6 +256,8 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
     ctx->err_len += copy;
     ctx->err_buf[ctx->err_len] = '\0';
   }
+  if (error_response)
+    return total;
 
   lua_getglobal(ctx->L, "debug");
   lua_getfield(ctx->L, -1, "traceback");
@@ -270,8 +281,9 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
 
 /*
  * http.post_stream(url, body, headers, callback[, timeout_ms[, options]])
- * callback(raw_chunk, is_done) is invoked for every received chunk. A failed
- * transfer finishes with callback(nil, true, error, body_or_nil, headers).
+ * callback(raw_chunk, is_done) is invoked for every received chunk. Completion
+ * uses callback(nil, true, error, body_or_nil, headers, metadata); metadata
+ * contains status, transport timings, byte counts, and chunk count.
  * options.background keeps metadata/background streams out of the visible
  * loading state and user-triggered stream cancellation.
  * Returns async_id.
@@ -715,6 +727,62 @@ static int l_http_is_loading(lua_State *L) {
  * Advances curl_multi, delivers Lua callbacks for new chunks, and on stream
  * completion invokes the callback with (nil, true) before releasing resources.
  */
+static void set_stream_ms(lua_State *L, const char *name, double seconds) {
+  if (seconds < 0.0)
+    return;
+  lua_pushinteger(L, (lua_Integer)(seconds * 1000.0));
+  lua_setfield(L, -2, name);
+}
+
+static void set_stream_phase_ms(lua_State *L, const char *name,
+                                double started, double finished) {
+  if (started < 0.0 || finished < started)
+    return;
+  lua_pushinteger(L, (lua_Integer)((finished - started) * 1000.0));
+  lua_setfield(L, -2, name);
+}
+
+static void push_stream_metadata(lua_State *L, long http_status,
+                                 CURLcode curl_rc, double name_lookup,
+                                 double connect, double app_connect,
+                                 double pre_transfer, double start_transfer,
+                                 double total, curl_off_t uploaded_bytes,
+                                 curl_off_t downloaded_bytes,
+                                 size_t chunk_count, long redirect_count) {
+  lua_newtable(L);
+  if (http_status > 0) {
+    lua_pushinteger(L, http_status);
+    lua_setfield(L, -2, "http_status");
+  }
+  lua_pushinteger(L, (lua_Integer)curl_rc);
+  lua_setfield(L, -2, "curl_code");
+  set_stream_ms(L, "namelookup_elapsed_ms", name_lookup);
+  set_stream_ms(L, "connect_elapsed_ms", connect);
+  set_stream_ms(L, "appconnect_elapsed_ms", app_connect);
+  set_stream_ms(L, "pretransfer_elapsed_ms", pre_transfer);
+  set_stream_ms(L, "starttransfer_elapsed_ms", start_transfer);
+  set_stream_ms(L, "total_ms", total);
+  if (redirect_count == 0) {
+    set_stream_ms(L, "dns_ms", name_lookup);
+    set_stream_phase_ms(L, "tcp_connect_ms", name_lookup, connect);
+    set_stream_phase_ms(L, "tls_handshake_ms", connect, app_connect);
+    double setup_base = app_connect > 0.0 ? app_connect : connect;
+    set_stream_phase_ms(L, "request_setup_ms", setup_base, pre_transfer);
+    set_stream_phase_ms(L, "upload_and_server_wait_ms", pre_transfer,
+                        start_transfer);
+    set_stream_phase_ms(L, "download_ms", start_transfer, total);
+  }
+  set_stream_ms(L, "ttfb_ms", start_transfer);
+  lua_pushinteger(L, (lua_Integer)uploaded_bytes);
+  lua_setfield(L, -2, "uploaded_bytes");
+  lua_pushinteger(L, (lua_Integer)downloaded_bytes);
+  lua_setfield(L, -2, "downloaded_bytes");
+  lua_pushinteger(L, (lua_Integer)chunk_count);
+  lua_setfield(L, -2, "chunk_count");
+  lua_pushinteger(L, (lua_Integer)redirect_count);
+  lua_setfield(L, -2, "redirect_count");
+}
+
 int http_poll_limited(lua_State *L, int max_callbacks) {
   if (!multi_handle)
     return 0;
@@ -757,6 +825,19 @@ int http_poll_limited(lua_State *L, int max_callbacks) {
     curl_easy_getinfo(e, CURLINFO_RESPONSE_CODE, &http_status);
     CURLcode curl_rc = msg->data.result;
     int response_mode = found->response_mode;
+    double name_lookup = -1.0, connect = -1.0, app_connect = -1.0;
+    double pre_transfer = -1.0, start_transfer = -1.0, total = -1.0;
+    curl_off_t uploaded_bytes = 0, downloaded_bytes = 0;
+    long redirect_count = 0;
+    curl_easy_getinfo(e, CURLINFO_NAMELOOKUP_TIME, &name_lookup);
+    curl_easy_getinfo(e, CURLINFO_CONNECT_TIME, &connect);
+    curl_easy_getinfo(e, CURLINFO_APPCONNECT_TIME, &app_connect);
+    curl_easy_getinfo(e, CURLINFO_PRETRANSFER_TIME, &pre_transfer);
+    curl_easy_getinfo(e, CURLINFO_STARTTRANSFER_TIME, &start_transfer);
+    curl_easy_getinfo(e, CURLINFO_TOTAL_TIME, &total);
+    curl_easy_getinfo(e, CURLINFO_SIZE_UPLOAD_T, &uploaded_bytes);
+    curl_easy_getinfo(e, CURLINFO_SIZE_DOWNLOAD_T, &downloaded_bytes);
+    curl_easy_getinfo(e, CURLINFO_REDIRECT_COUNT, &redirect_count);
 
     curl_multi_remove_handle(multi_handle, e);
     streams[found_idx] = NULL;
@@ -811,8 +892,16 @@ int http_poll_limited(lua_State *L, int max_callbacks) {
         else
           lua_pushnil(L);
         push_headers_table(L, found->response_headers.data);
-        nargs = 5;
+      } else {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnil(L);
       }
+      push_stream_metadata(L, http_status, curl_rc, name_lookup, connect,
+                           app_connect, pre_transfer, start_transfer, total,
+                           uploaded_bytes, downloaded_bytes, found->chunk_count,
+                           redirect_count);
+      nargs = 6;
     }
 
     int msgh = lua_gettop(L) - nargs - 1;

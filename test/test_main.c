@@ -8,6 +8,7 @@ extern MunitSuite diff_highlight_suite;
 extern MunitSuite finder_suite;
 extern MunitSuite input_suite;
 extern MunitSuite input_history_suite;
+extern MunitSuite jsonl_suite;
 extern MunitSuite linemap_suite;
 extern MunitSuite mode_suite;
 extern MunitSuite permit_logic_suite;
@@ -23,6 +24,7 @@ extern MunitSuite skills_suite;
 extern MunitSuite submission_queue_suite;
 extern MunitSuite tool_status_suite;
 extern MunitSuite tui_layout_suite;
+extern MunitSuite trace_suite;
 extern MunitSuite usage_suite;
 extern MunitSuite utils_suite;
 extern MunitSuite visual_suite;
@@ -38,6 +40,7 @@ int main(int argc, char *argv[]) {
     finder_suite,
     input_suite,
     input_history_suite,
+    jsonl_suite,
     linemap_suite,
     mode_suite,
     permit_logic_suite,
@@ -53,6 +56,7 @@ int main(int argc, char *argv[]) {
     submission_queue_suite,
     tool_status_suite,
     tui_layout_suite,
+    trace_suite,
     usage_suite,
     utils_suite,
     visual_suite,

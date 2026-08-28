@@ -103,6 +103,17 @@ static MunitResult test_run_options(const MunitParameter params[], void *data) {
   return MUNIT_OK;
 }
 
+static MunitResult test_trace_file_option(const MunitParameter params[],
+                                          void *data) {
+  (void)params;
+  (void)data;
+  char *argv[] = {"capstan", "run", "--trace-file", "/tmp/trace.jsonl"};
+  CliOptions opts = cli_parse(4, argv);
+  munit_assert_int(opts.mode, ==, CLI_MODE_RUN);
+  munit_assert_string_equal(opts.trace_file, "/tmp/trace.jsonl");
+  return MUNIT_OK;
+}
+
 static MunitResult test_session_id_requires_value(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -253,6 +264,8 @@ static MunitTest tests[] = {
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/run_options", test_run_options, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/trace_file_option", test_trace_file_option, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/session_id_requires_value", test_session_id_requires_value, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/effort_alias", test_effort_alias, NULL, NULL, MUNIT_TEST_OPTION_NONE,

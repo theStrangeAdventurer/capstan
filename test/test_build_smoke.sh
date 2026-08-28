@@ -36,6 +36,51 @@ printf '%s\n' "$output" | grep -q "self-improvement" && {
   exit 1
 }
 
+trace_file="$rundir/smoke-trace.jsonl"
+trace_stdout="$rundir/smoke-trace-stdout.json"
+if trace_output=$(
+  cd "$rundir"
+  HOME="$homedir" "$bindir/capstan" run --prompt "trace smoke" \
+    --provider smoke-missing --no-mcp --no-wiki --json \
+    --trace-file "$trace_file" 2>/dev/null
+); then
+  echo "unknown provider unexpectedly succeeded in trace smoke" >&2
+  exit 1
+fi
+printf '%s\n' "$trace_output" >"$trace_stdout"
+python3 - "$trace_stdout" "$trace_file" <<'PY'
+import json
+import os
+import stat
+import sys
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+stdout_path, trace_path = sys.argv[1:]
+result = json.loads(open(stdout_path, encoding="utf-8").read())
+require(result["ok"] is False, "trace smoke JSON unexpectedly reports success")
+require(result["text"] == "", "trace smoke JSON unexpectedly contains text")
+require(isinstance(result["error"], str) and result["error"],
+        "trace smoke JSON is missing its error")
+events = [json.loads(line) for line in open(trace_path, encoding="utf-8") if line.strip()]
+require(events and events[0]["event"] == "run.started",
+        "trace smoke is missing its start event")
+require(events[-1]["event"] == "run.finished",
+        "trace smoke is missing its final event")
+require(sum(event["event"] == "run.finished" for event in events) == 1,
+        "trace smoke has multiple terminal events")
+require(events[-1]["data"]["ok"] is False,
+        "trace smoke terminal event unexpectedly reports success")
+require(events[-1]["data"]["intended_exit_code"] == 1,
+        "trace smoke terminal event has the wrong exit code")
+require(stat.S_IMODE(os.stat(trace_path).st_mode) == 0o600,
+        "trace smoke file permissions are not 0600")
+require(not os.path.exists(trace_path + ".partial"),
+        "trace smoke left a partial file after publication")
+PY
+
 if (
   cd "$rundir"
   HOME="$homedir" "$bindir/capstan" run --session-id "smoke session" \

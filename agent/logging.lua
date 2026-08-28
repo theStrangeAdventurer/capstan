@@ -42,7 +42,7 @@ function M.runtime_log(category, message, level)
     if not M.enabled(level or "info") then return end
     if _G.capstan and _G.capstan.log then
         local sanitized = utf8_sanitize.sanitize(redact.text(message or ""))
-        _G.capstan.log(category, sanitized)
+        _G.capstan.log(category, sanitized, normalize_level(level) or "info")
     end
 end
 

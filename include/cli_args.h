@@ -21,6 +21,7 @@ typedef struct {
   const char *workdir;
   const char *workspace;
   const char *session_id;
+  const char *trace_file;
   int max_turns;
   int max_turns_set;
   int json;

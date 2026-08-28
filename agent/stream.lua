@@ -136,7 +136,13 @@ end
 
 -- Parses one raw SSE event line into a typed chunk: text, reasoning, tool_calls, or usage.
 function M.parse_sse_event(raw_event)
-    local data = raw_event:match("^data: (.*)")
+    local data_parts = {}
+    for line in (tostring(raw_event or "") .. "\n"):gmatch("(.-)\n") do
+        local clean_line = line:gsub("\r$", "")
+        local value = clean_line:match("^data:%s?(.*)$")
+        if value ~= nil then table.insert(data_parts, value) end
+    end
+    local data = #data_parts > 0 and table.concat(data_parts, "\n") or nil
     if not data or data == "[DONE]" then return nil end
     local ok, event = pcall(json.decode, data)
     if not ok then
@@ -166,10 +172,10 @@ function M.parse_sse_event(raw_event)
             reasoning_details = delta.reasoning_details,
         }
     end
-    if type(delta.reasoning_details) == "table" then
+    if type(delta.reasoning_details) == "table" and next(delta.reasoning_details) ~= nil then
         return {type = "reasoning", content = "", reasoning_details = delta.reasoning_details}
     end
-    if delta.tool_calls then
+    if type(delta.tool_calls) == "table" and next(delta.tool_calls) ~= nil then
         return {type = "tool_calls", tool_calls = delta.tool_calls}
     end
     if delta.content and delta.content ~= "" then
@@ -206,6 +212,29 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local buffer_text_until_done = minimax_model(provider)
     local finished = false
     local provider_error = nil
+    local final_usage = nil
+    local transport = nil
+    local started_at = (_G.capstan and _G.capstan.now_ms and _G.capstan.now_ms()) or os.clock() * 1000
+    local first_output_ms = nil
+    local first_reasoning_ms = nil
+    local first_text_ms = nil
+    local first_tool_ms = nil
+    local request_outcome = "in_progress"
+
+    local function elapsed_ms()
+        local now = (_G.capstan and _G.capstan.now_ms and _G.capstan.now_ms()) or os.clock() * 1000
+        return math.max(0, math.floor(now - started_at))
+    end
+
+    local function mark_output(kind, visible)
+        local elapsed = elapsed_ms()
+        if not first_output_ms then first_output_ms = elapsed end
+        if kind == "reasoning" and not first_reasoning_ms then first_reasoning_ms = elapsed end
+        if kind == "text" and visible ~= false and not first_text_ms then
+            first_text_ms = elapsed
+        end
+        if kind == "tool" and not first_tool_ms then first_tool_ms = elapsed end
+    end
 
     local function filter_leaked_think(delta, final)
         local s = leaked_think_pending .. (delta or "")
@@ -299,8 +328,13 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             provider_error = provider_error or logging.safe_error(chunk.error, 500)
             logging.runtime_log("stream", "provider_error=" .. provider_error, "error")
         elseif chunk.type == "reasoning" then
-            reasoning_chunks = reasoning_chunks + 1
             local reasoning_content = chunk.content or ""
+            if reasoning_content ~= "" or
+               (type(chunk.reasoning_details) == "table" and
+                next(chunk.reasoning_details) ~= nil) then
+                mark_output("reasoning")
+            end
+            reasoning_chunks = reasoning_chunks + 1
             accumulated_reasoning = accumulated_reasoning .. reasoning_content
             reasoning_token_estimate = reasoning_token_estimate + tokens.estimate_text_tokens(reasoning_content)
             for _, detail in ipairs(chunk.reasoning_details or {}) do
@@ -325,6 +359,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             if content == "" then
                 return
             end
+            mark_output("text", not buffer_text_until_done)
             if reasoning_active then
                 reasoning_active = false
                 if not provider.suppress_agent_state then agent.set_thinking(false) end
@@ -344,7 +379,9 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                 return
             end
             on_result({type = "text", content = content}, false)
-        elseif chunk.type == "tool_calls" then
+        elseif chunk.type == "tool_calls" and type(chunk.tool_calls) == "table" and
+               next(chunk.tool_calls) ~= nil then
+            mark_output("tool")
             tool_delta_chunks = tool_delta_chunks + 1
             for _, tc in ipairs(chunk.tool_calls) do
                 local idx = tc.index or 0
@@ -369,6 +406,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                 ))
             end
         elseif chunk.type == "usage" and chunk.usage then
+            final_usage = chunk.usage
             usage_chunks = usage_chunks + 1
             if not provider.suppress_agent_state then
                 agent.set_usage(
@@ -381,10 +419,38 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
         end
     end
 
-    return function(raw, is_done, err, body, response_headers)
+    local function stream_metrics()
+        return {
+            duration_ms = elapsed_ms(),
+            first_output_ms = first_output_ms,
+            first_reasoning_ms = first_reasoning_ms,
+            first_text_ms = first_text_ms,
+            first_tool_ms = first_tool_ms,
+            events = event_count,
+            raw_bytes = raw_bytes,
+            text_chunks = text_chunks,
+            reasoning_chunks = reasoning_chunks,
+            tool_delta_chunks = tool_delta_chunks,
+            usage_chunks = usage_chunks,
+            usage = final_usage,
+            transport = transport,
+            request_outcome = request_outcome,
+        }
+    end
+
+    local function normalize_sse_buffer(final)
+        local trailing_cr = not final and buf:sub(-1) == "\r"
+        local content = trailing_cr and buf:sub(1, -2) or buf
+        content = content:gsub("\r\n", "\n"):gsub("\r", "\n")
+        buf = content .. (trailing_cr and "\r" or "")
+    end
+
+    return function(raw, is_done, err, body, response_headers, transport_metadata)
         if finished then return end
+        if type(transport_metadata) == "table" then transport = transport_metadata end
         if err then
             finished = true
+            request_outcome = "transport_error"
             if reasoning_active and not provider.suppress_agent_state then agent.set_thinking(false) end
             local msg = logging.safe_error(err, 240)
             local detail = error_detail_from_body(body)
@@ -415,16 +481,18 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             if not provider.suppress_agent_state then
                 popup.error("API Error", msg)
             end
-            on_result({ok = false, error = msg, text = ""}, true)
+            on_result({ok = false, error = msg, text = "", metrics = stream_metrics()}, true)
             return
         end
         if is_done then
             finished = true
+            normalize_sse_buffer(true)
             if reasoning_active then
                 reasoning_active = false
                 if not provider.suppress_agent_state then agent.set_thinking(false) end
             end
             if #buf > 0 then
+                event_count = event_count + 1
                 local chunk = parse_sse_event(buf)
                 if chunk and has_chunk_hooks then
                     local ctx = hooks.run("on_stream_chunk", {
@@ -439,6 +507,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             end
             local remaining_text = filter_leaked_think("", true)
             if remaining_text ~= "" then
+                mark_output("text", not buffer_text_until_done)
                 accumulated_text = accumulated_text .. remaining_text
                 text_token_estimate = text_token_estimate + tokens.estimate_text_tokens(remaining_text)
                 if not buffer_text_until_done then
@@ -488,6 +557,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                 ), "warn")
             end
             if provider_error then
+                request_outcome = "provider_error"
                 logging.runtime_log("stream", string.format(
                     "failed events=%d raw_bytes=%d text_bytes=%d reasoning_bytes=%d error=%s",
                     event_count,
@@ -503,6 +573,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                     reasoning = accumulated_reasoning ~= "" and accumulated_reasoning or nil,
                     reasoning_details = #accumulated_reasoning_details > 0 and
                         accumulated_reasoning_details or nil,
+                    metrics = stream_metrics(),
                 }, true)
                 return
             end
@@ -518,11 +589,29 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             end
             local protocol_error = minimax_text_tool_protocol_error(provider, accumulated_text)
             if #final_calls == 0 and protocol_error then
+                request_outcome = "protocol_error"
                 logging.runtime_log("stream", "minimax_text_tool_call_protocol_error text=" ..
                     logging.compact(accumulated_text, 500))
                 on_result({type = "text", content = "\n[provider error: " .. protocol_error .. "]\n"}, false)
-                on_result({ok = false, error = protocol_error, text = ""}, true)
+                on_result({
+                    ok = false,
+                    error = protocol_error,
+                    text = "",
+                    metrics = stream_metrics(),
+                }, true)
                 return
+            end
+
+            if #final_calls > 0 then
+                request_outcome = "tool_calls"
+            elseif accumulated_text ~= "" then
+                request_outcome = "text"
+            elseif accumulated_reasoning ~= "" then
+                request_outcome = "reasoning_only"
+            elseif incomplete_calls > 0 then
+                request_outcome = "incomplete_tool_call"
+            else
+                request_outcome = "empty"
             end
 
             logging.runtime_log("stream", string.format(
@@ -539,6 +628,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             ))
 
             if buffer_text_until_done and #final_calls == 0 and accumulated_text ~= "" then
+                mark_output("text", true)
                 on_result({type = "text", content = accumulated_text}, false)
             end
             on_result({
@@ -547,16 +637,19 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                 reasoning = accumulated_reasoning ~= "" and accumulated_reasoning or nil,
                 reasoning_details = #accumulated_reasoning_details > 0 and
                     accumulated_reasoning_details or nil,
+                metrics = stream_metrics(),
             }, true)
             return
         end
 
-        raw_bytes = raw_bytes + #(raw or "")
+        local incoming = tostring(raw or "")
+        raw_bytes = raw_bytes + #incoming
         if logging.raw_logging_enabled() then
-            logging.runtime_log("raw_sse", logging.compact(raw, 1200))
+            logging.runtime_log("raw_sse", logging.compact(incoming, 1200))
         end
 
-        buf = buf .. raw
+        buf = buf .. incoming
+        normalize_sse_buffer(false)
         while true do
             local sep = buf:find("\n\n", 1, true)
             if not sep then break end

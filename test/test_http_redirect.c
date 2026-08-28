@@ -19,6 +19,11 @@ static int stream_last_has_body;
 static int stream_last_has_headers;
 static int stream_last_has_request_id;
 static int stream_seen_data;
+static int stream_metadata_status;
+static int stream_metadata_has_ttfb;
+static int stream_metadata_has_tls;
+static int stream_metadata_has_upload_wait;
+static int stream_metadata_redirect_count;
 static int response_done_calls;
 static int response_status;
 static int response_has_session;
@@ -167,7 +172,20 @@ static pid_t start_stream_server(int *port_out, int error_response) {
     int client = accept_one(server_fd);
     if (client >= 0) {
       read_request(client);
-      if (error_response) {
+      if (error_response == 2) {
+        const char *body =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"not output\"}}]}\n\n";
+        char response[512];
+        snprintf(response, sizeof(response),
+                 "HTTP/1.1 500 Internal Server Error\r\n"
+                 "Content-Type: text/event-stream\r\n"
+                 "X-Request-Id: req-empty-body\r\n"
+                 "Content-Length: %zu\r\n"
+                 "Connection: close\r\n"
+                 "\r\n%s",
+                 strlen(body), body);
+        write_all(client, response);
+      } else if (error_response) {
         write_all(client,
                   "HTTP/1.1 400 Bad Request\r\n"
                   "Content-Type: application/json\r\n"
@@ -265,6 +283,25 @@ static int stream_capture_callback(lua_State *L) {
       stream_last_has_request_id =
           lua_isstring(L, -1) &&
           strcmp(lua_tostring(L, -1), "req-empty-body") == 0;
+      lua_pop(L, 1);
+    }
+    if (argc >= 6 && lua_istable(L, 6)) {
+      lua_getfield(L, 6, "http_status");
+      stream_metadata_status =
+          lua_isinteger(L, -1) ? (int)lua_tointeger(L, -1) : 0;
+      lua_pop(L, 1);
+      lua_getfield(L, 6, "ttfb_ms");
+      stream_metadata_has_ttfb = lua_isinteger(L, -1);
+      lua_pop(L, 1);
+      lua_getfield(L, 6, "tls_handshake_ms");
+      stream_metadata_has_tls = !lua_isnil(L, -1);
+      lua_pop(L, 1);
+      lua_getfield(L, 6, "upload_and_server_wait_ms");
+      stream_metadata_has_upload_wait = !lua_isnil(L, -1);
+      lua_pop(L, 1);
+      lua_getfield(L, 6, "redirect_count");
+      stream_metadata_redirect_count =
+          lua_isinteger(L, -1) ? (int)lua_tointeger(L, -1) : -1;
       lua_pop(L, 1);
     }
   }
@@ -372,6 +409,11 @@ static MunitResult test_post_stream_success_done_has_no_error_body(
   stream_last_has_headers = 0;
   stream_last_has_request_id = 0;
   stream_seen_data = 0;
+  stream_metadata_status = 0;
+  stream_metadata_has_ttfb = 0;
+  stream_metadata_has_tls = 0;
+  stream_metadata_has_upload_wait = 0;
+  stream_metadata_redirect_count = -1;
 
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
@@ -400,9 +442,12 @@ static MunitResult test_post_stream_success_done_has_no_error_body(
   munit_assert_int(stream_seen_data, ==, 1);
   munit_assert_int(stream_done_calls, ==, 1);
   munit_assert_int(stream_last_is_done, ==, 1);
-  munit_assert_int(stream_last_argc, ==, 2);
+  munit_assert_int(stream_last_argc, ==, 6);
   munit_assert_int(stream_last_has_err, ==, 0);
   munit_assert_int(stream_last_has_body, ==, 0);
+  munit_assert_int(stream_metadata_status, ==, 200);
+  munit_assert_true(stream_metadata_has_ttfb);
+  munit_assert_false(stream_metadata_has_tls);
 
   http_cleanup();
   lua_close(L);
@@ -412,6 +457,61 @@ static MunitResult test_post_stream_success_done_has_no_error_body(
   munit_assert_true(WIFEXITED(status));
   munit_assert_int(WEXITSTATUS(status), ==, 0);
 
+  return MUNIT_OK;
+}
+
+static MunitResult test_post_stream_redirect_omits_derived_phases(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  int port = 0;
+  pid_t server_pid = start_redirect_server(&port);
+  if (server_pid < 0)
+    return MUNIT_SKIP;
+
+  stream_done_calls = 0;
+  stream_seen_data = 0;
+  stream_metadata_status = 0;
+  stream_metadata_has_ttfb = 0;
+  stream_metadata_has_tls = 0;
+  stream_metadata_has_upload_wait = 0;
+  stream_metadata_redirect_count = -1;
+
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  http_init(L);
+
+  char url[256];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/start", port);
+  lua_getglobal(L, "http");
+  lua_getfield(L, -1, "post_stream");
+  lua_pushstring(L, url);
+  lua_pushstring(L, "{}");
+  lua_newtable(L);
+  lua_pushcfunction(L, stream_capture_callback);
+  int rc = lua_pcall(L, 4, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 2);
+
+  for (int i = 0; i < 100 && stream_done_calls == 0; i++) {
+    http_poll(L);
+    usleep(10000);
+  }
+
+  munit_assert_int(stream_done_calls, ==, 1);
+  munit_assert_int(stream_metadata_status, ==, 200);
+  munit_assert_true(stream_metadata_has_ttfb);
+  munit_assert_int(stream_metadata_redirect_count, ==, 1);
+  munit_assert_false(stream_metadata_has_tls);
+  munit_assert_false(stream_metadata_has_upload_wait);
+
+  http_cleanup();
+  lua_close(L);
+  int status = 0;
+  waitpid(server_pid, &status, 0);
+  munit_assert_true(WIFEXITED(status));
+  munit_assert_int(WEXITSTATUS(status), ==, 0);
   return MUNIT_OK;
 }
 
@@ -433,6 +533,11 @@ static MunitResult test_post_stream_error_returns_response_headers(
   stream_last_has_headers = 0;
   stream_last_has_request_id = 0;
   stream_seen_data = 0;
+  stream_metadata_status = 0;
+  stream_metadata_has_ttfb = 0;
+  stream_metadata_has_tls = 0;
+  stream_metadata_has_upload_wait = 0;
+  stream_metadata_redirect_count = -1;
 
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
@@ -458,7 +563,7 @@ static MunitResult test_post_stream_error_returns_response_headers(
 
   munit_assert_int(stream_done_calls, ==, 1);
   munit_assert_int(stream_last_is_done, ==, 1);
-  munit_assert_int(stream_last_argc, ==, 5);
+  munit_assert_int(stream_last_argc, ==, 6);
   munit_assert_true(stream_last_has_err);
   munit_assert_false(stream_last_has_body);
   munit_assert_true(stream_last_has_headers);
@@ -467,6 +572,55 @@ static MunitResult test_post_stream_error_returns_response_headers(
   http_cleanup();
   lua_close(L);
 
+  int status = 0;
+  waitpid(server_pid, &status, 0);
+  munit_assert_true(WIFEXITED(status));
+  munit_assert_int(WEXITSTATUS(status), ==, 0);
+  return MUNIT_OK;
+}
+
+static MunitResult test_post_stream_error_body_is_not_streamed(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  int port = 0;
+  pid_t server_pid = start_stream_server(&port, 2);
+  if (server_pid < 0)
+    return MUNIT_SKIP;
+
+  stream_done_calls = 0;
+  stream_last_has_err = 0;
+  stream_last_has_body = 0;
+  stream_seen_data = 0;
+
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  http_init(L);
+
+  char url[256];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/stream", port);
+  lua_getglobal(L, "http");
+  lua_getfield(L, -1, "post_stream");
+  lua_pushstring(L, url);
+  lua_pushstring(L, "{}");
+  lua_newtable(L);
+  lua_pushcfunction(L, stream_capture_callback);
+  munit_assert_int(lua_pcall(L, 4, 1, 0), ==, LUA_OK);
+  lua_pop(L, 2);
+
+  for (int i = 0; i < 100 && stream_done_calls == 0; i++) {
+    http_poll(L);
+    usleep(10000);
+  }
+
+  munit_assert_false(stream_seen_data);
+  munit_assert_int(stream_done_calls, ==, 1);
+  munit_assert_true(stream_last_has_err);
+  munit_assert_true(stream_last_has_body);
+
+  http_cleanup();
+  lua_close(L);
   int status = 0;
   waitpid(server_pid, &status, 0);
   munit_assert_true(WIFEXITED(status));
@@ -614,8 +768,14 @@ static MunitTest tests[] = {
     {"/post_stream_success_done_has_no_error_body",
      test_post_stream_success_done_has_no_error_body, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/post_stream_redirect_omits_derived_phases",
+     test_post_stream_redirect_omits_derived_phases, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/post_stream_error_returns_response_headers",
      test_post_stream_error_returns_response_headers, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/post_stream_error_body_is_not_streamed",
+     test_post_stream_error_body_is_not_streamed, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/background_post_response_does_not_set_loading",
      test_background_post_response_does_not_set_loading, NULL, NULL,

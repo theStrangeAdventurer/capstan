@@ -7,6 +7,7 @@
 #include "http.h"
 #include "input.h"
 #include "input_history.h"
+#include "jsonl.h"
 #include "linemap.h"
 #include "log.h"
 #include "mode.h"
@@ -16,6 +17,7 @@
 #include "session.h"
 #include "session_manager.h"
 #include "tui.h"
+#include "trace.h"
 #include "utils.h"
 #include "visual.h"
 #include <lauxlib.h>
@@ -38,10 +40,23 @@ typedef struct {
   size_t cap;
   int done;
   int ok;
+  int model_requests;
+  int tool_calls;
+  int turns;
+  long long duration_ms;
+  int duration_present;
+  long long model_ms;
+  long long tool_ms;
+  long long permission_wait_ms;
+  long long subagent_wait_ms;
+  long long agent_started_ms;
+  long long agent_finished_ms;
+  long long session_save_ms;
   char error[1024];
 } HeadlessRun;
 
 static HeadlessRun g_headless_run = {0};
+static TraceWriter g_headless_trace = TRACE_WRITER_INIT;
 static int g_mouse_selecting_messages = 0;
 
 #define ACTIVE_RENDER_INTERVAL_MS 16
@@ -364,6 +379,7 @@ static void print_help(void) {
   printf("  --yolo             Auto-allow tool calls except explicit denies\n");
   printf("  --benchmark        Isolated workspace-scoped eval mode\n");
   printf("  --json              Print structured JSON result\n");
+  printf("  --trace-file PATH   Write safe structured JSONL run trace\n");
 }
 
 static void headless_append(const char *text) {
@@ -397,6 +413,197 @@ static int l_headless_on_error(lua_State *l) {
   return 0;
 }
 
+static int l_headless_on_model_start(lua_State *l) {
+  int turn = (int)luaL_optinteger(l, 1, 0);
+  int attempt = (int)luaL_optinteger(l, 2, 0);
+  int messages = (int)luaL_optinteger(l, 3, 0);
+  int tools = (int)luaL_optinteger(l, 4, 0);
+  int prompt_tokens = (int)luaL_optinteger(l, 5, 0);
+  const char *provider = luaL_optstring(l, 6, "");
+  const char *model = luaL_optstring(l, 7, "");
+  const char *effort = luaL_optstring(l, 8, "");
+  const char *profile = luaL_optstring(l, 9, "");
+  int preserve_reasoning = lua_toboolean(l, 10);
+  size_t body_bytes = (size_t)luaL_optinteger(l, 11, 0);
+  const char *purpose = luaL_optstring(l, 12, "agent");
+
+  JsonlBuffer data;
+  jsonl_buffer_init(&data);
+  jsonl_append_format(
+      &data,
+      "{\"turn\":%d,\"attempt\":%d,\"messages\":%d,"
+      "\"tools\":%d,\"prompt_tokens_estimate\":%d,\"provider\":",
+      turn, attempt, messages, tools, prompt_tokens);
+  jsonl_append_string(&data, provider);
+  jsonl_append(&data, ",\"model\":");
+  jsonl_append_string(&data, model);
+  jsonl_append(&data, ",\"reasoning_effort\":");
+  if (effort[0])
+    jsonl_append_string(&data, effort);
+  else
+    jsonl_append(&data, "null");
+  jsonl_append(&data, ",\"profile\":");
+  if (profile[0])
+    jsonl_append_string(&data, profile);
+  else
+    jsonl_append(&data, "null");
+  jsonl_append_format(&data,
+                      ",\"preserve_reasoning\":%s,\"body_bytes\":%zu,"
+                      "\"purpose\":",
+                      preserve_reasoning ? "true" : "false", body_bytes);
+  jsonl_append_string(&data, purpose);
+  jsonl_append(&data, "}");
+  int written = !data.failed &&
+                trace_event(&g_headless_trace, "model.request.started",
+                            data.data);
+  jsonl_buffer_free(&data);
+  if (!written)
+    return luaL_error(l, "failed to write model.request.started trace event");
+  return 0;
+}
+
+static void jsonl_append_lua_integer(JsonlBuffer *json, lua_State *l,
+                                     int index, const char *field) {
+  if (!lua_istable(l, index)) {
+    jsonl_append(json, "null");
+    return;
+  }
+  lua_getfield(l, index, field);
+  if (lua_isnumber(l, -1))
+    jsonl_append_format(json, "%lld", (long long)lua_tointeger(l, -1));
+  else
+    jsonl_append(json, "null");
+  lua_pop(l, 1);
+}
+
+static void jsonl_append_lua_object_integer(JsonlBuffer *json, lua_State *l,
+                                            int index, const char *object,
+                                            const char *field) {
+  if (!lua_istable(l, index)) {
+    jsonl_append(json, "null");
+    return;
+  }
+  lua_getfield(l, index, object);
+  jsonl_append_lua_integer(json, l, -1, field);
+  lua_pop(l, 1);
+}
+
+static void jsonl_append_lua_string(JsonlBuffer *json, lua_State *l,
+                                    int index, const char *field) {
+  if (!lua_istable(l, index)) {
+    jsonl_append(json, "null");
+    return;
+  }
+  lua_getfield(l, index, field);
+  if (lua_isstring(l, -1))
+    jsonl_append_string(json, lua_tostring(l, -1));
+  else
+    jsonl_append(json, "null");
+  lua_pop(l, 1);
+}
+
+static int l_headless_on_model_done(lua_State *l) {
+  int turn = (int)luaL_optinteger(l, 1, 0);
+  int attempt = (int)luaL_optinteger(l, 2, 0);
+  int ok = lua_toboolean(l, 3);
+  int duration = (int)luaL_optinteger(l, 4, 0);
+  int text_bytes = (int)luaL_optinteger(l, 5, 0);
+  int reasoning_bytes = (int)luaL_optinteger(l, 6, 0);
+  int tool_calls = (int)luaL_optinteger(l, 7, 0);
+  g_headless_run.model_requests++;
+  g_headless_run.model_ms += duration;
+
+  JsonlBuffer data;
+  jsonl_buffer_init(&data);
+  jsonl_append_format(&data,
+      "{\"turn\":%d,\"attempt\":%d,\"ok\":%s,\"duration_ms\":%d,"
+      "\"request_outcome\":", turn, attempt, ok ? "true" : "false", duration);
+  jsonl_append_lua_string(&data, l, 8, "request_outcome");
+  jsonl_append(&data, ",\"first_output_ms\":");
+  jsonl_append_lua_integer(&data, l, 8, "first_output_ms");
+  jsonl_append(&data, ",\"first_reasoning_ms\":");
+  jsonl_append_lua_integer(&data, l, 8, "first_reasoning_ms");
+  jsonl_append(&data, ",\"first_text_ms\":");
+  jsonl_append_lua_integer(&data, l, 8, "first_text_ms");
+  jsonl_append(&data, ",\"first_tool_ms\":");
+  jsonl_append_lua_integer(&data, l, 8, "first_tool_ms");
+  jsonl_append_format(&data,
+      ",\"text_bytes\":%d,\"reasoning_bytes\":%d,\"tool_calls\":%d,"
+      "\"usage\":{\"prompt_tokens\":", text_bytes, reasoning_bytes, tool_calls);
+  jsonl_append_lua_object_integer(&data, l, 8, "usage", "prompt_tokens");
+  jsonl_append(&data, ",\"completion_tokens\":");
+  jsonl_append_lua_object_integer(&data, l, 8, "usage", "completion_tokens");
+  jsonl_append(&data, ",\"reasoning_tokens\":");
+  jsonl_append_lua_object_integer(&data, l, 8, "usage", "reasoning_tokens");
+  jsonl_append(&data, "},\"transport\":{");
+  const char *fields[][2] = {
+      {"http_status", "http_status"}, {"curl_code", "curl_code"},
+      {"namelookup_elapsed_ms", "namelookup_elapsed_ms"},
+      {"connect_elapsed_ms", "connect_elapsed_ms"},
+      {"appconnect_elapsed_ms", "appconnect_elapsed_ms"},
+      {"pretransfer_elapsed_ms", "pretransfer_elapsed_ms"},
+      {"starttransfer_elapsed_ms", "starttransfer_elapsed_ms"},
+      {"dns_ms", "dns_ms"}, {"tcp_connect_ms", "tcp_connect_ms"},
+      {"tls_handshake_ms", "tls_handshake_ms"},
+      {"request_setup_ms", "request_setup_ms"},
+      {"upload_and_server_wait_ms", "upload_and_server_wait_ms"},
+      {"download_ms", "download_ms"},
+      {"ttfb_ms", "ttfb_ms"}, {"total_ms", "total_ms"},
+      {"uploaded_bytes", "uploaded_bytes"},
+      {"downloaded_bytes", "downloaded_bytes"},
+      {"chunk_count", "chunk_count"}, {"redirect_count", "redirect_count"},
+  };
+  for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+    if (i) jsonl_append(&data, ",");
+    jsonl_append_string(&data, fields[i][0]);
+    jsonl_append(&data, ":");
+    jsonl_append_lua_object_integer(&data, l, 8, "transport", fields[i][1]);
+  }
+  jsonl_append(&data, "}}");
+  int written = !data.failed &&
+                trace_event(&g_headless_trace, "model.request.finished",
+                            data.data);
+  jsonl_buffer_free(&data);
+  if (!written)
+    return luaL_error(l, "failed to write model.request.finished trace event");
+  return 0;
+}
+
+static int l_headless_on_tool_start(lua_State *l) {
+  lua_getfield(l, 1, "name");
+  const char *name = luaL_optstring(l, -1, "unknown");
+  int written = trace_tool_event(&g_headless_trace, "tool.started", name,
+                                 0, 0, 0, 0, 0);
+  lua_pop(l, 1);
+  if (!written)
+    return luaL_error(l, "failed to write tool.started trace event");
+  return 0;
+}
+
+static int l_headless_on_tool_done(lua_State *l) {
+  lua_getfield(l, 1, "name");
+  const char *name = luaL_optstring(l, -1, "unknown");
+  size_t result_size = 0;
+  (void)luaL_optlstring(l, 2, "", &result_size);
+  int ok = lua_toboolean(l, 3);
+  int duration = (int)luaL_optinteger(l, 4, 0);
+  int permission_wait = (int)luaL_optinteger(l, 5, 0);
+  if (permission_wait < 0) permission_wait = 0;
+  if (permission_wait > duration) permission_wait = duration;
+  g_headless_run.tool_calls++;
+  trace_accumulate_tool_breakdown(
+      strcmp(name, "subagents") == 0, duration, permission_wait,
+      &g_headless_run.tool_ms, &g_headless_run.permission_wait_ms,
+      &g_headless_run.subagent_wait_ms);
+  int written = trace_tool_event(&g_headless_trace, "tool.finished", name,
+                                 1, ok, duration, permission_wait,
+                                 result_size);
+  lua_pop(l, 1);
+  if (!written)
+    return luaL_error(l, "failed to write tool.finished trace event");
+  return 0;
+}
+
 static int l_headless_on_done(lua_State *l) {
   g_headless_run.done = 1;
   g_headless_run.ok = 1;
@@ -417,6 +624,19 @@ static int l_headless_on_done(lua_State *l) {
     if (error)
       snprintf(g_headless_run.error, sizeof(g_headless_run.error), "%s",
                error);
+    lua_pop(l, 1);
+
+    lua_getfield(l, 1, "turns");
+    g_headless_run.turns = (int)luaL_optinteger(l, -1, 0);
+    lua_pop(l, 1);
+    lua_getfield(l, 1, "duration_ms");
+    if (lua_isinteger(l, -1)) {
+      lua_Integer duration = lua_tointeger(l, -1);
+      if (duration >= 0) {
+        g_headless_run.duration_ms = (long long)duration;
+        g_headless_run.duration_present = 1;
+      }
+    }
     lua_pop(l, 1);
   }
   return 0;
@@ -655,14 +875,141 @@ static int headless_session_finish(Session *session,
   return ok;
 }
 
+static int finish_headless_trace(const CliOptions *opts, const char *stage) {
+  if (!opts->trace_file)
+    return 1;
+  if (g_headless_trace.state == TRACE_STATE_PUBLISHED)
+    return 1;
+
+  long long now = trace_monotonic_ms();
+  long long process_duration = now - g_headless_trace.started_monotonic_ms;
+  if (process_duration < 0) process_duration = 0;
+  long long agent_wall = 0;
+  if (g_headless_run.agent_started_ms > 0) {
+    long long finished = g_headless_run.agent_finished_ms > 0
+                             ? g_headless_run.agent_finished_ms
+                             : now;
+    agent_wall = finished - g_headless_run.agent_started_ms;
+    if (agent_wall < 0) agent_wall = 0;
+  }
+  long long agent_duration = g_headless_run.duration_present
+                                 ? g_headless_run.duration_ms
+                                 : agent_wall;
+  long long startup = g_headless_run.agent_started_ms > 0
+                          ? g_headless_run.agent_started_ms -
+                                g_headless_trace.started_monotonic_ms
+                          : process_duration;
+  if (startup < 0) startup = 0;
+  long long post_agent = process_duration - startup - agent_wall -
+                         g_headless_run.session_save_ms;
+  long long process_conservation_error = 0;
+  if (post_agent < 0) {
+    process_conservation_error = post_agent;
+    post_agent = 0;
+  }
+
+  long long residual = agent_duration - g_headless_run.model_ms -
+                       g_headless_run.tool_ms -
+                       g_headless_run.permission_wait_ms -
+                       g_headless_run.subagent_wait_ms;
+  long long unattributed = residual >= 0 ? residual : 0;
+  long long conservation_error = residual < 0 ? residual : 0;
+
+  JsonlBuffer data;
+  jsonl_buffer_init(&data);
+  jsonl_append_format(
+      &data,
+      "{\"ok\":%s,\"intended_exit_code\":%d,\"failure_stage\":",
+      g_headless_run.ok ? "true" : "false", g_headless_run.ok ? 0 : 1);
+  jsonl_append_string(&data, stage ? stage : "");
+  jsonl_append_format(
+      &data,
+      ",\"turns\":%d,\"duration_ms\":%lld,"
+      "\"timing\":{\"process_duration_ms\":%lld,\"startup_ms\":%lld,"
+      "\"agent_wall_ms\":%lld,\"agent_runtime_ms\":%lld,"
+      "\"session_save_ms\":%lld,\"post_agent_ms\":%lld,"
+      "\"conservation_error_ms\":%lld},"
+      "\"counts\":{\"model_requests\":%d,\"tool_calls\":%d},"
+      "\"breakdown\":{\"model_ms\":%lld,\"tool_ms\":%lld,"
+      "\"permission_wait_ms\":%lld,\"subagent_wait_ms\":%lld,"
+      "\"unattributed_ms\":%lld,\"conservation_error_ms\":%lld}}",
+      g_headless_run.turns, process_duration, process_duration, startup,
+      agent_wall, agent_duration, g_headless_run.session_save_ms, post_agent,
+      process_conservation_error, g_headless_run.model_requests,
+      g_headless_run.tool_calls, g_headless_run.model_ms,
+      g_headless_run.tool_ms, g_headless_run.permission_wait_ms,
+      g_headless_run.subagent_wait_ms, unattributed, conservation_error);
+
+  int terminal_ok = !data.failed &&
+                    trace_terminal_event(&g_headless_trace, "run.finished",
+                                         data.data);
+  jsonl_buffer_free(&data);
+  char error[256] = "";
+  if (!terminal_ok ||
+      !trace_finish(&g_headless_trace, error, sizeof(error))) {
+    if (!error[0])
+      snprintf(error, sizeof(error), "requested trace terminal event failed");
+    snprintf(g_headless_run.error, sizeof(g_headless_run.error), "%s", error);
+    g_headless_run.ok = 0;
+    return 0;
+  }
+  return 1;
+}
+
+static int fail_headless_trace(const CliOptions *opts, const char *message,
+                               const char *stage) {
+  g_headless_run.ok = 0;
+  snprintf(g_headless_run.error, sizeof(g_headless_run.error), "%s",
+           message ? message : "startup failed");
+  return finish_headless_trace(opts, stage);
+}
+
+static void report_headless_error(const CliOptions *opts) {
+  const char *message = g_headless_run.error[0] ? g_headless_run.error
+                                                : "run failed";
+  if (opts->json)
+    print_json_result(0, "", message);
+  else
+    fprintf(stderr, "capstan: %s\n", message);
+}
+
 static int run_headless(const CliOptions *opts, const char *argv0) {
+  g_headless_run = (HeadlessRun){0};
+  g_headless_trace = (TraceWriter)TRACE_WRITER_INIT;
+  if (opts->trace_file) {
+    char trace_error[512];
+    if (!trace_open(&g_headless_trace, opts->trace_file, trace_error,
+                    sizeof(trace_error))) {
+      if (opts->json)
+        print_json_result(0, "", trace_error);
+      else
+        fprintf(stderr, "capstan: %s\n", trace_error);
+      return 1;
+    }
+    if (!trace_event(&g_headless_trace, "run.started",
+                     opts->benchmark ? "{\"kind\":\"benchmark\"}"
+                                     : "{\"kind\":\"headless\"}")) {
+      char finish_error[256] = "";
+      (void)trace_finish(&g_headless_trace, finish_error,
+                         sizeof(finish_error));
+      snprintf(g_headless_run.error, sizeof(g_headless_run.error), "%s",
+               finish_error[0] ? finish_error
+                               : "requested trace could not write run.started");
+      report_headless_error(opts);
+      return 1;
+    }
+  }
+
   char *owned_prompt = NULL;
   const char *prompt = opts->prompt;
   if (!prompt && opts->prompt_file) {
     owned_prompt = read_file_prompt(opts->prompt_file);
     if (!owned_prompt) {
-      fprintf(stderr, "capstan: cannot read prompt file: %s\n",
-              opts->prompt_file);
+      char message[512];
+      snprintf(message, sizeof(message), "cannot read prompt file: %s",
+               opts->prompt_file);
+      (void)fail_headless_trace(opts, message, "prompt");
+      report_headless_error(opts);
       return 1;
     }
     prompt = owned_prompt;
@@ -671,19 +1018,27 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
     prompt = owned_prompt;
   }
   if (!prompt || !prompt[0]) {
-    fprintf(stderr, "capstan: run requires --prompt, --prompt-file, or stdin\n");
+    const char *message = "run requires --prompt, --prompt-file, or stdin";
+    (void)fail_headless_trace(opts, message, "prompt");
+    report_headless_error(opts);
     free(owned_prompt);
     return 1;
   }
 
   app_workdir_init(argv0);
   if (opts->workdir && !app_workdir_set(opts->workdir)) {
-    fprintf(stderr, "capstan: invalid --workdir: %s\n", opts->workdir);
+    char message[512];
+    snprintf(message, sizeof(message), "invalid --workdir: %s", opts->workdir);
+    (void)fail_headless_trace(opts, message, "workdir");
+    report_headless_error(opts);
     free(owned_prompt);
     return 1;
   }
   if (opts->workspace && !app_workspace_set(opts->workspace)) {
-    fprintf(stderr, "capstan: invalid --workspace: %s\n", opts->workspace);
+    char message[512];
+    snprintf(message, sizeof(message), "invalid --workspace: %s", opts->workspace);
+    (void)fail_headless_trace(opts, message, "workspace");
+    report_headless_error(opts);
     free(owned_prompt);
     return 1;
   }
@@ -699,10 +1054,8 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   char session_error[256] = "";
   if (!headless_session_begin(opts, prompt, &headless_session, session_error,
                               sizeof(session_error))) {
-    if (opts->json)
-      print_json_result(0, "", session_error);
-    else
-      fprintf(stderr, "capstan: %s\n", session_error);
+    (void)fail_headless_trace(opts, session_error, "session");
+    report_headless_error(opts);
     plugins_cleanup();
     free(owned_prompt);
     return 1;
@@ -764,14 +1117,25 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   lua_setfield(L, -2, "on_error");
   lua_pushcfunction(L, l_headless_on_done);
   lua_setfield(L, -2, "on_done");
+  lua_pushcfunction(L, l_headless_on_model_start);
+  lua_setfield(L, -2, "on_model_start");
+  lua_pushcfunction(L, l_headless_on_model_done);
+  lua_setfield(L, -2, "on_model_done");
+  lua_pushcfunction(L, l_headless_on_tool_start);
+  lua_setfield(L, -2, "on_tool_start");
+  lua_pushcfunction(L, l_headless_on_tool_done);
+  lua_setfield(L, -2, "on_tool_done");
 
+  g_headless_run.agent_started_ms = trace_monotonic_ms();
   if (lua_pcall(L, 2, 2, 0) != LUA_OK) {
     const char *message = lua_tostring(L, -1);
-    if (opts->json)
-      print_json_result(0, "", message);
-    else
-      fprintf(stderr, "capstan: %s\n", message);
+    snprintf(g_headless_run.error, sizeof(g_headless_run.error), "%s",
+             message ? message : "run failed");
     lua_pop(L, 1);
+    g_headless_run.agent_finished_ms = trace_monotonic_ms();
+    g_headless_run.ok = 0;
+    (void)finish_headless_trace(opts, "start");
+    report_headless_error(opts);
     plugins_cleanup();
     session_free(&headless_session);
     free(owned_prompt);
@@ -779,13 +1143,17 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   }
   int started = lua_toboolean(L, -2);
   const char *start_err = lua_tostring(L, -1);
+  char start_error[1024];
+  snprintf(start_error, sizeof(start_error), "%s",
+           start_err ? start_err : "run failed");
   lua_pop(L, 4);
   if (!started) {
-    const char *message = start_err ? start_err : "run failed";
-    if (opts->json)
-      print_json_result(0, "", message);
-    else
-      fprintf(stderr, "capstan: %s\n", message);
+    snprintf(g_headless_run.error, sizeof(g_headless_run.error), "%s",
+             start_error);
+    g_headless_run.agent_finished_ms = trace_monotonic_ms();
+    g_headless_run.ok = 0;
+    (void)finish_headless_trace(opts, "dispatch");
+    report_headless_error(opts);
     plugins_cleanup();
     session_free(&headless_session);
     free(owned_prompt);
@@ -802,13 +1170,19 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
              "agent stream ended without completion");
     g_headless_run.ok = 0;
   }
+  g_headless_run.agent_finished_ms = trace_monotonic_ms();
 
-  if (!headless_session_finish(&headless_session, &g_headless_run) &&
-      g_headless_run.ok) {
+  long long session_started_ms = trace_monotonic_ms();
+  int session_saved = headless_session_finish(&headless_session,
+                                               &g_headless_run);
+  g_headless_run.session_save_ms = trace_monotonic_ms() - session_started_ms;
+  if (!session_saved && g_headless_run.ok) {
     snprintf(g_headless_run.error, sizeof(g_headless_run.error),
              "agent completed but session could not be saved");
     g_headless_run.ok = 0;
   }
+
+  (void)finish_headless_trace(opts, g_headless_run.ok ? "" : "completion");
 
   if (opts->json) {
     print_json_result(g_headless_run.ok, g_headless_run.text,

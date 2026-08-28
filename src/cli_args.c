@@ -106,6 +106,10 @@ CliOptions cli_parse(int argc, char **argv) {
       opts.session_id = next_value(argc, argv, &i);
       if (!opts.session_id)
         opts.error = "--session-id requires a value";
+    } else if (is_flag(arg, "--trace-file")) {
+      opts.trace_file = next_value(argc, argv, &i);
+      if (!opts.trace_file)
+        opts.error = "--trace-file requires a value";
     } else if (is_flag(arg, "--max-turns")) {
       const char *value = next_value(argc, argv, &i);
       if (!value) {
@@ -162,9 +166,10 @@ CliOptions cli_parse(int argc, char **argv) {
   }
 
   if (opts.mode == CLI_MODE_TUI &&
-      (opts.prompt || opts.prompt_file || opts.json || opts.benchmark)) {
+      (opts.prompt || opts.prompt_file || opts.json || opts.benchmark ||
+       opts.trace_file)) {
     opts.mode = CLI_MODE_ERROR;
-    opts.error = "--prompt, --prompt-file, --json, and --benchmark require capstan run";
+    opts.error = "--prompt, --prompt-file, --json, --benchmark, and --trace-file require capstan run";
   }
 
   return opts;

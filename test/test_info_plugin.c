@@ -66,6 +66,17 @@ static int l_get_profile(lua_State *L) {
   return 1;
 }
 
+static int l_profiles(lua_State *L) {
+  lua_newtable(L);
+  lua_pushstring(L, "fast");
+  lua_rawseti(L, -2, 1);
+  lua_pushstring(L, "implement");
+  lua_rawseti(L, -2, 2);
+  lua_pushstring(L, "plan");
+  lua_rawseti(L, -2, 3);
+  return 1;
+}
+
 static int l_reasoning_effort(lua_State *L) {
   const char *profile = luaL_checkstring(L, 1);
   if (strcmp(profile, "fast") == 0)
@@ -120,6 +131,8 @@ static lua_State *new_state(void) {
   lua_newtable(L);
   lua_pushcfunction(L, l_get_profile);
   lua_setfield(L, -2, "get_profile");
+  lua_pushcfunction(L, l_profiles);
+  lua_setfield(L, -2, "profiles");
   lua_pushcfunction(L, l_reasoning_effort);
   lua_setfield(L, -2, "reasoning_effort");
   lua_setfield(L, -2, "agent");

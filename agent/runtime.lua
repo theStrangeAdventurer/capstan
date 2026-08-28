@@ -546,7 +546,8 @@ function M.run(opts, callbacks)
 
     -- One turn of the agent cycle: sends the request, streams the response,
     -- and either finishes or recurses into handle_tool_calls.
-    local function continue_agent_cycle(current_msgs, tools)
+    local function continue_agent_cycle(current_msgs, tools, cycle_kind)
+        cycle_kind = cycle_kind or "agent"
         if finished then return end
         if is_cancelled() then
             finished = true
@@ -568,6 +569,7 @@ function M.run(opts, callbacks)
         local defer_visible_text = review_enabled and run_state.workspace_mutated
         local stream_attempt = 0
         local stream_emitted_text = false
+        local model_started_at = nil
         local start_stream
 
         local function publish_text(text)
@@ -604,6 +606,26 @@ function M.run(opts, callbacks)
                     end
                 end
                 return
+            end
+
+            if type(callbacks.on_model_done) == "function" then
+                local observer_ok, observer_error = pcall(
+                    callbacks.on_model_done,
+                    turns,
+                    stream_attempt,
+                    result.ok ~= false,
+                    math.max(0, math.floor(now_ms() - (model_started_at or now_ms()))),
+                    #(result.text or ""),
+                    #(result.reasoning or ""),
+                    #(result.tool_calls or {}),
+                    result.metrics)
+                if not observer_ok then
+                    stop_run(
+                        "observability callback on_model_done failed: " ..
+                            tostring(observer_error),
+                        current_msgs)
+                    return
+                end
             end
 
             if result.ok == false then
@@ -691,7 +713,7 @@ function M.run(opts, callbacks)
                         table.insert(current_msgs, {role = "user", content = empty_terminal_instruction})
                         logging.runtime_log("agent", "empty terminal response; requesting finalization attempt=1/1", "warn")
                         publish_status("\n⚙ Finalizing response\n\n")
-                        continue_agent_cycle(current_msgs, tools)
+                        continue_agent_cycle(current_msgs, tools, "empty_response_retry")
                         return
                     end
                     local message = "Provider returned an empty terminal response twice"
@@ -723,7 +745,7 @@ function M.run(opts, callbacks)
                     table.insert(current_msgs, {role = "user", content = completion_review_instruction})
                     logging.runtime_log("agent", "completion_review started")
                     publish_status("\n⚙ Completion review\n\n")
-                    continue_agent_cycle(current_msgs, tools)
+                    continue_agent_cycle(current_msgs, tools, "completion_review")
                     return
                 end
                 if defer_visible_text then
@@ -819,10 +841,34 @@ function M.run(opts, callbacks)
 
         start_stream = function()
             stream_attempt = stream_attempt + 1
-            http.post_stream(endpoint, body, headers,
-                stream.stream(active, on_result, prompt_estimate, opts),
+            model_started_at = now_ms()
+            if type(callbacks.on_model_start) == "function" then
+                local observer_ok, observer_error = pcall(
+                    callbacks.on_model_start,
+                    turns, stream_attempt, #current_msgs, #tools, prompt_estimate,
+                    provider_name, active.model or "", effort,
+                    profile and profile.name or nil, preserve_reasoning,
+                    #body, cycle_kind)
+                if not observer_ok then
+                    stop_run(
+                        "observability callback on_model_start failed: " ..
+                            tostring(observer_error),
+                        current_msgs)
+                    return
+                end
+            end
+            local response_callback = stream.stream(
+                active, on_result, prompt_estimate, opts)
+            local transport_ok, transport_error = pcall(
+                http.post_stream,
+                endpoint, body, headers, response_callback,
                 stream_timeout_sec * 1000,
                 {background = opts.background == true})
+            if not transport_ok then
+                response_callback(
+                    nil, true,
+                    "HTTP stream setup failed: " .. tostring(transport_error))
+            end
         end
         start_stream()
     end

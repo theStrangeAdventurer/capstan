@@ -64,16 +64,22 @@ below. Inspect the complete plan first; this does not call a model:
 python3 benchmarks/polyglot/scripts/run_eval.py \
   --corpus benchmarks/work/polyglot-benchmark \
   --output /tmp/capstan-polyglot-r1 \
+  --replicate-id r1 \
+  --comparison-id deepseek-v4-pro-medium-openrouter \
   --timeout 240 \
-  --agent-command '{repo_root}/build/capstan run --benchmark --no-wiki --provider openrouter --model deepseek/deepseek-v4-pro --profile implement --reasoning-effort medium --max-turns 40 --prompt-file {prompt_file} --workdir {workdir} --workspace {workdir} --json' \
+  --agent-command '{repo_root}/build/capstan run --benchmark --no-wiki --provider openrouter --model deepseek/deepseek-v4-pro --profile implement --reasoning-effort medium --max-turns 40 --prompt-file {prompt_file} --workdir {workdir} --workspace {workdir} --json --trace-file {trace_file}' \
   --dry-run
 ```
 
 `{repo_root}` expands to the absolute path of this Capstan clone, so the command
 works from each temporary task workspace. Remove `--dry-run` to execute the 12
-tasks. Use a fresh, empty `--output` directory for every run. Repeat complete
-runs in fresh `r1`, `r2`, and `r3` directories; do not selectively rerun failed
-tasks.
+tasks. A command that cannot be spawned is a harness configuration error and
+aborts the run before scoring; a spawned agent's nonzero exit is recorded per
+task. Use a fresh, empty `--output` directory for every run. Repeat complete
+runs in fresh `r1`, `r2`, and `r3` directories, passing the matching
+`--replicate-id` to every agent's corresponding repetition. Use the same
+`--comparison-id` only when provider route, model, reasoning, task matrix, and
+timeouts are intentionally comparable; do not selectively rerun failed tasks.
 
 The harness gives the agent only public task instructions, removes `.meta` and
 `.docs` from its workspace, copies only declared solution files into a fresh
@@ -91,6 +97,8 @@ surfaces, and limits the run to the disposable task workspace.
 python3 benchmarks/polyglot/scripts/run_eval.py \
   --corpus benchmarks/work/polyglot-benchmark \
   --output /tmp/opencode-polyglot-r1 \
+  --replicate-id r1 \
+  --comparison-id deepseek-v4-pro-medium-openrouter \
   --timeout 240 \
   --agent-command 'python3 {repo_root}/benchmarks/polyglot/scripts/run_opencode.py --prompt-file {prompt_file} --workdir {workdir} --model openrouter/deepseek/deepseek-v4-pro --reasoning-effort medium' \
   --dry-run

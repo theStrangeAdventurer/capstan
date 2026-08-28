@@ -23,6 +23,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 lua_State *L = NULL;
@@ -450,10 +451,11 @@ static int l_capstan_state_ensure_dir(lua_State *l) {
 }
 
 static int l_capstan_now_ms(lua_State *l) {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  lua_pushnumber(l, (lua_Number)tv.tv_sec * 1000.0 +
-                        (lua_Number)tv.tv_usec / 1000.0);
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    return luaL_error(l, "monotonic clock is unavailable");
+  lua_pushnumber(l, (lua_Number)now.tv_sec * 1000.0 +
+                        (lua_Number)now.tv_nsec / 1000000.0);
   return 1;
 }
 

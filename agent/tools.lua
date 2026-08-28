@@ -359,8 +359,9 @@ local function permission_prompt(run_ctx, permission_tool, target, details)
         "tool=%s target=%s prompt_wait_ms=%d",
         tostring(permission_tool), tostring(target), math.floor(paused_ms)
     ))
-    if not ok then error(decision, 0) end
-    return decision
+    local measured_ms = math.max(0, math.floor(paused_ms))
+    if not ok then return nil, measured_ms, decision end
+    return decision, measured_ms, nil
 end
 
 local function guard_before_tool(tool_name, args, run_ctx)
@@ -1340,14 +1341,72 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
     for _, tc in ipairs(tool_calls) do
         local result_content
         local event_ok = false
+        local permission_wait_ms = 0
+        local tool_started_at = nil
         local callbacks = run_ctx and run_ctx.callbacks or nil
-        if callbacks and type(callbacks.on_tool_start) == "function" then
-            local callback_ok, callback_err = pcall(callbacks.on_tool_start, tc)
-            if not callback_ok then
-                logging.runtime_log("tool_event", "on_tool_start failed: " .. tostring(callback_err), "warn")
+        local event_tool_call = {
+            id = tc.id,
+            name = tc.name,
+            arguments = tc.arguments,
+            original_name = tc.name,
+            original_arguments = tc.arguments,
+        }
+        local event_started = false
+        local observer_aborted = false
+        local stop_after_event = false
+
+        local function observer_failed(name, observer_error)
+            local message = "observability callback " .. name ..
+                " failed: " .. tostring(observer_error)
+            logging.runtime_log("tool_event", message, "error")
+            observer_aborted = true
+            if run_ctx and type(run_ctx.stop_run) == "function" then
+                run_ctx.stop_run(message, current_msgs)
             end
+            return false
         end
+
+        local function start_tool_event(name, arguments)
+            if event_started then return true end
+            event_started = true
+            event_tool_call.name = name or tc.name
+            if arguments ~= nil then
+                event_tool_call.effective_arguments = arguments
+            end
+            tool_started_at = now_ms()
+            if callbacks and type(callbacks.on_tool_start) == "function" then
+                local ok, observer_error = pcall(
+                    callbacks.on_tool_start, event_tool_call)
+                if not ok then
+                    return observer_failed("on_tool_start", observer_error)
+                end
+            end
+            return true
+        end
+
+        local event_finished = false
+        local function finish_tool_event()
+            if event_finished then return true end
+            if not event_started and not start_tool_event(tc.name) then
+                return false
+            end
+            event_finished = true
+            if callbacks and type(callbacks.on_tool_done) == "function" then
+                local ok, observer_error = pcall(
+                    callbacks.on_tool_done,
+                    event_tool_call, tool_result_text(result_content), event_ok,
+                    math.max(0, math.floor(now_ms() - tool_started_at)),
+                    permission_wait_ms)
+                if not ok then
+                    return observer_failed("on_tool_done", observer_error)
+                end
+            end
+            return true
+        end
+
+        local body_ok, body_error = xpcall(function()
         if not tool_available(combined_tools, tc.name) then
+            if not start_tool_event(tc.name) then return end
             result_content = "Tool " .. tostring(tc.name) .. " is not available in the active profile"
             logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tc.name)))
             append_status(string.format("\n\n⚙ %s: unavailable — denied\n\n", tostring(tc.name)))
@@ -1355,6 +1414,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
             local args, decode_err = decode_tool_arguments(tc.arguments, run_ctx)
 
             if decode_err then
+                if not start_tool_event(tc.name) then return end
                 result_content = decode_err
                 logging.runtime_log("tool", string.format("invalid_args name=%s error=%s", tc.name, logging.compact(decode_err, 240)))
                 append_status(string.format("\n\n⚙ %s: invalid arguments — error: %s\n\n", tc.name, logging.compact(decode_err, 160)))
@@ -1381,6 +1441,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                     target = tool_call_target(tool_name, args)
                     permission_tool = tool_permission_name(tool_name, run_ctx)
                 end
+                if not start_tool_event(tool_name, args) then return end
 
                 if not tool_available(combined_tools, tool_name) then
                     result_content = "Tool " .. tostring(tool_name) .. " is not available in the active profile"
@@ -1395,11 +1456,8 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                     end
                     local guard_error = guard_before_tool(tool_name, args, run_ctx)
                     if guard_error then
-                        if run_ctx and type(run_ctx.stop_run) == "function" then
-                            run_ctx.stop_run(guard_error, current_msgs)
-                        else
-                            logging.runtime_log("tool_guard", logging.compact(guard_error, 500))
-                        end
+                        result_content = guard_error
+                        stop_after_event = true
                         return
                     end
                     local display_target = tool_display_target(tool_name, args, target)
@@ -1454,11 +1512,13 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             result_content = shell_scope_reason or ("Permission denied for " .. tool_name .. " " .. target)
                             if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
                         elseif perm == "ask" then
-                            local decision = permission_prompt(run_ctx, permission_tool, target, {
+                            local decision, prompt_wait_ms, prompt_error = permission_prompt(run_ctx, permission_tool, target, {
                                 tool_name = tool_name,
                                 arguments = args,
                                 tool_call_id = tc.id,
                             })
+                            permission_wait_ms = permission_wait_ms + prompt_wait_ms
+                            if prompt_error ~= nil then error(prompt_error, 0) end
                             logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
                             if decision == "deny" then
                                 result_content = "User denied " .. tool_name .. " " .. target
@@ -1518,13 +1578,25 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 end
             end
         end
+        end, function(err)
+            return debug.traceback(tostring(err), 2)
+        end)
 
-        if callbacks and type(callbacks.on_tool_done) == "function" then
-            local callback_ok, callback_err = pcall(
-                callbacks.on_tool_done, tc, tool_result_text(result_content), event_ok)
-            if not callback_ok then
-                logging.runtime_log("tool_event", "on_tool_done failed: " .. tostring(callback_err), "warn")
+        if observer_aborted then return end
+        if not body_ok then
+            event_ok = false
+            result_content = "Tool " .. tostring(event_tool_call.name) ..
+                " failed: " .. tostring(body_error)
+        end
+        if not finish_tool_event() then return end
+        if not body_ok then error(body_error, 0) end
+        if stop_after_event then
+            if run_ctx and type(run_ctx.stop_run) == "function" then
+                run_ctx.stop_run(result_content, current_msgs)
+            else
+                logging.runtime_log("tool_guard", logging.compact(result_content, 500))
             end
+            return
         end
 
         if result_content then

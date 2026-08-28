@@ -270,6 +270,9 @@ local function parse_command(text)
 end
 
 local function tool_arguments(tool_call)
+    if type(tool_call.effective_arguments) == "table" then
+        return tool_call.effective_arguments
+    end
     if type(tool_call.arguments) == "table" then return tool_call.arguments end
     if type(tool_call.arguments) == "string" then
         local ok, decoded = pcall(json.decode, tool_call.arguments)

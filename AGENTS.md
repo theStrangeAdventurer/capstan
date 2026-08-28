@@ -295,6 +295,7 @@ Feature specs:
 - [File write plugin](specs/file-write-plugin.md)
 - [Models command](specs/models-command.md)
 - [OAuth auth](specs/oauth-auth.md)
+- [Observability](specs/observability.md)
 - [Permissions](specs/permissions.md)
 - [Queued input](specs/queued-input.md)
 - [Runtime logs](specs/runtime-logs.md)

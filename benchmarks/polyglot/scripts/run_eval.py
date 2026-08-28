@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import math
 import os
 import re
 import shlex
@@ -81,8 +82,38 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated language/exercise IDs; defaults to mini-v2",
     )
     parser.add_argument("--allow-corpus-drift", action="store_true")
+    parser.add_argument(
+        "--replicate-id",
+        help="Stable repetition ID shared by agents, for example r1, r2, or r3",
+    )
+    parser.add_argument(
+        "--comparison-id",
+        help="Shared provider/model/reasoning configuration ID for paired agent comparisons",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
+
+
+def inferred_replicate_id(output: Path) -> str | None:
+    match = re.search(r"(?:^|[-_])(r[0-9]+)$", output.name, re.IGNORECASE)
+    return match.group(1).lower() if match else None
+
+
+def selected_task_ids(value: str | None) -> tuple[str, ...]:
+    if value is None:
+        return DEFAULT_TASKS
+    task_ids = tuple(part.strip() for part in value.split(","))
+    if any(not task_id for task_id in task_ids):
+        raise RuntimeError("--tasks must contain non-empty task IDs")
+    if len(set(task_ids)) != len(task_ids):
+        raise RuntimeError("--tasks must not contain duplicates")
+    return task_ids
+
+
+def validate_timeout(name: str, value: int) -> int:
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero")
+    return value
 
 
 def checked_output(args: list[str], cwd: Path) -> str:
@@ -359,13 +390,237 @@ def run_process(command: list[str], cwd: Path, timeout: int, log_path: Path) -> 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def render_agent_command(template: str, prompt_file: Path, work: Path) -> list[str]:
+def _plain_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _nonnegative_number(value: object) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and value >= 0)
+
+
+def _trace_error(status: str, source: Path, message: str, **details) -> dict:
+    return {
+        "status": status,
+        "complete": False,
+        "partial": status == "partial",
+        "source": str(source),
+        "error": message,
+        **details,
+    }
+
+
+def _validate_terminal_data(data: dict) -> None:
+    if "ok" in data and not isinstance(data["ok"], bool):
+        raise ValueError("terminal ok must be boolean")
+    if "intended_exit_code" in data and not _plain_int(data["intended_exit_code"]):
+        raise ValueError("terminal intended_exit_code must be an integer")
+    if "turns" in data and (not _plain_int(data["turns"]) or data["turns"] < 0):
+        raise ValueError("terminal turns must be a non-negative integer")
+    if "duration_ms" in data and not _nonnegative_number(data["duration_ms"]):
+        raise ValueError("terminal duration_ms must be non-negative")
+
+    counts = data.get("counts")
+    if counts is not None:
+        if not isinstance(counts, dict):
+            raise ValueError("terminal counts must be an object")
+        for key, value in counts.items():
+            if not _plain_int(value) or value < 0:
+                raise ValueError(f"terminal counts.{key} must be a non-negative integer")
+
+    for container_name in ("timing", "breakdown"):
+        container = data.get(container_name)
+        if container is None:
+            continue
+        if not isinstance(container, dict):
+            raise ValueError(f"terminal {container_name} must be an object")
+        for key, value in container.items():
+            if key == "conservation_error_ms":
+                if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                        or not math.isfinite(value)):
+                    raise ValueError("conservation error must be finite numeric")
+            elif not _nonnegative_number(value):
+                raise ValueError(f"terminal {container_name}.{key} must be non-negative")
+
+
+def _validate_event_lifecycle(events: list[dict]) -> None:
+    if events[0]["event"] != "run.started":
+        raise ValueError("trace must start with run.started")
+    if sum(event["event"] == "run.started" for event in events) != 1:
+        raise ValueError("trace must contain exactly one run.started")
+
+    active_kind = None
+    active_identity = None
+    for event in events:
+        name = event["event"]
+        data = event["data"]
+        if name in ("model.request.started", "model.request.finished"):
+            turn = data.get("turn")
+            attempt = data.get("attempt")
+            if (not _plain_int(turn) or turn < 0 or
+                    not _plain_int(attempt) or attempt < 0):
+                raise ValueError("model lifecycle event has invalid identity")
+            identity = (turn, attempt)
+            if name.endswith(".started"):
+                if active_kind is not None:
+                    raise ValueError("overlapping model/tool lifecycle events")
+                active_kind = "model"
+                active_identity = identity
+            elif active_kind != "model" or active_identity != identity:
+                raise ValueError("unmatched model.request.finished event")
+            else:
+                active_kind = None
+                active_identity = None
+        elif name in ("tool.started", "tool.finished"):
+            tool_name = data.get("name")
+            if not isinstance(tool_name, str) or not tool_name:
+                raise ValueError("tool lifecycle event has invalid identity")
+            if name.endswith(".started"):
+                if active_kind is not None:
+                    raise ValueError("overlapping model/tool lifecycle events")
+                active_kind = "tool"
+                active_identity = tool_name
+            elif active_kind != "tool" or active_identity != tool_name:
+                raise ValueError("unmatched tool.finished event")
+            else:
+                active_kind = None
+                active_identity = None
+    if active_kind is not None:
+        raise ValueError(f"unfinished {active_kind} lifecycle event")
+
+
+def load_trace_summary(path: Path) -> dict | None:
+    partial_path = Path(str(path) + ".partial")
+    source = partial_path if partial_path.is_file() else path
+    if not source.is_file():
+        return None
+    is_partial = source == partial_path
+    try:
+        content = source.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return _trace_error("corrupt", source, "trace is not readable UTF-8")
+
+    truncated_tail = bool(content) and not content.endswith("\n")
+    if truncated_tail:
+        if not is_partial:
+            return _trace_error("corrupt", source,
+                                "published trace has an unterminated record")
+        content = content.rsplit("\n", 1)[0] + ("\n" if "\n" in content else "")
+
+    events = []
+    try:
+        for line in content.splitlines():
+            event = json.loads(line)
+            if (not isinstance(event, dict)
+                    or event.get("schema") != "capstan.trace.v1"
+                    or not _plain_int(event.get("seq"))
+                    or not _nonnegative_number(event.get("timestamp_ms"))
+                    or not _nonnegative_number(event.get("elapsed_ms"))
+                    or not isinstance(event.get("run_id"), str)
+                    or not event.get("run_id")
+                    or not isinstance(event.get("event"), str)
+                    or not event.get("event")
+                    or not isinstance(event.get("data"), dict)):
+                raise ValueError("trace event has an invalid schema or field type")
+            events.append(event)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return _trace_error("corrupt", source, "invalid trace event")
+
+    if not events:
+        if is_partial:
+            return _trace_error("partial", source, "trace was not finalized",
+                                observed_events=0,
+                                truncated_tail=truncated_tail)
+        return _trace_error("corrupt", source, "empty published trace")
+
+    run_ids = {event["run_id"] for event in events}
+    sequences = [event["seq"] for event in events]
+    elapsed = [event["elapsed_ms"] for event in events]
+    if (len(run_ids) != 1 or sequences != list(range(1, len(events) + 1))
+            or elapsed != sorted(elapsed)):
+        return _trace_error("corrupt", source,
+                            "invalid trace sequence, run ID, or elapsed time")
+
+    terminals = [event for event in events if event["event"] == "run.finished"]
+    if is_partial:
+        return _trace_error(
+            "partial", source, "trace was not finalized",
+            observed_events=len(events), last_seq=events[-1]["seq"],
+            last_elapsed_ms=events[-1]["elapsed_ms"],
+            truncated_tail=truncated_tail,
+        )
+    if len(terminals) != 1 or events[-1] is not terminals[0]:
+        return _trace_error("corrupt", source,
+                            "published trace lacks one final terminal event")
+
+    terminal = terminals[0]["data"]
+    try:
+        _validate_event_lifecycle(events)
+        _validate_terminal_data(terminal)
+        counts = terminal.get("counts", {})
+        expected_models = counts.get("model_requests")
+        expected_tools = counts.get("tool_calls")
+        finished_models = sum(event["event"] == "model.request.finished"
+                              for event in events)
+        finished_tools = sum(event["event"] == "tool.finished"
+                             for event in events)
+        if expected_models is not None and expected_models != finished_models:
+            raise ValueError("model request count does not match events")
+        if expected_tools is not None and expected_tools != finished_tools:
+            raise ValueError("tool call count does not match events")
+    except (ValueError, TypeError):
+        return _trace_error("corrupt", source, "invalid terminal trace summary")
+
+    return {
+        "status": "complete",
+        "complete": True,
+        "partial": False,
+        "source": str(source),
+        "observed_events": len(events),
+        "run_id": events[0]["run_id"],
+        "terminal": terminal,
+    }
+
+
+def reconcile_process_telemetry(
+    telemetry: dict | None, *, timed_out: bool, return_code: int
+) -> dict | None:
+    if not isinstance(telemetry, dict) or telemetry.get("complete") is not True:
+        return telemetry
+    terminal = telemetry.get("terminal")
+    reason = None
+    if timed_out:
+        reason = "process timed out after publishing a terminal trace"
+    elif not isinstance(terminal, dict):
+        reason = "complete trace has no terminal payload"
+    else:
+        expected_ok = return_code == 0
+        if terminal.get("ok") is not expected_ok:
+            reason = "terminal ok does not match process return code"
+        elif terminal.get("intended_exit_code") != return_code:
+            reason = "terminal intended_exit_code does not match process return code"
+    if reason is None:
+        return telemetry
+
+    inconsistent = dict(telemetry)
+    inconsistent.update({
+        "status": "inconsistent",
+        "complete": False,
+        "partial": False,
+        "error": reason,
+    })
+    return inconsistent
+
+
+def render_agent_command(
+    template: str, prompt_file: Path, work: Path, trace_file: Path
+) -> list[str]:
     if "{prompt_file}" not in template or "{workdir}" not in template:
         raise RuntimeError("--agent-command must contain {prompt_file} and {workdir}")
     rendered = template.replace("{repo_root}", shlex.quote(str(REPO_ROOT)))
     rendered = rendered.replace("{prompt_file}", shlex.quote(str(prompt_file))).replace(
         "{workdir}", shlex.quote(str(work))
-    )
+    ).replace("{trace_file}", shlex.quote(str(trace_file)))
     return shlex.split(rendered)
 
 
@@ -396,10 +651,10 @@ def run_tests(
 def classify(agent: dict, tests: dict) -> str:
     if agent["timed_out"]:
         return "agent_timeout"
-    if tests["passed"]:
-        return "passed"
     if agent["return_code"] != 0:
         return "agent_error"
+    if tests["passed"]:
+        return "passed"
     if any(step["timed_out"] for step in tests["steps"]):
         return "harness_error"
     return "test_failure"
@@ -432,7 +687,15 @@ def main() -> int:
     args = parse_args()
     corpus = args.corpus.expanduser().resolve()
     output = args.output.expanduser().resolve()
-    task_ids = tuple(args.tasks.split(",")) if args.tasks else DEFAULT_TASKS
+    replicate_id = args.replicate_id or inferred_replicate_id(output)
+    if replicate_id is not None and not re.fullmatch(r"[A-Za-z0-9._-]+", replicate_id):
+        raise RuntimeError("--replicate-id must contain only letters, digits, '.', '_', or '-'")
+    comparison_id = args.comparison_id
+    if comparison_id is not None and not re.fullmatch(r"[A-Za-z0-9._-]+", comparison_id):
+        raise RuntimeError("--comparison-id must contain only letters, digits, '.', '_', or '-'")
+    task_ids = selected_task_ids(args.tasks)
+    validate_timeout("--timeout", args.timeout)
+    validate_timeout("--test-timeout", args.test_timeout)
     commit = validate_corpus(corpus, args.allow_corpus_drift)
 
     if "{prompt_file}" not in args.agent_command or "{workdir}" not in args.agent_command:
@@ -450,6 +713,8 @@ def main() -> int:
             json.dumps(
                 {
                     "corpus_commit": commit,
+                    "replicate_id": replicate_id,
+                    "comparison_id": comparison_id,
                     "tasks": plan,
                     "missing_toolchains": missing_toolchains(languages),
                 },
@@ -468,6 +733,8 @@ def main() -> int:
         "corpus": str(corpus),
         "corpus_commit": commit,
         "tasks": list(task_ids),
+        "replicate_id": replicate_id,
+        "comparison_id": comparison_id,
         "agent_command": args.agent_command,
         "agent_timeout": args.timeout,
         "test_timeout": args.test_timeout,
@@ -485,9 +752,18 @@ def main() -> int:
         prompt_file = task_dir / "prompt.md"
         prompt_file.write_text(public_prompt(source), encoding="utf-8")
         work = copy_task(source, task_dir)
-        command = render_agent_command(args.agent_command, prompt_file, work)
+        trace_file = task_dir / "agent-trace.jsonl"
+        command = render_agent_command(args.agent_command, prompt_file, work, trace_file)
         print(f"[{index}/{len(task_ids)}] {task_id}", flush=True)
         agent = run_process(command, work, args.timeout, task_dir / "agent.log")
+        partial_trace = Path(str(trace_file) + ".partial")
+        agent["trace"] = (str(partial_trace) if partial_trace.is_file() else
+                          str(trace_file) if trace_file.is_file() else None)
+        agent["telemetry"] = reconcile_process_telemetry(
+            load_trace_summary(trace_file),
+            timed_out=agent["timed_out"],
+            return_code=agent["return_code"],
+        )
         tests = run_tests(language, source, work, args.test_timeout, task_dir)
         status = classify(agent, tests)
         result = {

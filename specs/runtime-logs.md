@@ -5,17 +5,17 @@
 Before a session is selected, Capstan writes process-level runtime events to:
 
 ```text
-$XDG_STATE_HOME/capstan/logs/YYYY-MM-DD.log
+$XDG_STATE_HOME/capstan/logs/YYYY-MM-DD.jsonl
 ```
 
 When `XDG_STATE_HOME` is not set, the fallback is
-`~/.local/state/capstan/logs/YYYY-MM-DD.log`.
+`~/.local/state/capstan/logs/YYYY-MM-DD.jsonl`.
 
 Once a TUI session is active, or a headless run supplies `--session-id`, events
 are isolated under that stable session ID:
 
 ```text
-$XDG_STATE_HOME/capstan/logs/sessions/<session-id>/YYYY-MM-DD.log
+$XDG_STATE_HOME/capstan/logs/sessions/<session-id>/YYYY-MM-DD.jsonl
 ```
 
 Session titles are not used as paths because generated titles can change.
@@ -23,12 +23,16 @@ Explicit CLI session IDs remain unchanged and therefore provide predictable log
 paths. Switching TUI sessions changes the active log scope; `/logs` and the
 `logs` model tool consequently read only the active session's current log.
 
-Each line includes a local timestamp, category, and compact message. Scoped
-lines also include their stable session ID:
+Each physical line is one JSON object using schema `capstan.log.v1`. It includes
+an RFC 3339 UTC timestamp with milliseconds, level, category, redacted message,
+and the stable session ID when scoped:
 
-```text
-2026-06-19 18:30:00 [session:my bench] [tool] call name=shell target=/Users/me/project display=~/project args={"command":"shell"}
+```json
+{"schema":"capstan.log.v1","timestamp":"2026-06-19T15:30:00.123Z","level":"info","category":"tool","session_id":"my bench","message":"call name=shell target=/project"}
 ```
+
+JSONL is the canonical persisted format. `/logs` parses it and renders a compact
+human-readable view; malformed or legacy plain-text lines remain visible verbatim.
 
 The `/logs [n]` command displays the last `n` log lines in the conversation.
 The same plugin exposes a `logs` model tool so the agent can inspect recent
@@ -42,13 +46,13 @@ stream/tool-call reconstruction events. `trace` also enables raw SSE/event
 payload logging.
 
 Log files rotate independently inside each scope. If the current file reaches
-10 MiB before the day changes, Capstan renames it to `.1.log` and keeps up to
+10 MiB before the day changes, Capstan renames it to `.1.jsonl` and keeps up to
 five same-day archives:
 
 ```text
-logs/2026-06-27.log
-logs/2026-06-27.1.log
-logs/2026-06-27.2.log
+logs/2026-06-27.jsonl
+logs/2026-06-27.1.jsonl
+logs/2026-06-27.2.jsonl
 ```
 
 Before a message is written, the logger redacts common secret shapes through the
@@ -115,10 +119,13 @@ best-effort redactor, but this mode should be treated as sensitive debug output.
 
 ## Architecture
 
-`src/log.c` exposes `capstan.log(category, message)` and
-`capstan.log_path()` to Lua. The logger appends to the current daily log,
-rotates over-size files before opening them, and creates the Capstan state
-directory if needed. Runtime log redaction calls `agent.redact.text()` when the
+`src/log.c` exposes `capstan.log(category, message)`, `capstan.log_path()`, and
+a bounded allowlisted tail reader to Lua. Lock acquisition returns the exact
+daily path covered by the lock; the tail reader accepts only that log and its
+JSONL/legacy archive names, rejects symlinks, and requires the shared log lock.
+The logger appends to the current daily log, rotates
+over-size files before opening them, and creates the Capstan state directory if
+needed. Runtime log redaction calls `agent.redact.text()` when the
 Lua runtime is available, so config-driven rules are applied consistently to
 Lua-visible output and C-originated runtime log messages. `src/redact.c` is only
 an emergency fallback for early logging or Lua redactor failure; it intentionally
