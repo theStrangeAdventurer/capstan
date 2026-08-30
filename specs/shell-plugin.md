@@ -62,7 +62,11 @@ closed because their resulting directory cannot be proven to stay in scope.
 
 The handler reports a successful tool result only when the process exits zero
 without timing out. Completion-review validation therefore ignores failed test,
-lint, typecheck, and build commands.
+lint, typecheck, build, and direct compile commands. Successful invocations are
+classified from command positions and known runner/build subcommands, so a
+search such as `rg test src` is not mistaken for validation merely because an
+argument contains `test`. Direct compiler commands such as `javac ... && java
+...` do count when the complete shell call succeeds.
 
 The agent loop has a separate runaway guard for repeated shell commands. By
 default this shell-specific guard is disabled because normal coding workflows

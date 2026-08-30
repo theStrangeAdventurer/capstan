@@ -1276,13 +1276,54 @@ local function mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok
 end
 
 shell_command_is_validation = function(command)
-    local normalized = " " .. tostring(command or ""):lower() .. " "
-    local markers = {
-        " test", " lint", " typecheck", " tsc ", " build", " check",
-        " pytest", " vitest", " jest", " actionlint", " make test",
+    local standalone = {
+        actionlint = true, cc = true, clang = true, clangpp = true, cpp = true,
+        ctest = true, eslint = true, gcc = true, gpp = true, javac = true,
+        jest = true, mypy = true, pytest = true, rspec = true, rustc = true,
+        tsc = true, vitest = true,
     }
-    for _, marker in ipairs(markers) do
-        if normalized:find(marker, 1, true) then return true end
+    local subcommands = {
+        bun = {build = true, lint = true, test = true, typecheck = true},
+        cargo = {build = true, check = true, clippy = true, test = true},
+        cmake = {build = true},
+        dotnet = {build = true, test = true},
+        go = {build = true, test = true, vet = true},
+        gradle = {build = true, check = true, test = true},
+        make = {build = true, check = true, test = true},
+        mvn = {test = true, verify = true},
+        ninja = {test = true},
+        npm = {build = true, lint = true, test = true, typecheck = true},
+        pnpm = {build = true, lint = true, test = true, typecheck = true},
+        yarn = {build = true, lint = true, test = true, typecheck = true},
+    }
+
+    for segment in tostring(command or ""):lower():gmatch("[^;&|]+") do
+        local tokens = {}
+        for token in segment:gmatch("%S+") do
+            local clean = token:gsub("^[\"'(]+", ""):gsub("[\"',)]+$", "")
+            table.insert(tokens, clean)
+        end
+        local index = 1
+        while tokens[index] and tokens[index]:match("^[%w_]+=") do index = index + 1 end
+        local executable = tokens[index] and (tokens[index]:match("([^/]+)$") or tokens[index]) or ""
+        executable = executable:gsub("%+%+", "pp")
+        if executable == "gradlew" then executable = "gradle" end
+        if standalone[executable] then return true end
+        if executable:match("^test[%w_.-]*$") or executable:match("^run[_-]?tests?[%w_.-]*$") then
+            return true
+        end
+        if (executable == "python" or executable == "python3") and
+           tokens[index + 1] == "-m" and standalone[tokens[index + 2] or ""] then
+            return true
+        end
+        local accepted = subcommands[executable]
+        if accepted then
+            for next_index = index + 1, #tokens do
+                local argument = tokens[next_index]:gsub("^%-+", "")
+                argument = argument:match("([^/:=]+)$") or argument
+                if accepted[argument] then return true end
+            end
+        end
     end
     return false
 end

@@ -133,12 +133,12 @@ The runtime:
 6. Appends text chunks to the current agent placeholder.
 7. If the final stream result contains tool calls, executes tools and recurses
    with appended `{role="tool"}` messages.
-8. After an unvalidated multi-file implementation phase in the `implement`
-   profile, starts one bounded completion-review continuation before exposing
-   the final answer. Successful validation suppresses the redundant pass. The
-   suppression is cleared by any later workspace write. The review re-checks
-   the original request, source changes, and available evidence; it may fix a
-   concrete issue, but cannot trigger another review.
+8. When completion review is explicitly enabled, an unvalidated multi-file
+   implementation phase starts one bounded review continuation before exposing
+   the final answer. Successful validation suppresses the redundant pass, and a
+   later workspace write clears that suppression. The review may fix a concrete
+   issue but cannot trigger another review. Built-in profiles leave this extra
+   model pass disabled by default.
 
 Headless `capstan run` builds the same message shape and calls
 `capstan.agent.run` directly, with callbacks that buffer final stdout instead of
@@ -187,13 +187,18 @@ terminal response fails the run visibly instead of leaving an empty assistant
 placeholder. The retry policy is owned by the common agent loop and therefore
 applies consistently across providers and TUI/headless entry points.
 
-The base prompt favors an operational loop: read the relevant implementation
-and nearby tests, implement a visibly missing requirement before broad
-validation, run the narrowest meaningful check, and stop after it succeeds.
-Independent calls belong in one model response and use batch-capable tools when
-available. Benchmark mode keeps this embedded policy but excludes machine- and
-project-specific prompt additions so evals do not inherit unrelated skills,
-`AGENTS.md`, prompt overrides, or config/plugin hooks.
+The base prompt favors a fast operational loop: batch-read the target
+implementation and nearest relevant test or caller, decide privately, edit,
+run the narrowest meaningful check, and stop after it succeeds. A pre-change
+check is reserved for reproducing a reported failure or establishing a
+necessary baseline. The implement profile rejects separate planning responses,
+rereading unchanged files, overlapping checks, and temporary harnesses unless
+a distinct requested behavior remains uncovered. Independent calls belong in
+one model response and use batch-capable tools when available; a scoped
+discovery phase should normally consume one model round. Benchmark mode keeps
+this embedded policy but excludes machine- and project-specific prompt additions
+so evals do not inherit unrelated skills, `AGENTS.md`, prompt overrides, or
+config/plugin hooks.
 
 Reasoning effort is an explicit run/config policy. `agent.reasoning_effort` and
 `capstan run --reasoning-effort` accept the common provider vocabulary

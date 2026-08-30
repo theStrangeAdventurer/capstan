@@ -13,14 +13,17 @@ without rebuilding the core.
 
 ## Competitive results, dramatically lower local overhead
 
-In the latest local Aider Polyglot comparison, Capstan passed **35/36** upstream
-test runs versus OpenCode's **36/36**, while using about **10x less median local
-CPU** and **58x less median main-process RSS** (18.6 MiB vs 1073.2 MiB).
-Both agents used DeepSeek V4 Pro with medium reasoning across the same 12 tasks,
-repeated three times.
+In the latest exploratory Aider Polyglot comparison, Capstan and OpenCode both
+passed **36/36** upstream test runs. Capstan used about **6.8x less median local
+CPU** and **54x less median main-process RSS** (20.3 MiB vs 1100.9 MiB), but its
+aggregate agent wall time was **51% longer**. Both agents used direct DeepSeek
+V4 Pro with medium reasoning across the same 12 tasks, repeated three times.
 
-[See the full benchmark, methodology, and limitations.](benchmarks/REPORT.md)
-Results are workload-, model-, and machine-specific.
+[See the exploratory run and trace analysis.](benchmarks/historical/polyglot-direct-prompt-20260829/README.md)
+The Capstan worktree was dirty, so this run is research evidence rather than a
+publishable release result. The [published benchmark report](benchmarks/REPORT.md)
+and reproducible harness remain available separately. Results are workload-,
+provider-, model-, and machine-specific.
 
 ## Highlights
 
@@ -109,27 +112,34 @@ tool-provided images.
 
 ## Benchmark: Capstan vs OpenCode
 
-The latest 72-attempt Aider Polyglot comparison used direct DeepSeek V4 Pro,
-medium reasoning, public prompts, upstream tests, and a 240-second timeout for
-both agents.
+The latest exploratory 72-attempt Aider Polyglot comparison used direct
+DeepSeek V4 Pro, medium reasoning, public prompts, upstream tests, and a
+240-second timeout for both agents.
 
 | Metric | Capstan | OpenCode |
 |---|---:|---:|
-| Upstream tests passed | 35/36 (97.2%) | **36/36 (100%)** |
-| Median agent wall time | 48.7s | **46.3s** |
-| Median local CPU time | **1.64s** | 16.44s |
-| Median main-process peak RSS | **18.6 MiB** | 1073.2 MiB |
-| Highest main-process peak RSS | **29.8 MiB** | 1163.9 MiB |
+| Upstream tests passed | 36/36 (100%) | 36/36 (100%) |
+| Total agent wall time | 2605.2s | **1724.8s** |
+| Median agent wall time | 67.5s | **32.0s** |
+| p95 agent wall time | 177.1s | **131.5s** |
+| Total local CPU time | **118.2s** | 632.8s |
+| Median local CPU time | **1.92s** | 13.04s |
+| Median main-process peak RSS | **20.3 MiB** | 1100.9 MiB |
+| Highest main-process peak RSS | **29.3 MiB** | 1181.4 MiB |
 
-On this workload, Capstan used about **10x less median local CPU** and **58x
-less median main-process RSS**. The harness samples only the primary agent PID
-every 50 ms, excluding child compilers, test runners, and tool processes.
-OpenCode completed every attempt; Capstan had one agent timeout.
+On this workload, Capstan used **81.3% less aggregate local CPU** and about
+**54x less median main-process RSS**, while taking **51.0% more aggregate agent
+wall time**. The harness samples only the primary agent PID every 50 ms,
+excluding child compilers, test runners, and tool processes. Both agents passed
+every upstream test run.
 
-See the [full report](benchmarks/REPORT.md),
-[raw attempt data](benchmarks/polyglot-deepseek-medium-primary-rss-20260821.csv),
-and [reproducible harness](benchmarks/README.md). Benchmark results are
-workload-, provider-, model-, and machine-specific.
+The Capstan worktree contained uncommitted prompt and runtime changes under
+evaluation, so this is an exploratory result rather than a publishable release
+benchmark. See the [run report and trace analysis](benchmarks/historical/polyglot-direct-prompt-20260829/README.md),
+[compact attempt data](benchmarks/historical/polyglot-direct-prompt-20260829/attempts.csv),
+[published benchmark report](benchmarks/REPORT.md), and
+[reproducible harness](benchmarks/README.md). Results are workload-, provider-,
+model-, and machine-specific.
 
 ## Profiles
 

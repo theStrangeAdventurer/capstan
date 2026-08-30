@@ -9,6 +9,10 @@ This directory preserves the machine-readable evidence behind the public
 - `runtime-footprint-20260628/` contains the runner's `static.csv`, `runs.csv`,
   `idle.csv`, `config.txt`, and `summary.md`. The compact CSV one directory up
   contains the 30 per-run CPU and RSS observations used in the public report.
+- `polyglot-direct-prompt-20260829/` contains a compact 72-attempt CSV and trace
+  analysis for an exploratory direct-DeepSeek comparison after prompt and
+  completion-review changes. Its dirty Capstan worktree makes it research
+  evidence rather than a publishable release result.
 
 Absolute home and temporary paths have been replaced with `<home>` and `<tmp>`.
 Promptfoo's cache/database and per-run stdout/stderr logs are excluded: they are

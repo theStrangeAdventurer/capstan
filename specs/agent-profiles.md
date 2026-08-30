@@ -65,11 +65,18 @@ tools.
 | `implement` | Focused code changes with evidence-driven scoped-change discipline | `medium` | Normal tools |
 | `plan` | Read-only exploration and planning | `high` | Inspection tools and read-only subagents |
 
-`implement` tells the model to establish expected behavior from the relevant
-test, specification, or caller; form a concrete hypothesis; run an early,
-focused check when useful; and inspect failures before another speculative
-change. It must stop broad exploration and validation after the required
-behavior is evidenced.
+`implement` tells the model to batch-read the target implementation and nearest
+relevant test, specification, or caller; form its concrete hypothesis privately;
+and edit without a separate planning response. A pre-change check is reserved
+for reproducing a reported failure or establishing a necessary baseline. After
+the edit, the profile runs the narrowest meaningful project check and finalizes
+when it succeeds unless a distinct requested behavior remains uncovered. It
+must not reread unchanged files, repeat overlapping checks, or create a
+temporary validation harness without such a concrete gap.
+
+The built-in `implement` profile does not enable completion review. The bounded
+review remains available as an explicit opt-in through `agent.completion_review`
+or a custom profile for workflows that prefer the extra model pass.
 
 `plan` keeps model-initiated `file_read`, `fetch`, `logs`, and `subagents`
 tools. It removes write tools and shell from the model tool list, and the

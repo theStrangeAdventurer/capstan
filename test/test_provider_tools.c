@@ -1473,8 +1473,10 @@ static MunitResult test_default_profile_is_implement(
   call_agent_entry(L);
 
   munit_assert_true(strstr(captured_body, "Active Profile: Implement") != NULL);
-  munit_assert_true(strstr(captured_body, "form one concrete hypothesis before editing") != NULL);
-  munit_assert_true(strstr(captured_body, "preserve them and ask before overwriting") != NULL);
+  munit_assert_true(strstr(captured_body, "Form one concrete hypothesis privately") != NULL);
+  munit_assert_true(strstr(captured_body, "without a separate planning response") != NULL);
+  munit_assert_true(strstr(captured_body, "batch-capable tools") != NULL);
+  munit_assert_true(strstr(captured_body, "preserve them and ask before") != NULL);
   munit_assert_true(strstr(captured_body, "\"reasoning_effort\":\"medium\"") != NULL);
   munit_assert_true(strstr(captured_logs, "[agent] profile=implement") != NULL);
 
@@ -1764,6 +1766,7 @@ static MunitResult test_builtin_profiles_are_plan_and_implement(
       "assert(#names == 2)\n"
       "assert(names[1] == 'implement')\n"
       "assert(names[2] == 'plan')\n"
+      "assert(profiles.get('implement').completion_review == false)\n"
       "assert(profiles.get('fast') == nil)\n");
   munit_assert_int(rc, ==, LUA_OK);
 
@@ -4347,7 +4350,10 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
   set_permit_decision("allow");
   set_capstan_workdir(L, workdir);
 
-  int rc = luaL_dofile(L, "agent/runtime.lua");
+  int rc = luaL_dostring(
+      L, "capstan.config = {agent = {completion_review = true}}");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 1);
   load_real_file_edit_plugin(L);
@@ -4447,7 +4453,10 @@ static MunitResult test_unvalidated_multi_file_write_starts_completion_review(
   set_permit_decision("allow");
   set_capstan_workdir(L, workdir);
 
-  int rc = luaL_dofile(L, "agent/runtime.lua");
+  int rc = luaL_dostring(
+      L, "capstan.config = {agent = {completion_review = true}}");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 1);
   load_real_file_edit_plugin(L);
@@ -4493,7 +4502,10 @@ static MunitResult test_write_after_validation_restores_completion_review(
   set_permit_decision("allow");
   set_capstan_workdir(L, workdir);
 
-  int rc = luaL_dofile(L, "agent/runtime.lua");
+  int rc = luaL_dostring(
+      L, "capstan.config = {agent = {completion_review = true}}");
+  munit_assert_int(rc, ==, LUA_OK);
+  rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 1);
   load_real_file_edit_plugin(L);
@@ -6092,7 +6104,16 @@ static MunitResult test_failed_shell_validation_is_not_successful(
       "tools.handle_tool_calls({}, available, {{id='failed-validation', name='shell', arguments='{\"command\":\"npm test --fail\"}'}}, '', function() end, {tools = available, silent_tools = true, state = state, permission_scope = {allowed_tools = {}, full_control = true}})\n"
       "failed_validation_marked = state.successful_validation == true\n"
       "tools.handle_tool_calls({}, available, {{id='passed-validation', name='shell', arguments='{\"command\":\"npm test\"}'}}, '', function() end, {tools = available, silent_tools = true, state = state, permission_scope = {allowed_tools = {}, full_control = true}})\n"
-      "passed_validation_marked = state.successful_validation == true\n");
+      "passed_validation_marked = state.successful_validation == true\n"
+      "local direct_state = {workspace_mutated = true}\n"
+      "tools.handle_tool_calls({}, available, {{id='direct-validation', name='shell', arguments='{\"command\":\"javac /tmp/Check.java && java -cp /tmp Check\"}'}}, '', function() end, {tools = available, silent_tools = true, state = direct_state, permission_scope = {allowed_tools = {}, full_control = true}})\n"
+      "direct_validation_marked = direct_state.successful_validation == true\n"
+      "local cmake_state = {workspace_mutated = true}\n"
+      "tools.handle_tool_calls({}, available, {{id='cmake-validation', name='shell', arguments='{\"command\":\"cmake --build build -j2\"}'}}, '', function() end, {tools = available, silent_tools = true, state = cmake_state, permission_scope = {allowed_tools = {}, full_control = true}})\n"
+      "cmake_validation_marked = cmake_state.successful_validation == true\n"
+      "local search_state = {workspace_mutated = true}\n"
+      "tools.handle_tool_calls({}, available, {{id='search-not-validation', name='shell', arguments='{\"command\":\"rg test src\"}'}}, '', function() end, {tools = available, silent_tools = true, state = search_state, permission_scope = {allowed_tools = {}, full_control = true}})\n"
+      "search_validation_marked = search_state.successful_validation == true\n");
   munit_assert_int(rc, ==, LUA_OK);
 
   lua_getglobal(L, "failed_validation_marked");
@@ -6100,6 +6121,15 @@ static MunitResult test_failed_shell_validation_is_not_successful(
   lua_pop(L, 1);
   lua_getglobal(L, "passed_validation_marked");
   munit_assert_true(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "direct_validation_marked");
+  munit_assert_true(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "cmake_validation_marked");
+  munit_assert_true(lua_toboolean(L, -1));
+  lua_pop(L, 1);
+  lua_getglobal(L, "search_validation_marked");
+  munit_assert_false(lua_toboolean(L, -1));
   lua_pop(L, 1);
 
   reset_captures(L);

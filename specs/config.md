@@ -54,7 +54,7 @@ return {
     max_same_tool_call = 0,
     max_same_shell_command = 0,
     max_generated_output_checks = 0,
-    completion_review = true,
+    completion_review = false,
     auto_compact_percent = 80,
   },
   subagents = {
@@ -136,10 +136,11 @@ return {
   defaults are 300 seconds and one retry.
 - `agent.completion_review` controls one final, bounded review pass after a
   multi-file implementation phase without successful validation. It defaults
-  to enabled for the `implement` profile and disabled for `plan`.
-  Successful validation suppresses the redundant pass until another workspace
-  write invalidates that evidence. The review shares the same conversation and
-  tools, runs at most once per root agent run, and is not run for subagents.
+  to disabled; enable it explicitly in `agent` config or a custom profile when
+  the extra model pass is preferred. Successful validation suppresses the pass
+  until another workspace write invalidates that evidence. The review shares
+  the same conversation and tools, runs at most once per root agent run, and is
+  not run for subagents.
 - `agent.auto_compact_percent` controls automatic conversation compaction in
   the interactive TUI. Before an ordinary submission, Capstan estimates the
   complete next prompt, including the system/profile instructions, current
