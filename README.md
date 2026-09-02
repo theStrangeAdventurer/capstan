@@ -1,5 +1,9 @@
 # Capstan
 
+[![CI](https://github.com/theStrangeAdventurer/capstan/actions/workflows/build-binaries.yml/badge.svg?branch=main)](https://github.com/theStrangeAdventurer/capstan/actions/workflows/build-binaries.yml)
+[![Release](https://img.shields.io/github/v/release/theStrangeAdventurer/capstan?label=release&sort=semver)](https://github.com/theStrangeAdventurer/capstan/releases/latest)
+[![Version](https://img.shields.io/github/v/tag/theStrangeAdventurer/capstan?label=version&sort=semver)](https://github.com/theStrangeAdventurer/capstan/tags)
+
 **A lightweight, extensible terminal coding agent built in C with an embedded Lua runtime.**
 
 *If you find this project interesting, consider giving it a ⭐ — it helps more people discover Capstan.*
@@ -96,6 +100,33 @@ capstan run --prompt "Inspect this repository"
 capstan run --profile plan --prompt-file task.md
 capstan run --prompt-file task.md --json
 ```
+
+### Try self-improvement in one minute
+
+Capstan can teach itself durable local behavior by creating user plugins. Enable
+the gated capability in `~/.config/capstan/config.lua`:
+
+```lua
+return {
+  capabilities = {
+    self_improvement = true,
+  },
+}
+```
+
+If you already have a config, add `self_improvement = true` to its existing
+`capabilities` table instead of replacing the file. Restart Capstan so the
+built-in skill is loaded, then paste this prompt:
+
+```text
+Create a `/hello` command that replies `Hello from Capstan!` and enable it without restarting.
+```
+
+Capstan writes the Lua plugin, hot-reloads it, and keeps it available in future
+sessions. Type `/hello` to test it; the expected response is
+`Hello from Capstan!`. You can inspect, edit, or delete the generated file at
+any time. See [Self Improvement](specs/self-improvement.md) and
+[Plugins](specs/plugins.md) for the full extension contract.
 
 ### Attach images
 
