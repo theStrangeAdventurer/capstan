@@ -2,6 +2,13 @@ local M = {}
 
 local UTF8_BOM = string.char(0xef, 0xbb, 0xbf)
 
+-- Embedded references are exact in-memory asset names, not filesystem paths.
+-- Keep even an empty name in this namespace so invalid references fail there.
+function M.embedded_asset_name(path)
+    if type(path) ~= "string" then return nil end
+    return path:match("^embedded:(.*)$")
+end
+
 function M.is_absolute_path(path)
     return type(path) == "string" and path:sub(1, 1) == "/"
 end
@@ -235,7 +242,7 @@ end
 -- the Wiki's permission-free internal-read policy even if the model selected
 -- the generic file reader.
 function M.wiki_relative_path(path)
-    if type(path) ~= "string" or path == "" then return nil end
+    if type(path) ~= "string" or path == "" or M.embedded_asset_name(path) then return nil end
     local root = M.configured_wiki_root()
     if not root then return nil end
     local full = M.normalize_path(path, M.runtime_workdir() or M.configured_workdir())

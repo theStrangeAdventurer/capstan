@@ -3863,6 +3863,88 @@ static MunitResult test_file_read_permission_target_uses_path(
   return MUNIT_OK;
 }
 
+static MunitResult test_embedded_read_dispatch_preserves_reference(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  const char *paths[] = {
+      "embedded:skills/self-improvement/SKILL.md",
+      "embedded:skills/missing/SKILL.md",
+      "embedded:",
+      "embedded:skills/self-improvement/SKILL.md",
+      "embedded:skills/self-improvement/SKILL.md",
+  };
+  const char *expected[] = {
+      "in-memory skill content", "missing embedded asset", "missing embedded asset",
+      "embedded assets are unavailable", "Permission denied for file_read",
+  };
+  for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+    lua_State *L = new_provider_state();
+    reset_captures(L);
+    set_capstan_workdir(L, "/repo/project");
+    /* Even a Wiki rooted at the workspace must not intercept embedded reads. */
+    set_capstan_wiki_path(L, "/repo/project");
+    set_permit_decision(i == 4 ? "deny" : "allow");
+    load_real_file_plugin(L);
+    lua_pushstring(L, paths[i]);
+    lua_setglobal(L, "embedded_test_path");
+    lua_pushboolean(L, i == 3);
+    lua_setglobal(L, "embedded_test_unavailable");
+    int rc = luaL_dostring(
+        L,
+        "local tools = require('agent.tools')\n"
+        "local json = require('vendor.rxi.json')\n"
+        "local workspace = require('agent.workspace')\n"
+        "assert(workspace.embedded_asset_name('dir/embedded:note') == nil)\n"
+        "assert(workspace.embedded_asset_name('/repo/embedded:note') == nil)\n"
+        "assert(workspace.embedded_asset_name('embedded:') == '')\n"
+        "local available = tools.collect({disable_subagents = true})\n"
+        "assert(plugins.file.tool.description:find('from memory', 1, true))\n"
+        "embedded_test_reads = 0\n"
+        "embedded_test_io = 0\n"
+        "capstan.embedded_asset = function(path)\n"
+        "  embedded_test_reads = embedded_test_reads + 1\n"
+        "  assert(path == embedded_test_path:sub(10))\n"
+        "  if path == 'skills/self-improvement/SKILL.md' then return 'in-memory skill content' end\n"
+        "  return nil, 'missing embedded asset: ' .. path\n"
+        "end\n"
+        "if embedded_test_unavailable then capstan.embedded_asset = nil end\n"
+        "local handler = plugins.file.handler\n"
+        "plugins.file.handler = function(ctx)\n"
+        "  assert(ctx.permission.target == embedded_test_path)\n"
+        "  assert(not ctx.permission.allow_outside_workspace)\n"
+        "  return handler(ctx)\n"
+        "end\n"
+        "local function no_disk()\n"
+        "  embedded_test_io = embedded_test_io + 1\n"
+        "  error('embedded read touched the filesystem')\n"
+        "end\n"
+        "io.open = no_disk; io.popen = no_disk; capstan.realpath = no_disk\n"
+        "tools.handle_tool_calls({}, available, {{id = 'embedded-read', name = 'file_read',\n"
+        "  arguments = json.encode({path = embedded_test_path})}}, '',\n"
+        "  function(msgs) embedded_test_messages = msgs end, {tools = available})\n"
+        "assert(embedded_test_io == 0)\n"
+        "assert(embedded_test_messages[1].tool_calls[1]['function'].arguments == json.encode({path = embedded_test_path}))\n"
+        "embedded_test_result = embedded_test_messages[#embedded_test_messages].content\n");
+    if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
+    munit_assert_string_equal(captured_permit_target, paths[i]);
+    munit_assert_int(permit_check_calls, ==, 1);
+    lua_getglobal(L, "embedded_test_reads");
+    munit_assert_int(lua_tointeger(L, -1), ==, i >= 3 ? 0 : 1);
+    lua_pop(L, 1);
+    lua_getglobal(L, "embedded_test_result");
+    munit_assert_not_null(strstr(lua_tostring(L, -1), expected[i]));
+    lua_pop(L, 1);
+    munit_assert_not_null(strstr(captured_logs, "target=embedded:"));
+    munit_assert_null(strstr(captured_logs, "/repo/project/embedded:"));
+    munit_assert_not_null(strstr(captured_agent_appends, "Reading: embedded:"));
+    munit_assert_null(strstr(captured_agent_appends, "/repo/project/embedded:"));
+    reset_captures(L);
+    lua_close(L);
+  }
+  return MUNIT_OK;
+}
+
 static MunitResult test_file_read_inside_wiki_routes_without_permission(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -6256,6 +6338,70 @@ static MunitResult test_shell_tool_display_shows_redacted_command(
   return MUNIT_OK;
 }
 
+static MunitResult test_shell_tool_output_reaches_ui_logs_and_model(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  for (int mode = 0; mode < 3; mode++) {
+    for (int prompt = 0; prompt < 2; prompt++) {
+      lua_State *L = new_provider_state();
+      reset_captures(L);
+      set_permit_decision(prompt ? "ask" : "allow");
+      set_permit_prompt_decision("allow");
+      set_capstan_workdir(L, "/repo/project");
+      lua_pushinteger(L, mode);
+      lua_setglobal(L, "shell_test_mode");
+      int rc = luaL_dostring(L,
+          "local append = agent.append_ui\n"
+          "shell_reveal_hints = 0\n"
+          "agent.append_ui = function(text, role, effect)\n"
+          "  if effect then\n"
+          "    assert(effect == 'shell' and text:find('[exit ', 1, true))\n"
+          "    shell_reveal_hints = shell_reveal_hints + 1\n"
+          "  end\n"
+          "  append(text, role)\n"
+          "end\n"
+          "plugins.shell = dofile('plugins/shell.lua')\n"
+          "tools = {shell = function() return {\n"
+          "  exit = shell_test_mode == 1 and 1 or 0,\n"
+          "  timed_out = shell_test_mode == 2,\n"
+          "  stdout = 'On branch main\\nAuthorization: Bearer output-secret\\n',\n"
+          "  stderr = 'diagnostic detail\\npassword=diagnostic-secret\\n',\n"
+          "} end}\n");
+      munit_assert_int(rc, ==, LUA_OK);
+      rc = luaL_dofile(L, "agent/runtime.lua");
+      munit_assert_int(rc, ==, LUA_OK);
+      lua_pop(L, 1);
+      call_agent_entry(L);
+      send_tool_call(L, "shell-output", "shell",
+                     "{\\\"command\\\":\\\"git status\\\"}");
+      munit_assert_int(permit_prompt_calls, ==, prompt);
+      lua_getglobal(L, "shell_reveal_hints");
+      munit_assert_int(lua_tointeger(L, -1), ==, 1);
+      lua_pop(L, 1);
+      const char *outputs[] = {captured_agent_appends, captured_logs, captured_body};
+      for (size_t i = 0; i < sizeof(outputs) / sizeof(outputs[0]); i++) {
+        munit_assert_not_null(strstr(outputs[i], "On branch main"));
+        munit_assert_not_null(strstr(outputs[i], "diagnostic detail"));
+        munit_assert_not_null(strstr(outputs[i], "[REDACTED]"));
+        munit_assert_null(strstr(outputs[i], "output-secret"));
+        munit_assert_null(strstr(outputs[i], "diagnostic-secret"));
+        munit_assert_not_null(strstr(outputs[i], mode == 1 ? "[exit 1]" : "[exit 0]"));
+        if (mode == 2)
+          munit_assert_not_null(strstr(outputs[i], "TIMED OUT after 60s"));
+      }
+      munit_assert_not_null(strstr(captured_agent_appends,
+                                  mode == 0 ? "— done" : "— error:"));
+      const char *event = strstr(captured_logs, "shell result command=git status");
+      munit_assert_not_null(event);
+      munit_assert_null(strstr(event + 1, "shell result command=git status"));
+      reset_captures(L);
+      lua_close(L);
+    }
+  }
+  return MUNIT_OK;
+}
+
 static MunitResult test_shell_tool_logs_full_redacted_command(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -7109,6 +7255,9 @@ static MunitTest tests[] = {
     {"/file_read_permission_target_uses_path",
      test_file_read_permission_target_uses_path, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/embedded_read_dispatch_preserves_reference",
+     test_embedded_read_dispatch_preserves_reference, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_read_inside_wiki_routes_without_permission",
      test_file_read_inside_wiki_routes_without_permission, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -7266,6 +7415,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_tool_display_shows_redacted_command",
      test_shell_tool_display_shows_redacted_command, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/shell_tool_output_reaches_ui_logs_and_model",
+     test_shell_tool_output_reaches_ui_logs_and_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_tool_logs_full_redacted_command",
      test_shell_tool_logs_full_redacted_command, NULL, NULL,

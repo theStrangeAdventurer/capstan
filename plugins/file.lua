@@ -13,13 +13,8 @@ local function list_dir(path)
 	return io.popen("ls -1p -- " .. workspace.shell_quote(path) .. " 2>/dev/null")
 end
 
-local function embedded_asset_name(path)
-	if type(path) ~= "string" then return nil end
-	return path:match("^embedded:(.+)$")
-end
-
 local function read_embedded_asset(filename)
-	local asset_path = embedded_asset_name(filename)
+	local asset_path = workspace.embedded_asset_name(filename)
 	if not asset_path then return nil end
 	if not (capstan and type(capstan.embedded_asset) == "function") then
 		return "❌ " .. filename .. " (embedded assets are unavailable)",
@@ -216,7 +211,7 @@ end
 
 plugin.tool = {
 	name = "file_read",
-	description = "Read a local file or list a local directory. Use path for one file; use paths to read several non-sensitive workspace files in one call. Use this for local file inspection instead of shell commands like cat, sed, or ls.",
+	description = "Read a local file, list a local directory, or read an embedded runtime asset from memory. For a Skill file starting with embedded:, pass the exact reference as path (e.g. embedded:skills/self-improvement/SKILL.md); do not resolve it on disk or search for a copy. Use path for one file; use paths to read several non-sensitive workspace files in one call. Use this for local file inspection instead of shell commands like cat, sed, or ls.",
 	parameters = {
 		type = "object",
 		properties = {

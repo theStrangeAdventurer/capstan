@@ -110,7 +110,8 @@ return {
 - `redaction` extends secret masking in Lua-visible shell output, tool results,
   and runtime logs. Built-in masking for common credentials remains enabled;
   config entries only add project-specific rules.
-- `tool_output.max_bytes` and `tool_output.max_lines` bound each tool result
+- `tool_output.max_bytes` and `tool_output.max_lines` also bound redacted shell
+  output in conversation history and runtime logs. They bound each tool result
   inserted into provider continuation history. Defaults are 50 KiB and 2,000
   lines. The visible truncation marker includes the original byte count and
   directs the model toward a narrower query or paged read.

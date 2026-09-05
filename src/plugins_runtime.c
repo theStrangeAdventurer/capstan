@@ -90,6 +90,7 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.models", "agent/models.lua");
   preload_embedded_asset(L, "agent.stream", "agent/stream.lua");
   preload_embedded_asset(L, "agent.tools", "agent/tools.lua");
+  preload_embedded_asset(L, "agent.tool_output", "agent/tool_output.lua");
   preload_embedded_asset(L, "agent.workspace", "agent/workspace.lua");
   preload_embedded_asset(L, "agent.redact", "agent/redact.lua");
   preload_embedded_asset(L, "agent.tokens", "agent/tokens.lua");

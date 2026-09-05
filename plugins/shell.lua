@@ -1,5 +1,7 @@
 local plugin = {}
 local redact = require("agent.redact")
+local logging = require("agent.logging")
+local tool_output = require("agent.tool_output")
 
 plugin.id = "shell"
 plugin.name = "Shell"
@@ -116,9 +118,13 @@ function plugin.handler(ctx)
 		out = out .. "\nstderr:\n" .. redacted_stderr
 	end
 
-	return string.format("Shell: %s (exit %d)", display_command, result.exit),
+	local visible_output = tool_output.bound(out)
+	logging.runtime_log("tool", "shell result command=" .. display_command .. "\n" .. visible_output)
+	local header = "Shell: " .. display_command .. "\n"
+	return header .. visible_output,
 		out,
-		result.exit == 0 and not result.timed_out
+		result.exit == 0 and not result.timed_out,
+		{ shell_output_start = #header }
 end
 
 return plugin

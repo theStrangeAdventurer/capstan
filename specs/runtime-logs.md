@@ -104,6 +104,10 @@ checks should print only boolean/status information.
   max turns, effective tool count, and effective tool names.
 - [Permission](permissions.md) checks and prompt decisions
 - Tool completion and result size
+- Shell plugin results at `info`: exit code, timeout notice, stdout and stderr,
+  for manual and model calls. Output is redacted and UTF-8 sanitized, bounded by
+  `tool_output.max_bytes` / `tool_output.max_lines`, and explicitly marked when
+  truncated. One result event is emitted per execution, even in silent runs.
 - Invalid UTF-8 replacement counts and model-bound tool-result truncation
 - Tool handler failures, including compact diagnostic text
 - Tool guard stops under the `tool_guard` category when the runtime aborts a

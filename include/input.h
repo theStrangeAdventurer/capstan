@@ -17,6 +17,10 @@ const char *input_get_display_text(void);
 int input_get_cursor(void);
 int input_get_display_cursor(void);
 void input_insert(int ch);
+/* Incremental bracketed-paste body decoder, shared by both TUI loops. */
+void input_paste_begin(void);
+int input_paste_active(void);
+int input_paste_feed(int ch);
 void input_set_text(const char *text);
 void input_backspace(void);
 void input_delete_word_backward(void);

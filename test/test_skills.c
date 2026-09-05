@@ -351,7 +351,33 @@ static MunitResult test_builtin_skill_loaded_and_overridden(
   return MUNIT_OK;
 }
 
+static MunitResult test_embedded_skill_prompt_explains_memory_reader(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  const char content[] =
+      "---\nname: self-improvement\ndescription: Extend Capstan\n---\nskill body";
+  BuiltinSkill builtin = {
+      .name = "self-improvement",
+      .path = "embedded:skills/self-improvement/SKILL.md",
+      .content = content,
+      .content_size = sizeof(content) - 1,
+  };
+  char *prompt = skills_build_prompt(&builtin, 1, NULL, NULL, NULL);
+  munit_assert_not_null(prompt);
+  munit_assert_not_null(strstr(prompt, "`file_read` with `path` set to that exact value"));
+  munit_assert_not_null(strstr(prompt, "from memory, not the filesystem"));
+  munit_assert_not_null(strstr(prompt, "report the error rather than guessing other paths"));
+  munit_assert_not_null(strstr(prompt, "Skill file: embedded:skills/self-improvement/SKILL.md"));
+  munit_assert_null(strstr(prompt, "skill body"));
+  free(prompt);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/embedded_skill_prompt_explains_memory_reader",
+     test_embedded_skill_prompt_explains_memory_reader, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/loads_skill_md_and_resource_manifest",
      test_loads_skill_md_and_resource_manifest, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

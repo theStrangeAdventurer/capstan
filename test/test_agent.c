@@ -233,6 +233,9 @@ static MunitResult test_selected_session_create_and_resume(
   char *text = my_strdup("persisted message");
   munit_assert_not_null(text);
   add_message(text, text, MSG_USER);
+  agent_enable_shell_output(1);
+  message_tag_shell_output(get_messages()->items[0], 0);
+  munit_assert_size(get_messages()->items[0]->shell_output.count, ==, 1);
   munit_assert_true(session_manager_save());
   session_manager_shutdown();
   clear_messages();
@@ -243,6 +246,8 @@ static MunitResult test_selected_session_create_and_resume(
   Messages *messages = get_messages();
   munit_assert_size(messages->size, ==, 1);
   munit_assert_string_equal(messages->items[0]->text, "persisted message");
+  munit_assert_size(messages->items[0]->shell_output.count, ==, 0);
+  agent_enable_shell_output(0);
   session_manager_shutdown();
   clear_messages();
 
@@ -258,7 +263,58 @@ static MunitResult test_selected_session_create_and_resume(
   return MUNIT_OK;
 }
 
+static MunitResult test_shell_output_metadata(const MunitParameter params[],
+                                               void *data) {
+  (void)params; (void)data;
+  clear_messages();
+  agent_enable_shell_output(1);
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  agent_init(L);
+  munit_assert_int(luaL_dostring(L,
+      "agent.append_ui('⚙ shell\\n  $ git status ', 'agent')\n"
+      "agent.append_ui('— done\\n\\n[exit 0]\\nготово\\n', 'agent', 'shell')\n"
+      "agent.append('Answer', 'agent')\n"), ==, LUA_OK);
+  Message *message = get_messages()->items[0];
+  munit_assert_size(message->shell_output.count, ==, 1);
+  munit_assert_size(message->shell_output.blocks[0].start, ==,
+                     strlen("⚙ shell\n  $ git status "));
+  munit_assert_size(message->shell_output.blocks[0].end, ==,
+                     strlen(message->text) - strlen("Answer"));
+  munit_assert_string_equal(message->raw_text, "Answer");
+  munit_assert_size(message->shell_output.count, ==, 1);
+  munit_assert_size(message->shell_output.blocks[0].lines, ==, 1);
+  shell_output_build(&message->shell_output, message->text);
+  munit_assert_string_equal(message->raw_text, "Answer");
+  /* Reallocations and additional tool results keep independent byte ranges. */
+  for (int i = 0; i < 10; i++) {
+    size_t start = strlen(message->text);
+    munit_assert_int(luaL_dostring(L,
+        "agent.append_ui('[exit 1]\\nstderr:\\nfailed\\n', 'agent', 'shell')"), ==, LUA_OK);
+    munit_assert_size(message->shell_output.blocks[i + 1].start, ==, start);
+  }
+  munit_assert_size(message->shell_output.count, ==, 11);
+  /* Plain additions/restoration never infer shell output from text. Manual
+     results explicitly tag their body when the context buffer is flushed. */
+  char *manual = my_strdup("Shell: pwd\n[exit 0]\n/repo");
+  add_message(manual, manual, MSG_USER);
+  Message *user = get_messages()->items[1];
+  munit_assert_size(user->shell_output.count, ==, 0);
+  message_tag_shell_output(user, strlen("Shell: pwd\n"));
+  munit_assert_size(user->shell_output.count, ==, 1);
+  munit_assert_ptr_equal(user->text, user->raw_text);
+  agent_enable_shell_output(0);
+  munit_assert_int(luaL_dostring(L,
+      "agent.append_ui('headless', 'agent', 'shell')"), ==, LUA_OK);
+  munit_assert_size(message->shell_output.count, ==, 11);
+  lua_close(L);
+  clear_messages();
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/shell_output_metadata", test_shell_output_metadata, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/append_agent_without_agent_message",
      test_append_agent_without_agent_message_creates_agent, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

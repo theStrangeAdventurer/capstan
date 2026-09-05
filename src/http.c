@@ -94,7 +94,9 @@ static void http_wait_frame(void) {
     long long now = http_now_ms();
     if (g_last_wait_render_ms == 0 ||
         now - g_last_wait_render_ms >= HTTP_WAIT_RENDER_INTERVAL_MS) {
-      render_all();
+      /* Nested waits (notably subagents) must service editor input too.
+         This pump never polls HTTP or starts a nested agent dispatch. */
+      tui_pump_blocking();
       g_last_wait_render_ms = now;
     }
   }

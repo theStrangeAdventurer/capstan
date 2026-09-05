@@ -28,7 +28,8 @@ static int g_dim_color_pair = 0;
 static int g_diff_add_color_pair = 0;
 static int g_diff_del_color_pair = 0;
 
-void buffer_plugin_result(const char *label, char *ui_result, char *raw_result) {
+void buffer_plugin_result(const char *label, char *ui_result, char *raw_result,
+                          size_t shell_output_start) {
   if (g_buffered_results.size >= g_buffered_results.capacity) {
     g_buffered_results.capacity = g_buffered_results.capacity ? g_buffered_results.capacity * 2 : 4;
     g_buffered_results.items = realloc(g_buffered_results.items,
@@ -39,6 +40,7 @@ void buffer_plugin_result(const char *label, char *ui_result, char *raw_result) 
   ctx->label[MAX_BADGE_LABEL - 1] = '\0';
   ctx->ui_result = ui_result;
   ctx->raw_result = raw_result;
+  ctx->shell_output_start = shell_output_start;
 }
 
 void buffered_results_clear(void) {
@@ -54,6 +56,7 @@ void buffered_results_clear(void) {
 }
 
 void init_tui(void) {
+  agent_enable_shell_output(1);
   if (has_colors()) {
     start_color();
     use_default_colors();
@@ -442,6 +445,38 @@ static void render_start_screen(WINDOW *win, int height, int width) {
   }
 }
 
+static int g_shell_top = 0, g_shell_height = 0, g_shell_width = 0;
+static int g_shell_anchor_top = -1;
+static unsigned long g_shell_revision = 0;
+
+int tui_handle_shell_mouse(int y, int x, int activate) {
+  if (popup_is_active() || popup_is_message_active() ||
+      g_shell_revision != agent_messages_revision() ||
+      y < MARGIN || y >= MARGIN + g_shell_height ||
+      x < MARGIN + MSG_PAD_H || x >= MARGIN + MSG_PAD_H + g_shell_width)
+    return 0;
+  const LineInfo *line = linemap_get(g_shell_top + y - MARGIN);
+  Messages *messages = get_messages();
+  if (!line || line->role == LINE_PADDING || line->msg_index >= messages->size)
+    return 0;
+  Message *message = messages->items[line->msg_index];
+  ShellOutput *output = &message->shell_output;
+  if (!output->view) return 0;
+  int col = x - MARGIN - MSG_PAD_H;
+  int bytes = count_visible_chars_to(output->view + line->byte_start, col);
+  size_t offset = (size_t)line->byte_start + (size_t)bytes;
+  if (offset >= (size_t)line->byte_end) return 0;
+  int block = shell_output_control(output, offset);
+  if (block < 0) return 0;
+  if (activate) {
+    output->blocks[block].expanded = !output->blocks[block].expanded;
+    g_shell_anchor_top = g_shell_top;
+    visual_exit();
+    render_all();
+  }
+  return 1;
+}
+
 void render_all(void) {
   const char *input = input_get_display_text();
   int input_pos = input_get_display_cursor();
@@ -458,6 +493,7 @@ void render_all(void) {
   int inner_w = cols - 2 * margin;
   int text_w = inner_w - 2 * MSG_PAD_H;
 
+  g_shell_height = 0;
   if (msg_h < 1 || inner_w < 3 || text_w < 1)
     return;
 
@@ -472,17 +508,24 @@ void render_all(void) {
   int total_lines = 0;
 
   for (size_t i = 0; i < msgs->size; i++) {
-    int l = count_message_lines(msgs->items[i]->text, text_w);
+    Message *message = msgs->items[i];
+    const char *text = shell_output_build(&message->shell_output, message->text);
+    int l = count_message_lines(text, text_w);
     line_counts[i] = l;
     total_lines += l + 2;
   }
   scroll_update_content(total_lines, msg_h);
+  if (g_shell_anchor_top >= 0) {
+    scroll_set(total_lines - msg_h - g_shell_anchor_top);
+    g_shell_anchor_top = -1;
+  }
   int scroll_offset = scroll_get();
 
   const char **msgs_texts = malloc(msgs->size * sizeof(const char *));
   int *msgs_roles = malloc(msgs->size * sizeof(int));
   for (size_t i = 0; i < msgs->size; i++) {
-    msgs_texts[i] = msgs->items[i]->text;
+    msgs_texts[i] = msgs->items[i]->shell_output.view
+                        ? msgs->items[i]->shell_output.view : msgs->items[i]->text;
     msgs_roles[i] = msgs->items[i]->role;
   }
   linemap_build(NULL, msgs_roles, (int)msgs->size, msgs_texts, text_w);
@@ -520,6 +563,11 @@ void render_all(void) {
   if (top_line < 0)
     top_line = 0;
 
+  g_shell_top = top_line;
+  g_shell_height = msg_h;
+  g_shell_width = text_w;
+  g_shell_revision = agent_messages_revision();
+
   int sel_sl = -1, sel_sc = -1, sel_el = -1, sel_ec = -1;
   if (visual_is_active())
     visual_selection_range(&sel_sl, &sel_sc, &sel_el, &sel_ec);
@@ -552,7 +600,8 @@ void render_all(void) {
     else
       wattron(msg_win, A_DIM);
 
-    const char *p = msg->text;
+    const char *display_text = msgs_texts[i];
+    const char *p = display_text;
     int diff_state = 0;
     const char *logical_line_start = p;
     int in_tool_status_block = 0;
@@ -584,9 +633,12 @@ void render_all(void) {
       }
 
       if (global_line >= top_line && win_row < msg_h) {
-        int is_tool_status = !is_user && in_tool_status_block;
+        int is_shell_output = shell_output_contains(&msg->shell_output,
+            (size_t)(p - display_text), (size_t)(line_end - display_text));
+        int is_tool_status = !is_user && in_tool_status_block && !is_shell_output;
         int diff_pair =
-            !is_user && (current_diff_state == 3 || current_diff_state == 4)
+            !is_shell_output && !is_user &&
+            (current_diff_state == 3 || current_diff_state == 4)
                 ? diff_line_color_pair(logical_line_start)
                 : 0;
         int tool_status_attrs = A_ITALIC;
@@ -603,8 +655,24 @@ void render_all(void) {
 
         if (is_user)
           mvwhline(msg_win, win_row, 0, ' ', inner_w);
+        if (is_shell_output)
+          wattrset(msg_win, dim_gray_attr());
         mvwaddnstr(msg_win, win_row, MSG_PAD_H, p, line_end - p);
+        if (is_shell_output) {
+          /* Style only tagged controls, including markers split by wrapping. */
+          for (const char *c = p; c < line_end; c++) {
+            if (shell_output_control(&msg->shell_output,
+                                     (size_t)(c - display_text)) < 0)
+              continue;
+            int offset = count_visible_chars(p, (int)(c - p));
+            mvwchgat(msg_win, win_row, MSG_PAD_H + offset, 1,
+                     A_BOLD | (g_dim_color_pair ? 0 : A_DIM),
+                     g_dim_color_pair, NULL);
+          }
+        }
 
+        if (is_shell_output)
+          wattrset(msg_win, is_user ? COLOR_PAIR(5) : A_DIM);
         if (diff_pair)
           wattroff(msg_win, COLOR_PAIR(diff_pair));
         if (is_tool_status) {
@@ -1033,12 +1101,39 @@ int tui_focus_input_at_point(int rows, int cols, int y, int x) {
   return 1;
 }
 
+static int tui_feed_paste(WINDOW *win, int ch) {
+  if (ch == TUI_KEY_PASTE_BEGIN) {
+    input_paste_begin();
+    /* Every reader, including modal windows, must consume the body literally. */
+    keypad(win, FALSE);
+    return 1;
+  }
+  if (input_paste_feed(ch)) {
+    if (!input_paste_active()) {
+      keypad(win, TRUE);
+      keypad(stdscr, TRUE);
+    }
+    return 1;
+  }
+  return 0;
+}
+
+int tui_handle_paste(int ch) {
+  if (ch == TUI_KEY_PASTE_BEGIN && (mode_get() != FOCUS_INPUT ||
+      popup_is_active() || popup_is_message_active()))
+    return 0;
+  return tui_feed_paste(stdscr, ch);
+}
+
 void tui_pump_blocking(void) {
   if (!stdscr)
     return;
 
   int ch;
-  while ((ch = getch()) != ERR) {
+  /* Bound each input batch so large pastes cannot starve the waiting work. */
+  for (int count = 0; count < 256 && (ch = getch()) != ERR; count++) {
+    if (tui_handle_paste(ch))
+      continue;
     if (popup_is_message_active()) {
       popup_message_handle_key(ch);
       continue;
@@ -1052,7 +1147,11 @@ void tui_pump_blocking(void) {
       if (getmouse(&event) == OK) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
-        if ((event.bstate &
+        if ((event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) &&
+            tui_handle_shell_mouse(event.y, event.x,
+                (event.bstate & (BUTTON1_CLICKED | BUTTON1_RELEASED)) != 0)) {
+          continue;
+        } else if ((event.bstate &
              (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) &&
             tui_focus_input_at_point(rows, cols, event.y, event.x)) {
           continue;
@@ -1111,7 +1210,7 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   WINDOW *win = newwin(popup_h, popup_w, popup_y, popup_x);
   if (!win)
     return "deny";
-  keypad(win, TRUE);
+  keypad(win, input_paste_active() ? FALSE : TRUE);
   nodelay(win, FALSE);
 
   wattron(win, COLOR_PAIR(5));
@@ -1153,6 +1252,10 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
     doupdate();
 
     int ch = wgetch(win);
+    /* A paste may begin here or arrive half-consumed from the main/wait loop.
+       Preserve it in the editor, never interpret it as permission shortcuts. */
+    if (tui_feed_paste(win, ch))
+      continue;
     if (ch == KEY_MOUSE) {
       MEVENT event;
       if (getmouse(&event) == OK) {

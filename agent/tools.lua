@@ -4,7 +4,7 @@ local logging = require("agent.logging")
 local mcp_client = require("agent.mcp")
 local workspace = require("agent.workspace")
 local redact = require("agent.redact")
-local utf8_sanitize = require("agent.utf8")
+local tool_output = require("agent.tool_output")
 local ui = require("agent.ui")
 
 local M = {}
@@ -913,6 +913,9 @@ local function tool_call_target(tool_name, args)
 end
 
 local function normalize_permission_target(permission_tool, target)
+    if permission_tool == "file_read" and workspace.embedded_asset_name(target) then
+        return target
+    end
     if permission_tool == "file_read" or permission_tool == "file_write" then
         return workspace.normalize_path(target, workspace.runtime_workdir())
     end
@@ -1050,40 +1053,6 @@ local function tool_result_text(result)
     return tostring(result or "")
 end
 
-local function tool_output_limits()
-    local configured = config_table("tool_output") or {}
-    local max_bytes = tonumber(configured.max_bytes) or (50 * 1024)
-    local max_lines = tonumber(configured.max_lines) or 2000
-    return math.max(1024, math.floor(max_bytes)),
-        math.max(1, math.floor(max_lines))
-end
-
-local function bound_tool_result(text)
-    local sanitized, invalid_bytes = utf8_sanitize.sanitize(text)
-    local max_bytes, max_lines = tool_output_limits()
-    local line_count = 1
-    local line_cut = nil
-    for newline in sanitized:gmatch("()\n") do
-        if line_count == max_lines then
-            line_cut = newline
-            break
-        end
-        line_count = line_count + 1
-    end
-    if not line_cut and #sanitized <= max_bytes then
-        return sanitized, false, invalid_bytes
-    end
-
-    local original_bytes = #sanitized
-    local candidate = line_cut and sanitized:sub(1, line_cut - 1) or sanitized
-    local suffix = string.format(
-        "\n\n[Tool output truncated: %d bytes; use a narrower query or a paged read.]",
-        original_bytes
-    )
-    local prefix = logging.truncate(candidate, math.max(0, max_bytes - #suffix), "")
-    return prefix .. suffix, true, invalid_bytes
-end
-
 local function tool_result_images(result)
     if type(result) ~= "table" or type(result.images) ~= "table" then return {} end
     return result.images
@@ -1157,7 +1126,15 @@ local function tool_status_suffix(status, _display_command)
     return status .. "\n\n"
 end
 
+local function shell_output_status(result_content, display_command, status)
+    local output = tool_output.bound(redact.text(tool_result_text(result_content)))
+    return tool_status_suffix(status, display_command) .. output .. "\n\n"
+end
+
 local function tool_success_status(tool_name, result_content, display_command)
+    if tool_name == "shell" then
+        return shell_output_status(result_content, display_command, "— done")
+    end
     if tool_name == "file_edit" and type(result_content) == "string" and result_content ~= "" then
         return "\n" .. result_content .. "\n" .. tool_status_suffix("— done", display_command)
     end
@@ -1174,6 +1151,9 @@ local function tool_error_status(result_content, display_command)
     local reason = logging.compact(first_line(result_content), 160)
     if reason == "" then
         reason = "error"
+    end
+    if display_command then
+        return shell_output_status(result_content, display_command, "— error: " .. reason)
     end
     return tool_status_suffix("— error: " .. reason, display_command)
 end
@@ -1259,7 +1239,8 @@ end
 local function tool_permission_context(permission_tool, target)
     if not permission_tool then return nil end
     local ctx = {tool = permission_tool, target = target}
-    if permission_tool == "file_read" and not path_is_within_workspace(target) then
+    if permission_tool == "file_read" and not workspace.embedded_asset_name(target) and
+        not path_is_within_workspace(target) then
         ctx.allow_outside_workspace = true
     end
     return ctx
@@ -1344,9 +1325,9 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         #tool_calls,
         #(assistant_text or "")
     ))
-    local function append_status(text)
+    local function append_status(text, effect)
         if run_ctx and run_ctx.silent_tools then return end
-        ui.append(text, "agent")
+        ui.append(text, "agent", effect)
     end
     local openai_tool_calls = {}
     for _, tc in ipairs(tool_calls) do
@@ -1571,7 +1552,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                 end
                                 if not apply_prompt_decision(decision, permission_scope, permission_tool, target) then
                                     result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
-                                    if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                                    if show_generic_status then append_status(tool_error_status(result_content, display_command), tool_name == "shell" and "shell" or nil) end
                                 else
                                     local tool_ok
                                     result_content, tool_ok = execute_tool(tool_name, args, run_ctx,
@@ -1582,10 +1563,10 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                     mark_validation(run_ctx, tool_name, args, tool_ok)
                                     if tool_ok then
                                         logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d images=%d", tool_name, target, #tool_result_text(result_content), #tool_result_images(result_content)))
-                                        if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end
+                                        if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command), tool_name == "shell" and "shell" or nil) end
                                     else
                                         logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(tool_result_text(result_content), 240)))
-                                        if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                                        if show_generic_status then append_status(tool_error_status(result_content, display_command), tool_name == "shell" and "shell" or nil) end
                                     end
                                 end
                             end
@@ -1599,10 +1580,10 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             mark_validation(run_ctx, tool_name, args, tool_ok)
                             if tool_ok then
                                 logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d images=%d", tool_name, target, #tool_result_text(result_content), #tool_result_images(result_content)))
-                                if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command)) end
+                                if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command), tool_name == "shell" and "shell" or nil) end
                             else
                                 logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(tool_result_text(result_content), 240)))
-                                if show_generic_status then append_status(tool_error_status(result_content, display_command)) end
+                                if show_generic_status then append_status(tool_error_status(result_content, display_command), tool_name == "shell" and "shell" or nil) end
                             end
                         end
                     end
@@ -1642,7 +1623,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
 
         if result_content then
             local result_text = tool_result_text(result_content)
-            local bounded, truncated, invalid_bytes = bound_tool_result(result_text)
+            local bounded, truncated, invalid_bytes = tool_output.bound(result_text)
             if invalid_bytes > 0 then
                 logging.runtime_log("tool", string.format(
                     "replaced_invalid_utf8_bytes=%d name=%s",

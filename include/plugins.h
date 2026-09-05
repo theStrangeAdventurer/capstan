@@ -37,6 +37,7 @@ struct Plugin {
 typedef struct {
   char *ui_result;
   char *raw_result;
+  size_t shell_output_start; /* Zero-based UI offset; (size_t)-1 if untagged. */
 } PluginResult;
 
 typedef struct {

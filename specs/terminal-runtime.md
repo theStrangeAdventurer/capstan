@@ -15,7 +15,15 @@ requiring users to export `TERMINFO` or `TERMINFO_DIRS` manually.
 - The TUI enables bracketed paste mode (`?2004`) so pasted newlines are inserted
   into the input buffer instead of submitting one message per pasted line.
   Startup and shutdown both disable the mode first to recover from stale terminal
-  state.
+  state. ncurses recognizes the start marker as a dedicated key; while pasting,
+  key decoding is disabled so escape sequences in the body remain literal text.
+  Both the main loop and blocking waits use the same incremental body decoder,
+  restoring key decoding only after the end marker. This also supports dictation
+  tools that insert text using terminal bracketed paste.
+- Permission dialogs consume the same paste stream, including a paste already
+  active when the dialog opens. Pasted text stays in the draft; it cannot select
+  or confirm a permission. A paste started inside the dialog follows the same
+  rule. Key decoding is restored on both the dialog and main window at the end.
 
 ## Build Contract
 

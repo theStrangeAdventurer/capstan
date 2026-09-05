@@ -564,7 +564,7 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
   lua_rawgeti(L, LUA_REGISTRYINDEX, plugin->handler_ref);
   lua_insert(L, -2);
 
-  if (lua_pcall(L, 1, 2, 1) != LUA_OK) {
+  if (lua_pcall(L, 1, 4, 1) != LUA_OK) {
     popup_show_message("Plugin Error", lua_tostring(L, -1), 1);
     record_plugin_error(plugin->source_path ? plugin->source_path : plugin->id,
                         lua_tostring(L, -1));
@@ -574,20 +574,32 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
 
   PluginResult *r = malloc(sizeof(PluginResult));
   if (!r) {
-    lua_pop(L, 3);
+    lua_pop(L, 5);
     return NULL;
   }
 
-  r->ui_result = dup_lua_result(L, -2, "");
-  r->raw_result = dup_lua_result(L, -1, r->ui_result ? r->ui_result : "");
+  r->ui_result = dup_lua_result(L, -4, "");
+  r->raw_result = dup_lua_result(L, -3, r->ui_result ? r->ui_result : "");
+  r->shell_output_start = (size_t)-1;
+  /* Optional fourth return value is display metadata, never model data.
+     Invalid or missing boundaries fail open to complete, untagged text. */
+  if (r->ui_result && lua_istable(L, -1)) {
+    lua_getfield(L, -1, "shell_output_start");
+    if (lua_isinteger(L, -1)) {
+      lua_Integer start = lua_tointeger(L, -1);
+      if (start >= 0 && (lua_Unsigned)start < strlen(r->ui_result))
+        r->shell_output_start = (size_t)start;
+    }
+    lua_pop(L, 1);
+  }
   if (!r->ui_result || !r->raw_result) {
     free(r->ui_result);
     free(r->raw_result);
     free(r);
-    lua_pop(L, 3);
+    lua_pop(L, 5);
     return NULL;
   }
-  lua_pop(L, 3);
+  lua_pop(L, 5);
 
   return r;
 }

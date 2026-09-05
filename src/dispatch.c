@@ -184,8 +184,15 @@ void dispatch_queue_clear(void) {
 static void flush_buffered_results(void) {
   if (g_buffered_results.size > 0) {
     for (int i = 0; i < g_buffered_results.size; i++) {
+      Messages *messages = get_messages();
+      size_t previous_size = messages->size;
       add_message(g_buffered_results.items[i].ui_result,
                   g_buffered_results.items[i].raw_result, MSG_USER);
+      if (messages->size > previous_size &&
+          g_buffered_results.items[i].shell_output_start != (size_t)-1) {
+        message_tag_shell_output(messages->items[messages->size - 1],
+                                  g_buffered_results.items[i].shell_output_start);
+      }
       g_buffered_results.items[i].ui_result = NULL;
       g_buffered_results.items[i].raw_result = NULL;
     }
@@ -215,15 +222,7 @@ static void flush_buffered_and_send(const char *ui_text, const char *raw_text,
 }
 
 static void add_error_and_emit(const char *error) {
-  if (g_buffered_results.size > 0) {
-    for (int i = 0; i < g_buffered_results.size; i++) {
-      add_message(g_buffered_results.items[i].ui_result,
-                  g_buffered_results.items[i].raw_result, MSG_USER);
-      g_buffered_results.items[i].ui_result = NULL;
-      g_buffered_results.items[i].raw_result = NULL;
-    }
-    buffered_results_clear();
-  }
+  flush_buffered_results();
   char *cp_err = my_strdup(error);
   add_message(cp_err, cp_err, MSG_USER);
   char *empty = my_strdup("");
@@ -237,7 +236,7 @@ static void add_plugin_result(Plugin *p, PluginResult *r) {
     cmd++;
   char label[64];
   snprintf(label, sizeof(label), "ctx:%s", cmd);
-  buffer_plugin_result(label, r->ui_result, r->raw_result);
+  buffer_plugin_result(label, r->ui_result, r->raw_result, r->shell_output_start);
   free(r);
 }
 
@@ -462,6 +461,24 @@ void dispatch_submit(void) {
   }
 }
 
+static void execute_popup_selection(Plugin *p, size_t cmd_end,
+                                    char **selected, int sel_count) {
+  char submitted[INPUT_BUFFER_SIZE];
+  snprintf(submitted, sizeof(submitted), "%s", input_get_text());
+  /* Match normal submission: nested waits edit a fresh draft, not the command. */
+  input_clear();
+  popup_close();
+  render_all();
+  PluginResult *r = plugin_execute(p, submitted, cmd_end, selected, sel_count);
+  if (r) {
+    if (p->include_in_history)
+      add_plugin_result(p, r);
+    else
+      show_plugin_result(p, r);
+  }
+  popup_free_selected(selected, sel_count);
+}
+
 void dispatch_popup_result(void) {
   char **selected;
   int sel_count;
@@ -523,27 +540,9 @@ void dispatch_popup_result(void) {
         popup_free_selected(selected, sel_count);
         return;
       }
-      PluginResult *r =
-          plugin_execute(p, input_get_text(), cmd_end, selected, sel_count);
-      if (r) {
-        if (p->include_in_history)
-          add_plugin_result(p, r);
-        else
-          show_plugin_result(p, r);
-      }
-      input_clear();
-      popup_free_selected(selected, sel_count);
+      execute_popup_selection(p, cmd_end, selected, sel_count);
     } else {
-      PluginResult *r =
-          plugin_execute(p, input_get_text(), cmd_end, selected, sel_count);
-      if (r) {
-        if (p->include_in_history)
-          add_plugin_result(p, r);
-        else
-          show_plugin_result(p, r);
-      }
-      input_clear();
-      popup_free_selected(selected, sel_count);
+      execute_popup_selection(p, cmd_end, selected, sel_count);
     }
   }
   if (!selected || sel_count == 0)

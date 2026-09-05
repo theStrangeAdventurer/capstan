@@ -28,7 +28,11 @@ static int response_done_calls;
 static int response_status;
 static int response_has_session;
 
-void render_all(void) {}
+static int wait_pump_calls;
+static int wait_render_calls;
+
+void render_all(void) { wait_render_calls++; }
+void tui_pump_blocking(void) { wait_pump_calls++; }
 
 int napms(int ms) {
   usleep((useconds_t)ms * 1000);
@@ -762,7 +766,39 @@ static MunitResult test_cancel_uses_stable_async_id(
   return MUNIT_OK;
 }
 
+static MunitResult test_wait_frame_services_input_only_in_tui(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  http_init(L);
+  http_set_headless(0);
+  wait_pump_calls = 0;
+  wait_render_calls = 0;
+  munit_assert_int(luaL_dostring(L,
+      "for i = 1, 10 do http.wait_frame() end"), ==, LUA_OK);
+  munit_assert_int(wait_pump_calls, >, 0);
+  munit_assert_int(wait_render_calls, ==, 0);
+  munit_assert_int(lua_gettop(L), ==, 0);
+
+  http_set_headless(1);
+  wait_pump_calls = 0;
+  munit_assert_int(luaL_dostring(L,
+      "for i = 1, 10 do http.wait_frame() end"), ==, LUA_OK);
+  munit_assert_int(wait_pump_calls, ==, 0);
+  munit_assert_int(wait_render_calls, ==, 0);
+  munit_assert_int(lua_gettop(L), ==, 0);
+  http_set_headless(0);
+  http_cleanup();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/wait_frame_services_input_only_in_tui",
+     test_wait_frame_services_input_only_in_tui, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/get_follows_redirect", test_http_get_follows_redirect, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/post_stream_success_done_has_no_error_body",

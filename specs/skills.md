@@ -28,6 +28,10 @@ directories at startup.
   or the task matches a skill description, the agent must read the listed
   `Skill file` completely before applying the skill. The metadata index alone is
   not enough to use a skill.
+- For `embedded:` skill references, the prompt explicitly instructs the model
+  to call `file_read` with the exact `path`, including the prefix. These reads
+  use memory, not filesystem paths. The model must not guess alternate disk
+  locations; an embedded-read failure must be reported as an error.
 - Matching skills have priority zero in tool selection: a skill whose name or
   description matches the task must be used before MCP tools, built-in tools,
   fetch/direct HTTP, and shell. For research or web-search tasks, any matching
@@ -86,5 +90,6 @@ that value.
 
 `make test` covers FrontMatter-only prompt rendering, ignored fallback formats,
 recursive resource manifests for `/skills`, empty directories, shared home and
-built-in skill loading, and override behavior.
+built-in skill loading, override behavior, and explicit in-memory reading
+instructions for embedded references.
 `make test-http-lua` covers the `/skills` Lua command.

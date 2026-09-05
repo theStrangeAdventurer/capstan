@@ -132,43 +132,6 @@ static int read_backspace_after_escape(void) {
   return 0;
 }
 
-static int read_bracketed_paste(void) {
-  int matched = 0;
-
-  while (1) {
-    int ch;
-    if (!getch_wait_ms(&ch, 100))
-      return 1;
-
-    if (matched == 0) {
-      if (ch == APP_KEY_ESCAPE) {
-        matched = 1;
-        continue;
-      }
-      if (ch == '\r')
-        ch = '\n';
-      input_insert(ch);
-      continue;
-    }
-
-    const char end_marker[] = "[201~";
-    if (ch == (unsigned char)end_marker[matched - 1]) {
-      matched++;
-      if (end_marker[matched - 1] == '\0')
-        return 1;
-      continue;
-    }
-
-    input_insert(APP_KEY_ESCAPE);
-    for (int i = 0; i < matched - 1; i++)
-      input_insert(end_marker[i]);
-    if (ch == '\r')
-      ch = '\n';
-    input_insert(ch);
-    matched = 0;
-  }
-}
-
 static int message_pane_geometry(int *out_y, int *out_x, int *out_h,
                                  int *out_w) {
   int rows, cols;
@@ -264,7 +227,8 @@ static void copy_active_selection(void) {
   if (!texts)
     return;
   for (size_t i = 0; i < msgs->size; i++)
-    texts[i] = msgs->items[i]->text;
+    texts[i] = msgs->items[i]->shell_output.view
+                   ? msgs->items[i]->shell_output.view : msgs->items[i]->text;
   visual_yank(texts, (int)msgs->size);
   free(texts);
 }
@@ -307,6 +271,12 @@ static int stop_active_stream(void) {
 }
 
 static void handle_mouse_event(MEVENT *event) {
+  if ((event->bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) &&
+      tui_handle_shell_mouse(event->y, event->x,
+          (event->bstate & (BUTTON1_CLICKED | BUTTON1_RELEASED)) != 0)) {
+    g_mouse_selecting_messages = 0;
+    return;
+  }
   if (event->bstate & BUTTON4_PRESSED) {
     scroll_up(3);
     return;
@@ -1518,6 +1488,7 @@ int main(int argc, char *argv[]) {
   noecho();
   timeout(0);
   keypad(stdscr, TRUE);
+  define_key("\033[200~", TUI_KEY_PASTE_BEGIN);
   terminal_reset_mouse_modes();
   mousemask(ALL_MOUSE_EVENTS, NULL);
   terminal_enable_bracketed_paste();
@@ -1590,6 +1561,16 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
+    if (tui_handle_paste(ch)) {
+      long long now = main_now_ms();
+      if (!input_paste_active() ||
+          now - last_idle_render_ms >= ACTIVE_RENDER_INTERVAL_MS) {
+        render_all();
+        last_idle_render_ms = now;
+      }
+      continue;
+    }
+
     if (popup_is_message_active()) {
       popup_message_handle_key(ch);
       render_all();
@@ -1638,11 +1619,6 @@ int main(int argc, char *argv[]) {
     if (ch == APP_KEY_ESCAPE && mode_get() == FOCUS_INPUT) {
       if (read_backspace_after_escape()) {
         input_delete_word_backward();
-        render_all();
-        continue;
-      }
-      if (read_exact_after_escape("[200~")) {
-        read_bracketed_paste();
         render_all();
         continue;
       }

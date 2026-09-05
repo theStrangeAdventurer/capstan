@@ -9,6 +9,8 @@ static char captured_shell_command[512];
 static int captured_shell_timeout = 0;
 static int simulated_shell_exit = 0;
 static int simulated_shell_timeout = 0;
+static const char *stdout_override = NULL;
+static const char *stderr_override = NULL;
 
 static int l_ctx_replace(lua_State *L) {
   const char *ui_val = luaL_checkstring(L, 2);
@@ -30,7 +32,7 @@ static int l_tools_shell(lua_State *L) {
   lua_setfield(L, -2, "exit");
   lua_pushboolean(L, simulated_shell_timeout);
   lua_setfield(L, -2, "timed_out");
-  lua_pushstring(L,
+  lua_pushstring(L, stdout_override ? stdout_override :
                  "HTTP/1.1 200 OK\n"
                  "Authorization: Bearer stdout-secret\n"
                  "X-API-Key: stdout-api-key\n"
@@ -43,7 +45,7 @@ static int l_tools_shell(lua_State *L) {
                  "custom value org_custom-secret\n"
                  "{\"access_token\":\"json-secret\"}\n");
   lua_setfield(L, -2, "stdout");
-  lua_pushstring(L,
+  lua_pushstring(L, stderr_override ? stderr_override :
                  "Cookie: session=stderr-secret\n"
                  "password=stderr-password\n");
   lua_setfield(L, -2, "stderr");
@@ -53,8 +55,13 @@ static int l_tools_shell(lua_State *L) {
 static lua_State *new_state(void) {
   simulated_shell_exit = 0;
   simulated_shell_timeout = 0;
+  stdout_override = NULL;
+  stderr_override = NULL;
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
+  munit_assert_int(luaL_dostring(L,
+      "capstan = {log = function(category, message) shell_log = message end}"),
+      ==, LUA_OK);
 
   lua_newtable(L);
   lua_pushcfunction(L, l_tools_shell);
@@ -112,7 +119,14 @@ static MunitResult test_shell_redacts_ui_and_llm_results(
 
   munit_assert_true(strstr(ui, "command-secret") == NULL);
   munit_assert_true(strstr(ui, "Shell: curl https://example.test") != NULL);
-  munit_assert_true(strstr(ui, "Authorization") == NULL);
+  munit_assert_true(strstr(ui, "Authorization: [REDACTED]") != NULL);
+  munit_assert_string_equal(strchr(ui, '\n') + 1, llm);
+  lua_getglobal(L, "shell_log");
+  const char *logged = lua_tostring(L, -1);
+  munit_assert_not_null(logged);
+  munit_assert_true(strstr(logged, "shell result command=curl https://example.test") != NULL);
+  munit_assert_string_equal(strchr(logged, '\n') + 1, llm);
+  lua_pop(L, 1);
 
   munit_assert_true(strstr(llm, "stdout-secret") == NULL);
   munit_assert_true(strstr(llm, "stdout-api-key") == NULL);
@@ -202,13 +216,99 @@ static MunitResult test_shell_nonzero_exit_reports_failure(
   munit_assert_true(strstr(lua_tostring(L, -3), "exit 1") != NULL);
   munit_assert_true(strstr(lua_tostring(L, -2), "[exit 1]") != NULL);
   munit_assert_false(lua_toboolean(L, -1));
+  const char *ui = lua_tostring(L, -3);
+  munit_assert_not_null(strstr(ui, "HTTP/1.1 200 OK"));
+  munit_assert_not_null(strstr(ui, "stderr:\n"));
+  lua_getglobal(L, "shell_log");
+  munit_assert_string_equal(strchr(lua_tostring(L, -1), '\n') + 1,
+                            strchr(ui, '\n') + 1);
 
   simulated_shell_exit = 0;
   lua_close(L);
   return MUNIT_OK;
 }
 
+static MunitResult test_shell_output_empty_timeout_and_limits(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_state();
+  stdout_override = "";
+  stderr_override = "";
+  load_shell_plugin(L);
+  const char *args[] = {"git", "status"};
+  call_handler(L, "/shell git status", args, 2);
+  munit_assert_string_equal(lua_tostring(L, -3),
+                            "Shell: git status\n[exit 0]");
+  lua_pop(L, 3);
+
+  simulated_shell_timeout = 1;
+  stdout_override = "partial output\n";
+  stderr_override = "timeout diagnostic\n";
+  call_handler(L, "/shell -t 7 git status", args, 2);
+  munit_assert_not_null(strstr(lua_tostring(L, -3), "TIMED OUT after 7s"));
+  munit_assert_not_null(strstr(lua_tostring(L, -3), "partial output"));
+  munit_assert_not_null(strstr(lua_tostring(L, -3), "stderr:\ntimeout diagnostic"));
+  munit_assert_false(lua_toboolean(L, -1));
+  lua_getglobal(L, "shell_log");
+  munit_assert_not_null(strstr(lua_tostring(L, -1), "TIMED OUT after 7s"));
+  lua_pop(L, 4);
+
+  simulated_shell_timeout = 0;
+  stdout_override = "visible\nhidden\n";
+  stderr_override = "";
+  munit_assert_int(luaL_dostring(L,
+      "capstan.config = {tool_output = {max_lines = 2}}"), ==, LUA_OK);
+  call_handler(L, "/shell git status", args, 2);
+  const char *ui = lua_tostring(L, -3);
+  munit_assert_not_null(strstr(ui, "visible"));
+  munit_assert_null(strstr(ui, "hidden"));
+  munit_assert_not_null(strstr(ui, "[Tool output truncated:"));
+  lua_getglobal(L, "shell_log");
+  munit_assert_string_equal(strchr(lua_tostring(L, -1), '\n') + 1,
+                            strchr(ui, '\n') + 1);
+  lua_pop(L, 4);
+
+  char large_output[4096];
+  memset(large_output, 'x', sizeof(large_output) - 1);
+  large_output[sizeof(large_output) - 1] = '\0';
+  stdout_override = large_output;
+  munit_assert_int(luaL_dostring(L,
+      "capstan.config.tool_output = {max_bytes = 1024}"), ==, LUA_OK);
+  call_handler(L, "/shell git status", args, 2);
+  ui = lua_tostring(L, -3);
+  munit_assert_size(strlen(strchr(ui, '\n') + 1), <=, 1024);
+  munit_assert_not_null(strstr(ui, "[Tool output truncated:"));
+  lua_getglobal(L, "shell_log");
+  munit_assert_string_equal(strchr(lua_tostring(L, -1), '\n') + 1,
+                            strchr(ui, '\n') + 1);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_shell_multiline_metadata(
+    const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  lua_State *L = new_state();
+  munit_assert_int(luaL_dostring(L,
+      "local plugin = dofile('plugins/shell.lua')\n"
+      "local command = \"cat <<'END'\\n[exit 99]\\nEND\\nfalse\"\n"
+      "local ui, raw, ok, metadata = plugin.handler({\n"
+      "  input = '/shell ' .. command, command = '/shell'})\n"
+      "local header = 'Shell: ' .. command .. '\\n'\n"
+      "assert(metadata.shell_output_start == #header)\n"
+      "assert(ui:sub(metadata.shell_output_start + 1) == raw)\n"
+      "assert(ui:sub(1, #header) == header)\n"), ==, LUA_OK);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/multiline_metadata", test_shell_multiline_metadata, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/output_empty_timeout_and_limits", test_shell_output_empty_timeout_and_limits,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/redacts_ui_and_llm_results", test_shell_redacts_ui_and_llm_results, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/manual_command_preserves_spaces",

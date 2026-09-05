@@ -24,6 +24,18 @@ run.
   enqueue. During blocking plugin, MCP, shell, or permission work outside an
   agent run, Enter leaves the draft intact for submission after the blocking
   operation returns; it never starts a nested dispatch on the same Lua state.
+  Commands executed from autocomplete also clear the submitted command before
+  invoking the handler, preserving any fresh draft entered during its waits.
+- Synchronous HTTP waits, including the `Delegating` subagent wait loop,
+  service the same blocking TUI input pump instead of only repainting. The pump
+  does not poll HTTP or execute new agent runs recursively; headless waits never
+  touch terminal input.
+- Bracketed paste uses one incremental body decoder in both the main loop and
+  the blocking pump. UTF-8 bytes and newlines stay in the draft; pasted shortcuts
+  and slash commands are text, not actions. Partial end markers survive idle
+  frames and the return from a blocking wait. There is no body timeout that could
+  silently turn the rest of a delayed paste into commands. Input processing in
+  the blocking pump is bounded to 256 keys per frame so pastes do not starve work.
 - Slash commands are not queued. While a run is active they remain in the input
   editor and Capstan reports that commands are unavailable.
 - Esc cancellation finishes the active run after cancelling its streams, then
@@ -41,4 +53,9 @@ never recursively from an HTTP callback.
 
 `make test` covers queue capacity, FIFO order, empty input rejection, extraction,
 and cleanup. `make test-http-lua` and `make test-build` cover the C/Lua bridge and
-embedded runtime build.
+embedded runtime build. `make test-tui-input` runs the real ncurses binary in
+an isolated pseudo-terminal with a local wait fixture (no API calls). It checks
+live dictation-style UTF-8/multiline paste during waiting, FIFO submission without
+recursive dispatch, paste spanning the return to the main loop, manual-command
+draft retention, and ordinary idle paste. Unit tests cover split/literal end
+markers, full input buffers, and HTTP wait frames servicing input only in TUI.

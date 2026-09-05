@@ -8,6 +8,8 @@
 static char g_input_buf[INPUT_BUFFER_SIZE] = {0};
 static char g_display_buf[INPUT_DISPLAY_BUFFER_SIZE] = {0};
 static int g_cursor = 0;
+static int g_paste_active = 0;
+static size_t g_paste_matched = 0;
 static InputImage *g_images = NULL;
 static size_t g_image_count = 0;
 static size_t g_image_capacity = 0;
@@ -26,6 +28,8 @@ void input_init(void) {
   memset(g_input_buf, 0, INPUT_BUFFER_SIZE);
   memset(g_display_buf, 0, sizeof(g_display_buf));
   g_cursor = 0;
+  g_paste_active = 0;
+  g_paste_matched = 0;
   input_images_free(g_images, g_image_count);
   g_images = NULL;
   g_image_count = 0;
@@ -68,6 +72,39 @@ void input_insert(int ch) {
     return;
   memmove(g_input_buf + g_cursor + 1, g_input_buf + g_cursor, tail_len);
   g_input_buf[g_cursor++] = (char)ch;
+}
+
+void input_paste_begin(void) {
+  g_paste_active = 1;
+  g_paste_matched = 0;
+}
+
+int input_paste_active(void) { return g_paste_active; }
+
+int input_paste_feed(int ch) {
+  static const char end_marker[] = "\033[201~";
+  if (!g_paste_active || ch < 0 || ch > 0xFF)
+    return 0;
+
+  if (ch == (unsigned char)end_marker[g_paste_matched]) {
+    if (++g_paste_matched == sizeof(end_marker) - 1) {
+      g_paste_active = 0;
+      g_paste_matched = 0;
+    }
+    return 1;
+  }
+
+  /* A partial marker was literal text. Reconsider this byte so a second
+     ESC can still begin the real end marker. Never interpret pasted keys
+     as shortcuts or submit pasted newlines. */
+  for (size_t i = 0; i < g_paste_matched; i++)
+    input_insert((unsigned char)end_marker[i]);
+  g_paste_matched = 0;
+  if (ch == (unsigned char)end_marker[0])
+    g_paste_matched = 1;
+  else if (ch != 0)
+    input_insert(ch == '\r' ? '\n' : ch);
+  return 1;
 }
 
 void input_set_text(const char *text) {

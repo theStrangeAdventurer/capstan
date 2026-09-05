@@ -507,7 +507,13 @@ char *skills_build_prompt(const BuiltinSkill *builtin_skills,
                    "the concrete workflow/tool instructions through the "
                    "subagents instructions field, and restrict each subagent "
                    "to the narrow required tools. "
-                   "Do not apply a skill from this index alone.\n")) {
+                   "Do not apply a skill from this index alone.\n"
+                   "For a `Skill file` starting with `embedded:`, call "
+                   "`file_read` with `path` set to that exact value (including "
+                   "the prefix). It reads the built-in asset from memory, not "
+                   "the filesystem. Do not prepend a directory, strip the "
+                   "prefix, or search for a disk copy. If the embedded read "
+                   "fails, report the error rather than guessing other paths.\n")) {
     skill_list_free(&list);
     return my_strdup("");
   }

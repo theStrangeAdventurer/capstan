@@ -12,6 +12,18 @@
 
 static Messages messages = {0};
 static unsigned long g_messages_revision = 0;
+static int g_shell_output_enabled = 0;
+
+void agent_enable_shell_output(int enabled) { g_shell_output_enabled = enabled; }
+
+void message_tag_shell_output(Message *message, size_t start) {
+  if (!g_shell_output_enabled || !message || !message->text)
+    return;
+  size_t end = strlen(message->text);
+  if (start >= end)
+    return;
+  shell_output_add(&message->shell_output, message->text, start, end);
+}
 
 Messages *get_messages(void) { return &messages; }
 unsigned long agent_messages_revision(void) { return g_messages_revision; }
@@ -254,6 +266,7 @@ void add_message(char *text, char *raw_text, MessageRole role) {
   message->role = role;
   message->images = NULL;
   message->image_count = 0;
+  message->shell_output = (ShellOutput){0};
 
   da_append(&messages, message);
   g_messages_revision++;
@@ -293,6 +306,7 @@ void free_message(Message *m) {
     free(m->images[i].data);
   }
   free(m->images);
+  shell_output_free(&m->shell_output);
   free(m);
 }
 
@@ -344,7 +358,13 @@ static int l_agent_append(lua_State *L) {
 
 static int l_agent_append_ui(lua_State *L) {
   const char *text = luaL_checkstring(L, 1);
-  append_to_last_message_ui(text, l_agent_message_role(L));
+  MessageRole role = l_agent_message_role(L);
+  const char *effect = luaL_optstring(L, 3, "");
+  Message *message = find_last_message_by_role(role);
+  size_t start = message && message->text ? strlen(message->text) : 0;
+  append_to_last_message_ui(text, role);
+  if (strcmp(effect, "shell") == 0)
+    message_tag_shell_output(find_last_message_by_role(role), start);
   return 0;
 }
 

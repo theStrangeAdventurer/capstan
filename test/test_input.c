@@ -296,7 +296,69 @@ static MunitResult test_backspace_removes_image(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static void paste_bytes(const char *text) {
+  for (const unsigned char *p = (const unsigned char *)text; *p; p++)
+    munit_assert_true(input_paste_feed(*p));
+}
+
+static MunitResult test_paste_utf8_multiline(const MunitParameter params[],
+                                           void *data) {
+  (void)params; (void)data;
+  input_init();
+  munit_assert_false(input_paste_feed('x'));
+  input_set_text("+-");
+  input_move_left();
+  input_paste_begin();
+  paste_bytes("Привет\rмир\n\t/shell echo ok");
+  munit_assert_string_equal(input_get_text(), "+Привет\nмир\n\t/shell echo ok-");
+  munit_assert_true(input_paste_active());
+  paste_bytes("\033[201~");
+  munit_assert_false(input_paste_active());
+  munit_assert_false(input_paste_feed('\n'));
+  return MUNIT_OK;
+}
+
+static MunitResult test_paste_split_and_literal_markers(
+    const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  input_init();
+  input_paste_begin();
+  paste_bytes("one\033[20");
+  /* Idle frames and resize keycodes do not finish or corrupt a paste. */
+  munit_assert_false(input_paste_feed(-1));
+  munit_assert_false(input_paste_feed(0x101));
+  munit_assert_true(input_paste_active());
+  paste_bytes("x\033[A\027two\033\033[20");
+  paste_bytes("1~");
+  munit_assert_false(input_paste_active());
+  munit_assert_string_equal(input_get_text(), "one\033[20x\033[A\027two\033");
+  input_paste_begin();
+  paste_bytes("next\033[201~");
+  munit_assert_false(input_paste_active());
+  return MUNIT_OK;
+}
+
+static MunitResult test_paste_full_buffer_still_consumes_end(
+    const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  input_init();
+  input_paste_begin();
+  for (int i = 0; i < INPUT_BUFFER_SIZE + 10; i++)
+    munit_assert_true(input_paste_feed('x'));
+  paste_bytes("\n\033[201~");
+  munit_assert_false(input_paste_active());
+  munit_assert_size(strlen(input_get_text()), ==, INPUT_BUFFER_SIZE - 1);
+  munit_assert_false(input_paste_feed('\n'));
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+  {"/paste_utf8_multiline", test_paste_utf8_multiline, NULL, NULL,
+   MUNIT_TEST_OPTION_NONE, NULL},
+  {"/paste_split_and_literal_markers", test_paste_split_and_literal_markers,
+   NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/paste_full_buffer_still_consumes_end", test_paste_full_buffer_still_consumes_end,
+   NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/insert_ascii", test_insert_ascii, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/insert_in_middle", test_insert_in_middle, NULL, NULL,

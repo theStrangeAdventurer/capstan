@@ -4,6 +4,7 @@
 #include <lua.h>
 #include <stddef.h>
 #include "usage.h"
+#include "shell_output.h"
 
 typedef enum {
   MSG_USER,
@@ -21,6 +22,7 @@ typedef struct {
   char *raw_text;
   MessageImage *images;
   size_t image_count;
+  ShellOutput shell_output;
 } Message;
 
 typedef struct {
@@ -30,6 +32,8 @@ typedef struct {
 } Messages;
 
 void add_message(char *text, char *raw_text, MessageRole role);
+void agent_enable_shell_output(int enabled);
+void message_tag_shell_output(Message *message, size_t start);
 int message_add_image(Message *message, const char *mime_type,
                       const char *base64_data);
 void append_to_last_message(const char *text, MessageRole role);

@@ -27,7 +27,15 @@ both known fields is the compatibility trade-off.
 - Paths with the `embedded:` prefix read read-only embedded runtime assets
   through `capstan.embedded_asset`. This is used for built-in skill files such
   as `embedded:skills/wiki-onboarding/SKILL.md` and does not touch the
-  filesystem.
+  filesystem. The shared `workspace.embedded_asset_name` parser identifies
+  these references for the reader and dispatcher; they must not be normalized
+  against the workspace or routed into Wiki reads. Permission targets, tool
+  logs, and UI status preserve the literal `embedded:` reference. Existing
+  file-read permission rules still apply; embedded reads do not grant access
+  to files outside the workspace.
+- Missing, empty, or unavailable embedded assets return an embedded-read error,
+  without falling back to disk reads or directory listings. Tool descriptions
+  explicitly tell the model how to read these references.
 - `README` falls back to common README extensions when the exact file is
   missing.
 - Manual directory paths are listed with one entry per line and directories
@@ -69,4 +77,7 @@ internally, reads workspace-root `.gitignore` by default, and also applies
 selection behavior. `make test-http-lua` covers README fallback,
 workspace-relative file reads, model-tool `ctx.tool_args.path` handling,
 embedded asset reads, directory path listing, and shell-quoting regression for
-directory listing.
+directory listing. Dispatcher regression tests verify embedded references in
+permissions, logs, UI, and model history, no filesystem access (including when
+Wiki overlaps the workspace), and missing/unavailable/empty asset errors plus
+explicit permission denial.
