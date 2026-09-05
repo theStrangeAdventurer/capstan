@@ -184,15 +184,166 @@ static int hex_value(char ch) {
   return -1;
 }
 
+/* Validate the entire row before the legacy field extractors inspect it. */
+static void session_json_space(const char **p) {
+  while (**p && strchr(" \t\r\n", **p))
+    (*p)++;
+}
+
+static int session_json_string(const char **cursor, const char *end) {
+  const char *p = *cursor;
+  if (*p != '"')
+    return 0;
+  p++;
+  while (p < end && *p != '"') {
+    if ((unsigned char)*p < 0x20)
+      return 0;
+    if (*p == '\\') {
+      p++;
+      if (p == end)
+        return 0;
+      if (*p == 'u') {
+        p++;
+        if (end - p < 4)
+          return 0;
+        for (int i = 0; i < 4; i++)
+          if (hex_value(*p++) < 0)
+            return 0;
+      } else {
+        if (!strchr("\"\\/bfnrt", *p))
+          return 0;
+        p++;
+      }
+    } else {
+      size_t length = 0;
+      if (!valid_utf8_sequence((const unsigned char *)p, (size_t)(end - p),
+                               &length))
+        return 0;
+      p += length;
+    }
+  }
+  if (p == end)
+    return 0;
+  *cursor = p + 1;
+  return 1;
+}
+
+static int session_json_value(const char **cursor, const char *end,
+                              unsigned depth) {
+  session_json_space(cursor);
+  const char *p = *cursor;
+  if (p == end || depth > 64)
+    return 0;
+  if (*p == '"')
+    return session_json_string(cursor, end);
+  if (*p == '{' || *p == '[') {
+    int object = *p == '{';
+    char close = object ? '}' : ']';
+    p++;
+    session_json_space(&p);
+    if (*p != close) {
+      for (;;) {
+        if (object) {
+          if (!session_json_string(&p, end))
+            return 0;
+          session_json_space(&p);
+          if (*p != ':')
+            return 0;
+          p++;
+        }
+        if (!session_json_value(&p, end, depth + 1))
+          return 0;
+        session_json_space(&p);
+        if (*p != ',')
+          break;
+        p++;
+        session_json_space(&p);
+      }
+    }
+    if (*p != close)
+      return 0;
+    *cursor = p + 1;
+    return 1;
+  }
+  const char *literals[] = {"true", "false", "null"};
+  for (size_t i = 0; i < sizeof(literals) / sizeof(literals[0]); i++) {
+    size_t len = strlen(literals[i]);
+    if ((size_t)(end - p) >= len && memcmp(p, literals[i], len) == 0) {
+      *cursor = p + len;
+      return 1;
+    }
+  }
+  if (*p == '-')
+    p++;
+  if (*p == '0') {
+    p++;
+  } else {
+    if (*p < '1' || *p > '9')
+      return 0;
+    do { p++; } while (*p >= '0' && *p <= '9');
+  }
+  if (*p == '.') {
+    p++;
+    if (*p < '0' || *p > '9')
+      return 0;
+    do { p++; } while (*p >= '0' && *p <= '9');
+  }
+  if (*p == 'e' || *p == 'E') {
+    p++;
+    if (*p == '+' || *p == '-')
+      p++;
+    if (*p < '0' || *p > '9')
+      return 0;
+    do { p++; } while (*p >= '0' && *p <= '9');
+  }
+  *cursor = p;
+  return 1;
+}
+
+static int session_json_row_valid(const char *line) {
+  const char *p = line;
+  const char *end = line + strlen(line);
+  session_json_space(&p);
+  if (*p != '{' || !session_json_value(&p, end, 0))
+    return 0;
+  session_json_space(&p);
+  return p == end;
+}
+
+/* Rows have already been validated. Only top-level keys own session fields;
+ * a matching key in an unknown nested object must not supply required data. */
+static const char *session_json_field(const char *line, const char *field) {
+  const char *p = line, *end = line + strlen(line);
+  session_json_space(&p);
+  p++; /* opening object */
+  session_json_space(&p);
+  while (*p != '}') {
+    const char *key = p + 1;
+    if (!session_json_string(&p, end))
+      return NULL;
+    int matches = (size_t)(p - key - 1) == strlen(field) &&
+                  memcmp(key, field, strlen(field)) == 0;
+    session_json_space(&p);
+    p++; /* colon */
+    session_json_space(&p);
+    if (matches)
+      return p;
+    if (!session_json_value(&p, end, 1))
+      return NULL;
+    session_json_space(&p);
+    if (*p != ',')
+      break;
+    p++;
+    session_json_space(&p);
+  }
+  return NULL;
+}
+
 static char *json_field_string(const char *line, const char *field) {
-  char needle[128];
-  int n = snprintf(needle, sizeof(needle), "\"%s\":\"", field);
-  if (n < 0 || (size_t)n >= sizeof(needle))
+  const char *p = session_json_field(line, field);
+  if (!p || *p != '"')
     return NULL;
-  const char *p = strstr(line, needle);
-  if (!p)
-    return NULL;
-  p += strlen(needle);
+  p++;
   char *out = NULL;
   size_t len = 0, cap = 0;
   while (*p && *p != '"') {
@@ -228,16 +379,15 @@ fail:
 
 static long long json_field_integer(const char *line, const char *field,
                                     long long fallback) {
-  char needle[128];
-  int n = snprintf(needle, sizeof(needle), "\"%s\":", field);
-  if (n < 0 || (size_t)n >= sizeof(needle))
-    return fallback;
-  const char *p = strstr(line, needle);
+  const char *p = session_json_field(line, field);
   if (!p)
     return fallback;
   char *end = NULL;
-  long long value = strtoll(p + strlen(needle), &end, 10);
-  return end == p + strlen(needle) ? fallback : value;
+  errno = 0;
+  long long value = strtoll(p, &end, 10);
+  if (end == p || errno == ERANGE || !strchr(" \t\r\n,}", *end))
+    return fallback;
+  return value;
 }
 
 void session_title_from_text(const char *text, char *title, size_t title_size) {
@@ -416,7 +566,7 @@ static char *read_line(FILE *f, SessionLineStatus *status) {
   while ((ch = fgetc(f)) != EOF) {
     if (ch == '\n')
       break;
-    if (len >= SESSION_MAX_LINE) {
+    if (ch == '\0' || len >= SESSION_MAX_LINE) {
       free(line);
       return NULL;
     }
@@ -514,6 +664,7 @@ int session_load(const char *id, Session *session) {
   SessionLineStatus line_status = SESSION_LINE_ERROR;
   char *line = read_line(f, &line_status);
   int ok = line_status == SESSION_LINE_OK && line &&
+           session_json_row_valid(line) &&
            json_field_integer(line, "version", -1) == SESSION_VERSION;
   char *stored_id = ok ? json_field_string(line, "id") : NULL;
   char *title = ok ? json_field_string(line, "title") : NULL;
@@ -543,6 +694,11 @@ int session_load(const char *id, Session *session) {
       break;
     }
     if (!line[0]) { free(line); continue; }
+    if (!session_json_row_valid(line)) {
+      free(line);
+      ok = 0;
+      break;
+    }
     char *type = json_field_string(line, "type");
     if (type && strcmp(type, "image") == 0) {
       long long image_index = json_field_integer(line, "index", -1);

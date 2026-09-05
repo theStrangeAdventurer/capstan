@@ -36,8 +36,12 @@ run.
   frames and the return from a blocking wait. There is no body timeout that could
   silently turn the rest of a delayed paste into commands. Input processing in
   the blocking pump is bounded to 256 keys per frame so pastes do not starve work.
-- Slash commands are not queued. While a run is active they remain in the input
-  editor and Capstan reports that commands are unavailable.
+- Slash commands are not queued. While a run is active or queued submissions
+  are pending, they remain in the input editor and Capstan reports that commands
+  are unavailable. The same guard applies to Enter, Tab/automatic command menus,
+  and confirmation of an already-open selection (including session switching
+  and directory drill-down). Rejected selections do not clear the draft or call
+  plugin handlers/autocomplete fetchers.
 - Esc cancellation finishes the active run after cancelling its streams, then
   allows the queued batch to start from the main loop.
 - The queue is in-memory only and is cleared when Capstan exits.
@@ -57,5 +61,7 @@ embedded runtime build. `make test-tui-input` runs the real ncurses binary in
 an isolated pseudo-terminal with a local wait fixture (no API calls). It checks
 live dictation-style UTF-8/multiline paste during waiting, FIFO submission without
 recursive dispatch, paste spanning the return to the main loop, manual-command
-draft retention, and ordinary idle paste. Unit tests cover split/literal end
+draft retention, ordinary idle paste, and rejection of Tab/Enter commands during
+an asynchronous run with the draft still usable after cancellation. Unit tests
+cover the shared command guard for active runs and pending queues, split/literal end
 markers, full input buffers, and HTTP wait frames servicing input only in TUI.

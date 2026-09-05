@@ -6,6 +6,7 @@ extern MunitSuite cli_args_suite;
 extern MunitSuite clipboard_suite;
 extern MunitSuite diff_highlight_suite;
 extern MunitSuite finder_suite;
+extern MunitSuite editor_suite;
 extern MunitSuite input_suite;
 extern MunitSuite input_history_suite;
 extern MunitSuite jsonl_suite;
@@ -39,6 +40,7 @@ int main(int argc, char *argv[]) {
     clipboard_suite,
     diff_highlight_suite,
     finder_suite,
+    editor_suite,
     input_suite,
     input_history_suite,
     jsonl_suite,

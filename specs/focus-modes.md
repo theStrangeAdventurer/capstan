@@ -37,6 +37,16 @@ the viewport stays anchored to the same message lines. Scrolling back to the
 bottom (`scroll == 0`) re-enables tail-follow, and new submissions reset scroll
 state to the bottom.
 
+In MESSAGES, page/half-page scrolling and the wheel move the cursor in the
+same direction as the viewport, by the actual clamped scroll distance. The
+cursor stays inside the new viewport (including padding-only views), so render's
+cursor visibility adjustment cannot undo manual scrolling. Selection anchors
+are preserved. `visual_scroll_view` owns this policy for both the main loop and
+blocking UI pump; INPUT scrolling never activates the message cursor.
+Pure visual tests cover direction, boundaries, selection anchors, viewport
+containment and tail-follow restoration. PTY regression scenarios: PgUp/PgDn,
+Ctrl-U/D and wheel in MESSAGES, followed by an idle redraw and streaming growth.
+
 In input mode, `Tab` opens command and autocomplete popups when the current
 input starts with a command. When a popup is active, popup key handling takes
 precedence over focus mode switching. In selection and

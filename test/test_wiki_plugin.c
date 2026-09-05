@@ -179,7 +179,6 @@ static char *read_file_alloc(const char *path) {
 
 static void install_ingest_agent_stub(lua_State *L) {
   const char *chunk =
-      "capstan.models = { weak = function() return { provider = 'weak-provider', model = 'weak-model' } end }\n"
       "capstan.agent = { run = function(opts, callbacks)\n"
       "  _G.last_provider = opts.provider\n"
       "  _G.last_model = opts.model\n"
@@ -196,7 +195,6 @@ static void install_ingest_agent_stub(lua_State *L) {
 
 static void install_ingest_agent_error_stub(lua_State *L) {
   const char *chunk =
-      "capstan.models = { weak = function() return { provider = 'weak-provider', model = 'weak-model' } end }\n"
       "capstan.agent = { run = function(opts, callbacks)\n"
       "  if callbacks and callbacks.on_error then callbacks.on_error('HTTP 400 bad unicode') end\n"
       "  if callbacks and callbacks.on_done then callbacks.on_done({ ok = false, error = 'HTTP 400 bad unicode', text = '' }) end\n"
@@ -209,7 +207,6 @@ static void install_ingest_agent_error_stub(lua_State *L) {
 
 static void install_ingest_agent_wrapped_payload_stub(lua_State *L) {
   const char *chunk =
-      "capstan.models = { weak = function() return { provider = 'weak-provider', model = 'weak-model' } end }\n"
       "capstan.agent = { run = function(opts, callbacks)\n"
       "  if callbacks and callbacks.on_text then callbacks.on_text('```python\\ndata = {\"source_id\":\"x\",\"files\":[{\"path\":\"guide.md\"}]}\\n```') end\n"
       "  if callbacks and callbacks.on_done then callbacks.on_done({ ok = true, text = '' }) end\n"
@@ -357,7 +354,7 @@ static MunitResult test_read_reads_relative_file(
   return MUNIT_OK;
 }
 
-static MunitResult test_ingest_uses_weak_model_and_writes_source_index(
+static MunitResult test_ingest_uses_active_model_and_writes_source_index(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -384,10 +381,10 @@ static MunitResult test_ingest_uses_weak_model_and_writes_source_index(
   munit_assert_not_null(ui);
   munit_assert_true(strstr(ui, "Wiki ingest completed") != NULL);
   lua_getglobal(L, "last_provider");
-  munit_assert_string_equal(lua_tostring(L, -1), "weak-provider");
+  munit_assert_true(lua_isnil(L, -1)); /* Runtime owns effective defaults. */
   lua_pop(L, 1);
   lua_getglobal(L, "last_model");
-  munit_assert_string_equal(lua_tostring(L, -1), "weak-model");
+  munit_assert_true(lua_isnil(L, -1));
   lua_pop(L, 1);
   lua_getglobal(L, "last_tools_count");
   munit_assert_int((int)lua_tointeger(L, -1), ==, 0);
@@ -421,6 +418,33 @@ static MunitResult test_ingest_uses_weak_model_and_writes_source_index(
   munit_assert_true(strstr(tool_ui, "Wiki source file:") != NULL);
   munit_assert_true(strstr(tool_ui, "source body") != NULL);
   lua_pop(L, 2);
+
+  /* An indexed file may become a symlink after ingest. Internal targets
+   * remain allowed; sibling roots (even with the same prefix) do not. */
+  char target[4096];
+  snprintf(target, sizeof(target), "%s/target.md", source);
+  write_file(target, "allowed internal target");
+  munit_assert_int(unlink(guide), ==, 0);
+  munit_assert_int(symlink(target, guide), ==, 0);
+  call_tool_handler(L, "wiki_source_read", source_id, "guide.md");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "allowed internal target"));
+  lua_pop(L, 2);
+
+  char outside[4096];
+  snprintf(outside, sizeof(outside), "%s-outside.md", source);
+  write_file(outside, "outside body must not be read");
+  munit_assert_int(unlink(guide), ==, 0);
+  munit_assert_int(symlink(outside, guide), ==, 0);
+  call_tool_handler(L, "wiki_source_read", source_id, "guide.md");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "path resolves outside source root"));
+  munit_assert_null(strstr(lua_tostring(L, -2), "outside body"));
+  lua_pop(L, 2);
+
+  munit_assert_int(unlink(outside), ==, 0);
+  call_tool_handler(L, "wiki_source_read", source_id, "guide.md");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "cannot resolve source file"));
+  lua_pop(L, 2);
+  unlink(target);
 
   call_tool_handler(L, "wiki_source_read", source_id, "missing.md");
   const char *denied = lua_tostring(L, -2);
@@ -486,12 +510,99 @@ static MunitResult test_wiki_ingest_tool_writes_source_index(
   return MUNIT_OK;
 }
 
+/* Each rejected plan must leave even its earlier, valid destinations untouched,
+ * and must fail before model invocation or index persistence. */
+static void assert_copy_plan_safety(void) {
+  for (int scenario = 0; scenario < 8; ++scenario) {
+    char base[4096], root[4096], source[4096], target[4096];
+    char first[4096], last[4096], dest_first[4096], dest_last[4096];
+    char outside[4096], index_dir[4096];
+    snprintf(base, sizeof(base), "/tmp/capstan-wiki-copy-safety-%ld-%d",
+             (long)getpid(), scenario);
+    munit_assert_int(mkdir(base, 0700), ==, 0);
+    snprintf(root, sizeof(root), "%s/wiki", base);
+    snprintf(source, sizeof(source), "%s/source", base);
+    snprintf(outside, sizeof(outside), "%s/outside", base);
+    munit_assert_int(mkdir(root, 0700), ==, 0);
+    munit_assert_int(mkdir(source, 0700), ==, 0);
+    munit_assert_int(mkdir(outside, 0700), ==, 0);
+    snprintf(first, sizeof(first), "%s/a.md", source);
+    snprintf(last, sizeof(last), "%s/z.md", source);
+    write_file(first, "first original");
+    write_file(last, "last original");
+    snprintf(target, sizeof(target), "%s/imported", root);
+    if (scenario == 0 || scenario == 1 || scenario == 2 || scenario == 6) {
+      munit_assert_int(mkdir(target, 0700), ==, 0);
+    } else if (scenario == 3) {
+      munit_assert_int(symlink(outside, target), ==, 0);
+    } else if (scenario == 4) {
+      char missing[4096];
+      snprintf(missing, sizeof(missing), "%s/missing", outside);
+      munit_assert_int(symlink(missing, target), ==, 0);
+    } else if (scenario == 5) {
+      munit_assert_int(symlink(source, target), ==, 0);
+    }
+    snprintf(dest_first, sizeof(dest_first), "%s/a.md", target);
+    snprintf(dest_last, sizeof(dest_last), "%s/z.md", target);
+    if (scenario == 0) munit_assert_int(link(first, dest_last), ==, 0);
+    if (scenario == 1) munit_assert_int(symlink(first, dest_last), ==, 0);
+    if (scenario == 2) {
+      char missing[4096];
+      snprintf(missing, sizeof(missing), "%s/missing.md", outside);
+      munit_assert_int(symlink(missing, dest_last), ==, 0);
+    }
+    /* A later source is also the destination of an earlier source. */
+    if (scenario == 6) {
+      munit_assert_int(rmdir(target), ==, 0);
+      snprintf(target, sizeof(target), "%s/imported", source);
+      munit_assert_int(mkdir(target, 0700), ==, 0);
+      snprintf(dest_first, sizeof(dest_first), "%s/a.md", target);
+      write_file(dest_first, "other source original");
+    }
+    lua_State *L = new_state();
+    set_configured_capstan(L, scenario >= 6 ? source : root);
+    install_ingest_agent_stub(L);
+    load_wiki_plugin(L);
+    call_wiki_ingest_tool_handler(L, source, 1,
+                                  scenario == 7 ? "." : "imported");
+    munit_assert_not_null(strstr(lua_tostring(L, -2), "Wiki ingest failed:"));
+    lua_getglobal(L, "last_ingest_prompt");
+    munit_assert_true(lua_isnil(L, -1));
+    snprintf(index_dir, sizeof(index_dir), "%s/index", scenario >= 6 ? source : root);
+    munit_assert_int(access(index_dir, F_OK), ==, -1);
+    char *content = read_file_alloc(first);
+    munit_assert_string_equal(content, "first original");
+    free(content);
+    content = read_file_alloc(last);
+    munit_assert_string_equal(content, "last original");
+    free(content);
+    if (scenario <= 4) munit_assert_int(access(dest_first, F_OK), ==, -1);
+    if (scenario == 6) {
+      content = read_file_alloc(dest_first);
+      munit_assert_string_equal(content, "other source original");
+      free(content);
+      unlink(dest_first);
+    }
+    lua_close(L);
+    if (scenario <= 2) unlink(dest_last);
+    if (scenario >= 3 && scenario <= 5) unlink(target);
+    else rmdir(target);
+    unlink(first);
+    unlink(last);
+    rmdir(source);
+    rmdir(outside);
+    rmdir(root);
+    rmdir(base);
+  }
+}
+
 static MunitResult test_wiki_ingest_tool_copy_validates_target_dir(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
 
   char root[4096];
+  assert_copy_plan_safety();
   snprintf(root, sizeof(root), "/tmp/capstan-wiki-plugin-tool-copy-%ld", (long)getpid());
   rmdir(root);
   munit_assert_int(mkdir(root, 0700), ==, 0);
@@ -521,6 +632,19 @@ static MunitResult test_wiki_ingest_tool_copy_validates_target_dir(
   munit_assert_true(strstr(copied_content, "# Guide") != NULL);
   free(copied_content);
 
+  /* Existing ordinary destinations and contained parent symlinks are valid. */
+  char alias[4096], imported[4096];
+  snprintf(alias, sizeof(alias), "%s/alias", root);
+  snprintf(imported, sizeof(imported), "%s/sources/imported", root);
+  munit_assert_int(symlink(imported, alias), ==, 0);
+  call_wiki_ingest_tool_handler(L, source, 1, "alias");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Wiki ingest completed"));
+  lua_pop(L, 2);
+  munit_assert_int(unlink(alias), ==, 0);
+  char *original = read_file_alloc(guide);
+  munit_assert_string_equal(original, "# Guide\n\nsource body");
+  free(original);
+
   call_wiki_ingest_tool_handler(L, source, 1, "../outside");
   const char *denied = lua_tostring(L, -2);
   munit_assert_not_null(denied);
@@ -549,7 +673,7 @@ static MunitResult test_wiki_ingest_tool_copy_validates_target_dir(
   return MUNIT_OK;
 }
 
-static MunitResult test_wiki_ingest_tool_falls_back_on_weak_model_error(
+static MunitResult test_wiki_ingest_tool_falls_back_on_active_model_error(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -730,7 +854,89 @@ static MunitResult test_wiki_ingest_caps_prompt_content_budget(
   return MUNIT_OK;
 }
 
+static MunitResult test_copy_fallback_completion(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  /* Exercise provider errors, invalid JSON, and successful metadata with
+   * both writable destinations and a directory blocking the output file. */
+  for (int scenario = 0; scenario < 6; ++scenario) {
+    char base[4096], root[4096], source[4096], guide[4096];
+    char target[4096], dest[4096], index_dir[4096], index_file[4096];
+    snprintf(base, sizeof(base), "/tmp/capstan-wiki-completion-%ld-%d", (long)getpid(), scenario);
+    munit_assert_int(mkdir(base, 0700), ==, 0);
+    snprintf(root, sizeof(root), "%s/wiki", base);
+    snprintf(source, sizeof(source), "%s/source", base);
+    munit_assert_int(mkdir(root, 0700), ==, 0);
+    munit_assert_int(mkdir(source, 0700), ==, 0);
+    snprintf(guide, sizeof(guide), "%s/guide.md", source);
+    write_file(guide, "# Guide\n\noriginal body");
+    snprintf(target, sizeof(target), "%s/imported", root);
+    snprintf(dest, sizeof(dest), "%s/guide.md", target);
+    int blocked = scenario >= 3;
+    if (blocked) {
+      munit_assert_int(mkdir(target, 0700), ==, 0);
+      munit_assert_int(mkdir(dest, 0700), ==, 0);
+    }
+    lua_State *L = new_state();
+    set_configured_capstan(L, root);
+    if (scenario % 3 == 0) install_ingest_agent_error_stub(L);
+    else {
+      install_ingest_agent_stub(L);
+      if (scenario % 3 == 1) {
+        munit_assert_int(luaL_dostring(L,
+            "capstan.agent.run = function(opts, cb) cb.on_done({ok=true, text='not JSON'}); return true end"), ==, LUA_OK);
+      }
+    }
+    load_wiki_plugin(L);
+    call_wiki_ingest_tool_handler(L, source, 1, "imported");
+    const char *ui = lua_tostring(L, -2);
+    snprintf(index_dir, sizeof(index_dir), "%s/index", root);
+    if (blocked) {
+      munit_assert_not_null(strstr(ui, "Wiki ingest failed:"));
+      munit_assert_not_null(strstr(ui, "copy failed:"));
+      munit_assert_null(strstr(ui, "completed"));
+      lua_getglobal(L, "last_popup");
+      munit_assert_true(lua_isnil(L, -1));
+      lua_pop(L, 1);
+      lua_getglobal(L, "last_error");
+      munit_assert_true(lua_isstring(L, -1));
+      munit_assert_int(access(index_dir, F_OK), ==, -1);
+      rmdir(dest);
+    } else {
+      munit_assert_not_null(strstr(ui, "Wiki ingest completed"));
+      if (scenario % 3 != 2) munit_assert_not_null(strstr(ui, "fallback metadata"));
+      char *content = read_file_alloc(dest);
+      munit_assert_not_null(strstr(content, "schema_version: 1"));
+      munit_assert_not_null(strstr(content, "original body"));
+      free(content);
+      char source_id[256];
+      munit_assert_true(first_json_id(index_dir, source_id, sizeof(source_id)));
+      snprintf(index_file, sizeof(index_file), "%s/%s.json", index_dir, source_id);
+      content = read_file_alloc(index_file);
+      munit_assert_not_null(strstr(content, "\"wiki_path\":\"imported/guide.md\""));
+      munit_assert_not_null(strstr(content, "\"hash\":"));
+      free(content);
+      unlink(dest);
+      unlink(index_file);
+      rmdir(index_dir);
+    }
+    char *original = read_file_alloc(guide);
+    munit_assert_string_equal(original, "# Guide\n\noriginal body");
+    free(original);
+    lua_close(L);
+    rmdir(target);
+    unlink(guide);
+    rmdir(source);
+    rmdir(root);
+    rmdir(base);
+  }
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/copy_fallback_completion", test_copy_fallback_completion, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/unconfigured_wiki_starts_onboarding", test_unconfigured_wiki_starts_onboarding, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/wiki_read_tool_is_internal_permission_free",
@@ -742,8 +948,8 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/read_reads_relative_file", test_read_reads_relative_file, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/ingest_uses_weak_model_and_writes_source_index",
-     test_ingest_uses_weak_model_and_writes_source_index, NULL, NULL,
+    {"/ingest_uses_active_model_and_writes_source_index",
+     test_ingest_uses_active_model_and_writes_source_index, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/wiki_ingest_tool_writes_source_index",
      test_wiki_ingest_tool_writes_source_index, NULL, NULL,
@@ -751,8 +957,8 @@ static MunitTest tests[] = {
     {"/wiki_ingest_tool_copy_validates_target_dir",
      test_wiki_ingest_tool_copy_validates_target_dir, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/wiki_ingest_tool_falls_back_on_weak_model_error",
-     test_wiki_ingest_tool_falls_back_on_weak_model_error, NULL, NULL,
+    {"/wiki_ingest_tool_falls_back_on_active_model_error",
+     test_wiki_ingest_tool_falls_back_on_active_model_error, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/wiki_ingest_falls_back_on_wrapped_non_entries_json",
      test_wiki_ingest_falls_back_on_wrapped_non_entries_json, NULL, NULL,

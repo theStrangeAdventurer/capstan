@@ -11,7 +11,7 @@ typedef enum {
   MSG_AGENT,
 } MessageRole;
 
-typedef struct {
+typedef struct MessageImage {
   char *mime_type;
   char *data;
 } MessageImage;
@@ -36,6 +36,7 @@ void agent_enable_shell_output(int enabled);
 void message_tag_shell_output(Message *message, size_t start);
 int message_add_image(Message *message, const char *mime_type,
                       const char *base64_data);
+void message_images_free(MessageImage *images, size_t count);
 void append_to_last_message(const char *text, MessageRole role);
 void append_to_last_message_ui(const char *text, MessageRole role);
 Messages *get_messages(void);

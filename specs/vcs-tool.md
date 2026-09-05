@@ -8,7 +8,11 @@ named `vcs`. The tool supports `status`, `diff`, and `changes`; `diff` and
 the workspace root are canonicalized before confinement is checked, so symlinks
 cannot escape the workspace. Permission prompts authorize that exact path, or
 the whole workspace root when no path is supplied, and the handler reuses the
-same resolved path. The built-in Git commands disable fsmonitor, external diff,
+same authorized path through dispatcher-owned permission context, never an
+internal cache supplied in model arguments. The runtime resolves the requested
+path again before execution and fails closed if it is missing, escapes the
+workspace, or differs from the authorized path (for example after a symlink
+change while awaiting permission). The built-in Git commands disable fsmonitor, external diff,
 text conversion, and optional index locking. In a Git repository without an
 initial commit, diff operations combine the staged and working-tree diffs so
 post-staging edits are not omitted.
@@ -60,5 +64,7 @@ failed model tool calls rather than successful result payloads.
 
 Tests cover configurable workspace markers, argv execution without shell
 expansion, disabled Git execution extensions, and complete unborn-repository
-diffs. The embedded build smoke test verifies that the built-in plugin and
+diffs. Dispatcher tests cover forged internal path arguments, missing and
+out-of-workspace paths, explicit denies, valid path-specific diffs, and symlink
+changes after authorization. The embedded build smoke test verifies that the built-in plugin and
 runtime module are available from the standalone binary.

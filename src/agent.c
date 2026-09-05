@@ -296,16 +296,20 @@ int message_add_image(Message *message, const char *mime_type,
   return 1;
 }
 
+void message_images_free(MessageImage *images, size_t count) {
+  for (size_t i = 0; i < count; i++) {
+    free(images[i].mime_type);
+    free(images[i].data);
+  }
+  free(images);
+}
+
 void free_message(Message *m) {
   if (m->text)
     free(m->text);
   if (m->raw_text && m->raw_text != m->text)
     free(m->raw_text);
-  for (size_t i = 0; i < m->image_count; i++) {
-    free(m->images[i].mime_type);
-    free(m->images[i].data);
-  }
-  free(m->images);
+  message_images_free(m->images, m->image_count);
   shell_output_free(&m->shell_output);
   free(m);
 }

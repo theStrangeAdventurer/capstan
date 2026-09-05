@@ -7,6 +7,7 @@
 
 int has_command(const char *input, char *command, size_t *cmd_end);
 int dispatch_blocking_enter_allowed(int top_level_run_active);
+int dispatch_commands_allowed(int top_level_run_active, int queued_count);
 void dispatch_submit(void);
 void dispatch_tick(void);
 int dispatch_queue_size(void);

@@ -299,11 +299,10 @@ When the paths of several independent files are already known, the base system
 prompt directs the model to batch them through `file_read.paths`. Sequential
 reads remain appropriate when one result determines which file to inspect next.
 
-Generated-output inspection has an optional soft guard. It is disabled by
-default. When `agent.max_generated_output_checks` is positive, later static
-shell inspections of `dist/`, `build/`, `out/`, or `coverage/` beyond that
-count are skipped and returned to the model as guidance. This does not fail the
-run.
+Shell inspection of build artifacts and coverage reports follows the ordinary
+permission checks and general run limits. There is no separate inspection
+quota or command-text heuristic that skips these calls. Tests cover successive
+artifact inspections with default config and an ignored legacy inspection limit.
 
 Synchronous tool work runs on the UI thread. Any blocking C helper used by a
 tool must periodically yield through the TUI pump so the screen can repaint and

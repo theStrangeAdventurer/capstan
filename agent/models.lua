@@ -261,40 +261,6 @@ function M.set(runtime, provider_name, model, reasoning_effort)
     return true, nil
 end
 
-function M.set_weak(runtime, provider_name, model, reasoning_effort)
-    if type(model) ~= "string" or model == "" then
-        return false, "Missing model"
-    end
-    if type(provider_name) ~= "string" or provider_name == "" then
-        return false, "Missing provider"
-    end
-    if not runtime.providers[provider_name] then
-        return false, "Unknown provider: " .. tostring(provider_name)
-    end
-    local normalized_effort, effort_err = normalize_selected_reasoning_effort(reasoning_effort)
-    if effort_err then return false, effort_err end
-    runtime.weak_model = {
-        provider = provider_name,
-        model = model,
-        reasoning_effort = normalized_effort,
-    }
-    return state.set_weak_model(provider_name, model, normalized_effort)
-end
-
-function M.weak(runtime)
-    local weak = runtime.weak_model
-    if type(weak) == "table" and
-       type(weak.provider) == "string" and weak.provider ~= "" and
-       type(weak.model) == "string" and weak.model ~= "" then
-        return {
-            provider = weak.provider,
-            model = weak.model,
-            reasoning_effort = weak.reasoning_effort,
-        }
-    end
-    return nil
-end
-
 function M.profile(runtime, profile_name)
     local normalized = profiles.normalize(profile_name)
     if not normalized then return nil end
@@ -374,12 +340,6 @@ function M.install_runtime_api(runtime)
         end,
         set_for = function(provider_name, model, reasoning_effort)
             return M.set(runtime, provider_name, model, reasoning_effort)
-        end,
-        weak = function()
-            return M.weak(runtime)
-        end,
-        set_weak = function(provider_name, model, reasoning_effort)
-            return M.set_weak(runtime, provider_name, model, reasoning_effort)
         end,
         profile = function(profile_name)
             return M.profile(runtime, profile_name)

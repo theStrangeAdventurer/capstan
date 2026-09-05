@@ -472,9 +472,9 @@ Plugin *plugin_load(const char *path) {
 
 static int l_ctx_replace(lua_State *l) {
   const char *ui_val = luaL_checkstring(l, 2);
-  const char *llm_val = lua_isnoneornil(l, 3) ? ui_val : luaL_checkstring(l, 3);
+  int llm_index = lua_isnoneornil(l, 3) ? 2 : 3;
   lua_pushstring(l, ui_val);
-  lua_pushstring(l, llm_val);
+  lua_pushvalue(l, llm_index);
   return 2;
 }
 
@@ -572,14 +572,49 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
     return NULL;
   }
 
-  PluginResult *r = malloc(sizeof(PluginResult));
+  PluginResult *r = calloc(1, sizeof(PluginResult));
   if (!r) {
     lua_pop(L, 5);
     return NULL;
   }
 
   r->ui_result = dup_lua_result(L, -4, "");
-  r->raw_result = dup_lua_result(L, -3, r->ui_result ? r->ui_result : "");
+  if (lua_istable(L, -3)) {
+    int typed = lua_absindex(L, -3);
+    lua_getfield(L, typed, "text");
+    r->raw_result = dup_lua_result(L, -1, "");
+    lua_pop(L, 1);
+    lua_getfield(L, typed, "images");
+    Message attachments = {0};
+    int valid = 1;
+    if (lua_istable(L, -1)) {
+      size_t count = lua_rawlen(L, -1);
+      for (size_t i = 1; i <= count; i++) {
+        lua_rawgeti(L, -1, (lua_Integer)i);
+        if (!lua_istable(L, -1)) {
+          lua_pop(L, 1);
+          valid = 0;
+          break;
+        }
+        lua_getfield(L, -1, "mime_type");
+        lua_getfield(L, -2, "data");
+        valid = message_add_image(&attachments, lua_tostring(L, -2),
+                                  lua_tostring(L, -1));
+        lua_pop(L, 3);
+        if (!valid) break;
+      }
+    }
+    lua_pop(L, 1);
+    r->images = attachments.images;
+    r->image_count = attachments.image_count;
+    if (!valid) {
+      free(r->raw_result);
+      r->raw_result = NULL;
+      popup_show_message("Plugin Error", "Cannot retain plugin image attachment", 1);
+    }
+  } else {
+    r->raw_result = dup_lua_result(L, -3, r->ui_result ? r->ui_result : "");
+  }
   r->shell_output_start = (size_t)-1;
   /* Optional fourth return value is display metadata, never model data.
      Invalid or missing boundaries fail open to complete, untagged text. */
@@ -595,6 +630,7 @@ PluginResult *plugin_execute(Plugin *plugin, const char *input, size_t cmd_end,
   if (!r->ui_result || !r->raw_result) {
     free(r->ui_result);
     free(r->raw_result);
+    message_images_free(r->images, r->image_count);
     free(r);
     lua_pop(L, 5);
     return NULL;

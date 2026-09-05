@@ -34,7 +34,10 @@ other MCP image tools use the same typed result path.
 `agent/images.lua` owns tool-image detection, base64 encoding, size limits, and
 MCP image validation. `src/clipboard.c` owns platform clipboard acquisition;
 `src/input.c` owns pending TUI attachments; and `Message` plus session storage
-own submitted clipboard images. MCP and local-file adapters return
+own submitted clipboard and manual `/file` images. Manual plugin results retain
+`{text, images}` through `PluginResult` and the buffered context queue; dispatch
+transfers attachment ownership into the user message rather than flattening it
+to text. Clearing buffered context frees unsent attachments. MCP and local-file adapters return
 `{text, images}` only when images exist. `agent/tools.lua` owns conversion from
 typed tool results to conversation messages. Provider requests continue to
 serialize the canonical message structure in `agent/runtime.lua`.
@@ -64,6 +67,10 @@ Unit tests cover clipboard base64 encoding, pending attachment behavior, and
 session image persistence. Provider-tool integration tests cover MCP and
 local-file image conversion, message ordering, default image detail, base64
 omission from logs, binary-file safety, and preservation of the text-only path.
+The terminal regression selects a Cyrillic-named image through the `/file`
+finder and verifies the exact data URL in model context and no base64 in the
+terminal. A second case clears buffered context via `/new` and verifies that
+no image leaks into the next session.
 Embedded-asset smoke testing verifies the updated runtime is present in the
 standalone binary.
 

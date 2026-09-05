@@ -29,11 +29,21 @@ static int g_diff_add_color_pair = 0;
 static int g_diff_del_color_pair = 0;
 
 void buffer_plugin_result(const char *label, char *ui_result, char *raw_result,
-                          size_t shell_output_start) {
+                          size_t shell_output_start, MessageImage *images,
+                          size_t image_count) {
   if (g_buffered_results.size >= g_buffered_results.capacity) {
-    g_buffered_results.capacity = g_buffered_results.capacity ? g_buffered_results.capacity * 2 : 4;
-    g_buffered_results.items = realloc(g_buffered_results.items,
-                              g_buffered_results.capacity * sizeof(BufferedPluginResult));
+    int capacity = g_buffered_results.capacity ? g_buffered_results.capacity * 2 : 4;
+    BufferedPluginResult *items = realloc(g_buffered_results.items,
+                                         capacity * sizeof(*items));
+    if (!items) {
+      free(ui_result);
+      if (raw_result != ui_result) free(raw_result);
+      message_images_free(images, image_count);
+      popup_show_message("Command", "Cannot buffer command result: out of memory", 1);
+      return;
+    }
+    g_buffered_results.items = items;
+    g_buffered_results.capacity = capacity;
   }
   BufferedPluginResult *ctx = &g_buffered_results.items[g_buffered_results.size++];
   strncpy(ctx->label, label, MAX_BADGE_LABEL - 1);
@@ -41,6 +51,8 @@ void buffer_plugin_result(const char *label, char *ui_result, char *raw_result,
   ctx->ui_result = ui_result;
   ctx->raw_result = raw_result;
   ctx->shell_output_start = shell_output_start;
+  ctx->images = images;
+  ctx->image_count = image_count;
 }
 
 void buffered_results_clear(void) {
@@ -48,6 +60,8 @@ void buffered_results_clear(void) {
     free(g_buffered_results.items[i].ui_result);
     if (g_buffered_results.items[i].raw_result != g_buffered_results.items[i].ui_result)
       free(g_buffered_results.items[i].raw_result);
+    message_images_free(g_buffered_results.items[i].images,
+                        g_buffered_results.items[i].image_count);
   }
   free(g_buffered_results.items);
   g_buffered_results.items = NULL;
@@ -1156,18 +1170,24 @@ void tui_pump_blocking(void) {
             tui_focus_input_at_point(rows, cols, event.y, event.x)) {
           continue;
         } else if (event.bstate & BUTTON4_PRESSED) {
-          scroll_up(3);
+          visual_scroll_view(3, g_shell_height);
         } else if (event.bstate & BUTTON5_PRESSED) {
-          scroll_down(3);
+          visual_scroll_view(-3, g_shell_height);
         }
       }
       continue;
     }
 
     if (ch == KEY_PPAGE)
-      scroll_up(5);
+      visual_scroll_view(5, g_shell_height);
     else if (ch == KEY_NPAGE)
-      scroll_down(5);
+      visual_scroll_view(-5, g_shell_height);
+    else if (mode_get() == FOCUS_MESSAGES && ch == TUI_KEY_CTRL_U)
+      visual_scroll_view(g_shell_height > 1 ? g_shell_height / 2 : 1,
+                         g_shell_height);
+    else if (mode_get() == FOCUS_MESSAGES && ch == 0x04)
+      visual_scroll_view(g_shell_height > 1 ? -g_shell_height / 2 : -1,
+                         g_shell_height);
     else if (mode_get() == FOCUS_INPUT && (ch == '\n' || ch == '\r')) {
       /* During an active top-level run dispatch_submit() can only enqueue.
          Outside that run, the blocking pump may be nested inside a Lua plugin,

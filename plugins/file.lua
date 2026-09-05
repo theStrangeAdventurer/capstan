@@ -59,27 +59,11 @@ plugin.autocomplete = {
   multi = true,
 }
 
-local function append_filename(filenames, seen, value)
-	if type(value) ~= "string" or value == "" or seen[value] then return end
-	seen[value] = true
-	table.insert(filenames, value)
-end
-
 local function requested_filenames(ctx)
 	if type(ctx.tool_args) ~= "table" then
 		return ctx.args or {}, false
 	end
-
-	local filenames = {}
-	local seen = {}
-	local has_batch = type(ctx.tool_args.paths) == "table"
-	if has_batch then
-		for _, path in ipairs(ctx.tool_args.paths) do
-			append_filename(filenames, seen, path)
-		end
-	end
-	append_filename(filenames, seen, ctx.tool_args.path)
-	return filenames, has_batch
+	return workspace.file_read_paths(ctx.tool_args), type(ctx.tool_args.paths) == "table"
 end
 
 function plugin.handler(ctx)
@@ -203,7 +187,7 @@ function plugin.handler(ctx)
 
 	local ui_value = table.concat(ui_parts, "\n")
 	local llm_value = table.concat(llm_parts, "\n\n")
-	if ctx.tool_args and #result_images > 0 then
+	if #result_images > 0 then
 		llm_value = {text = llm_value, images = result_images}
 	end
 	return ctx:replace(ui_value, llm_value)

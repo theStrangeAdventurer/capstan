@@ -386,30 +386,37 @@ static char *json_string_field(const char *start, const char *end,
   return json_parse_string(&p, end);
 }
 
-static char *json_string_array_field(const char *start, const char *end,
-                                     const char *key) {
+/* Missing and empty arrays are valid; malformed fields reject the entry. */
+static int json_string_array_field(const char *start, const char *end,
+                                   const char *key, char **result) {
+  *result = NULL;
   const char *p = json_find_key(start, end, key);
   if (!p)
-    return NULL;
+    return 1;
   p = json_skip_ws(p, end);
   if (p >= end || *p != '[')
-    return NULL;
-  p++;
+    return 0;
+  p = json_skip_ws(p + 1, end);
+  if (p < end && *p == ']')
+    return 1;
   char *joined = NULL;
   while (p < end) {
-    p = json_skip_ws(p, end);
-    if (p >= end || *p == ']')
-      break;
     char *value = json_parse_string(&p, end);
-    if (value) {
-      append_multivalue(&joined, value);
-      free(value);
-    }
+    if (!value)
+      break;
+    append_multivalue(&joined, value);
+    free(value);
     p = json_skip_ws(p, end);
-    if (p < end && *p == ',')
-      p++;
+    if (p < end && *p == ']') {
+      *result = joined;
+      return 1;
+    }
+    if (p >= end || *p != ',')
+      break;
+    p = json_skip_ws(p + 1, end);
   }
-  return joined;
+  free(joined);
+  return 0;
 }
 
 static const char *json_matching_brace(const char *open, const char *end) {
@@ -534,8 +541,12 @@ static void collect_index_file(WikiList *list, const char *full_path) {
     doc.kind = json_string_field(p, obj_end, "kind");
     doc.title = json_string_field(p, obj_end, "title");
     doc.description = json_string_field(p, obj_end, "description");
-    doc.use_when = json_string_array_field(p, obj_end, "use_when");
-    doc.tags = json_string_array_field(p, obj_end, "tags");
+    if (!json_string_array_field(p, obj_end, "use_when", &doc.use_when) ||
+        !json_string_array_field(p, obj_end, "tags", &doc.tags)) {
+      wiki_doc_free(&doc);
+      p = obj_end;
+      continue;
+    }
     doc.index_policy = json_string_field(p, obj_end, "index_policy");
     doc.context_policy = json_string_field(p, obj_end, "context_policy");
     if (doc.source_id && doc.source_path && doc.source_path[0]) {

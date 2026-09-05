@@ -5,6 +5,10 @@ int dispatch_blocking_enter_allowed(int top_level_run_active) {
   return top_level_run_active != 0;
 }
 
+int dispatch_commands_allowed(int top_level_run_active, int queued_count) {
+  return !top_level_run_active && queued_count == 0;
+}
+
 int has_command(const char *input, char *command, size_t *cmd_end) {
   const char *start = input;
   while (*start == ' ')

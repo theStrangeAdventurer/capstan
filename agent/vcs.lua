@@ -114,15 +114,20 @@ function M.resolve_path(path)
     return resolved
 end
 
-function M.run(operation, path, resolved_path)
+function M.run(operation, path, authorized_path)
     local reported_operation = operation
     if path ~= nil then
         if operation ~= "diff" and operation ~= "changes" then
             return nil, "path is supported only for diff and changes"
         end
         local err
-        path, err = resolved_path or M.resolve_path(path)
+        path, err = M.resolve_path(path)
         if not path then return nil, err end
+        -- Authorization is supplied by the dispatcher, never by model args.
+        -- Resolve again so a changed symlink cannot redirect an approved call.
+        if authorized_path and path ~= authorized_path then
+            return nil, "VCS path changed after permission check"
+        end
     end
     if operation == "changes" or operation == "diff" then
         operation = path and "diff_path" or "diff"

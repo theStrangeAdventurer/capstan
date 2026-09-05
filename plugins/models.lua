@@ -2,7 +2,7 @@ local plugin = {}
 
 plugin.id = "models"
 plugin.name = "Models"
-plugin.description = "Select primary or weak model"
+plugin.description = "Select primary or profile model"
 plugin.command = "/models"
 plugin.async = false
 plugin.history = false
@@ -63,9 +63,6 @@ local function unpack_packed(value)
 end
 
 local function selected_kind(args)
-	if args and args[1] == "--weak" then
-		return "weak", nil
-	end
 	if args and args[1] == "--profile" then
 		return "profile", args[2]
 	end
@@ -128,7 +125,7 @@ plugin.autocomplete = {
 				value = effort_drill_value(kind, profile, provider, model.id, model.reasoning_efforts)
 			end
 			table.insert(items, {
-				text = string.format("%s  %s", kind == "weak" and "weak" or kind == "profile" and (profile or "profile") or "main", model.text or model.id),
+				text = string.format("%s  %s", kind == "profile" and (profile or "profile") or "main", model.text or model.id),
 				value = value,
 			})
 		end
@@ -142,14 +139,12 @@ plugin.autocomplete = {
 function plugin.handler(ctx)
 	local args = ctx.args or {}
 	local models = runtime()
+	if args[1] and args[1]:match("^%-%-") and args[1] ~= "--profile" then
+		return ctx:replace("Unknown option: " .. args[1])
+	end
 	local kind, profile, provider, model, reasoning_effort = unpack_packed(args[1])
 	if not kind then
-		if args[1] == "--weak" then
-			kind = "weak"
-			provider = args[2]
-			model = args[3]
-			reasoning_effort = args[4]
-		elseif args[1] == "--profile" then
+		if args[1] == "--profile" then
 			kind = "profile"
 			profile = args[2]
 			provider = args[3]
@@ -170,29 +165,15 @@ function plugin.handler(ctx)
 	end
 
 	if not model or model == "" then
-		return ctx:replace("Usage: /models [--weak] [provider] <model> | /models --profile <name> <provider> <model>")
+		return ctx:replace("Usage: /models [provider] <model> | /models --profile <name> <provider> <model>")
 	end
 
 	if not models then
 		return ctx:replace("Cannot set model: provider runtime is not initialized")
 	end
 
-	if kind == "weak" then
-		provider = provider or (models.current_provider and models.current_provider())
-		if not models.set_weak then
-			return ctx:replace("Cannot set weak model: provider runtime does not support weak model state")
-		end
-		local efforts = models.reasoning_efforts and models.reasoning_efforts(provider, model) or {}
-		if efforts and #efforts > 0 and not reasoning_effort then
-			return ctx:replace("Reasoning effort is required: default, " .. table.concat(efforts, ", "))
-		end
-		local ok, err = models.set_weak(provider, model, reasoning_effort)
-		if not ok then
-			return ctx:replace("Cannot set weak model: " .. tostring(err))
-		end
-		refresh_status()
-		return ctx:replace(string.format("Weak model set: %s/%s (reasoning: %s)",
-			provider, model, reasoning_effort or "default"))
+	if kind ~= "profile" and kind ~= "primary" then
+		return ctx:replace("Cannot set model: unknown selection kind")
 	end
 
 	if kind == "profile" then

@@ -29,7 +29,7 @@ The runtime exposes these helpers to Lua:
 rewrite `config.lua`.
 
 Currently persisted runtime state includes the active provider, selected
-provider models, optional profile models, an optional weak model, the
+provider models, optional profile models, the
 reasoning-effort choice made with each model selection, and the VCS adapter
 selected for each canonical workspace root:
 
@@ -41,11 +41,6 @@ return {
   },
   model_reasoning_efforts = {
     openrouter = "default",
-  },
-  weak_model = {
-    provider = "openrouter",
-    model = "minimax/minimax-m3",
-    reasoning_effort = "low",
   },
   vcs_by_workspace = {
     ["/repo"] = "git",
@@ -79,11 +74,8 @@ model takes precedence over config and profile defaults. The literal
 `"default"` intentionally suppresses those overrides so the provider/model
 chooses its own default.
 
-Weak model precedence is:
-
-1. persisted runtime state;
-2. `config.lua` `weak_model = { provider = "...", model = "..." }`;
-3. unavailable.
+Legacy `weak_model` fields in config or loaded state are ignored and are not
+written back when runtime state is saved.
 
 Profile model precedence for an active profile is:
 
@@ -103,5 +95,5 @@ rules belong in `~/.config/capstan/config.lua` under the `permissions` key.
 ## Tests
 
 `make test` covers XDG state path selection. `make test-http-lua` covers
-persisting selected primary and weak models and applying state during provider
-runtime startup.
+persisting selected primary and profile models, ignoring legacy fields, and
+applying state during provider runtime startup.

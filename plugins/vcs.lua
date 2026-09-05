@@ -30,10 +30,7 @@ plugin.tool = {
         local root = workspace.configured_workspace_root()
         if type(args.path) ~= "string" or args.path == "" then return root end
         local resolved = vcs.resolve_path(args.path)
-        if resolved then
-            args._resolved_vcs_path = resolved
-            return resolved
-        end
+        if resolved then return resolved end
         local requested = workspace.normalize_path(args.path, root)
         return workspace.realpath(requested) or requested
     end,
@@ -60,7 +57,7 @@ plugin.autocomplete = {
 function plugin.handler(ctx)
     if ctx.tool_args then
         local result, err = vcs.run(ctx.tool_args.operation, ctx.tool_args.path,
-            ctx.tool_args._resolved_vcs_path)
+            ctx.permission and ctx.permission.target)
         if not result then return ctx:error("VCS error: " .. tostring(err)) end
         return ctx:replace(json.encode(result))
     end

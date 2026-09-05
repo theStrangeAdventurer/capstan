@@ -28,7 +28,9 @@ working directory invalidates the inferred workspace root so it is recomputed.
 
 - Relative `file_read`, `file_write`, and `file_edit` paths resolve against the
   working directory, then their real paths are checked against the workspace
-  root.
+  root. `file_write` and `file_edit` additionally accept destinations inside the
+  effective configured Wiki with ordinary write permissions and realpath confinement
+  to the Wiki root. This does not broaden shell or arbitrary external file access.
 - Shell children `chdir(capstan.workdir)` before executing `/bin/sh -c`.
 - Shell permission rules use the workspace root as their stable target.
 - `--benchmark` rejects statically visible shell path arguments outside the

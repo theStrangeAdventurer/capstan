@@ -27,6 +27,9 @@ typedef struct {
   int filterable;
   char query[256];
   int query_len;
+  unsigned char query_pending[4];
+  int query_pending_len;
+  int query_pending_need;
 
   struct Plugin *plugin;
   size_t cmd_end;
@@ -64,6 +67,8 @@ void popup_set_win_cleanup(void (*fn)(void *));
 void popup_close_data(void);
 long long popup_now_ms(void);
 int popup_row_prefix_width(int multi);
+/* Return a UTF-8 byte boundary fitting cells; tail selects a suffix. */
+int popup_text_clip(const char *text, int cells, int tail, int *width);
 PopupScrollbar popup_scrollbar_calc(int item_count, int visible, int scroll);
 
 #endif

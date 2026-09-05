@@ -1,5 +1,6 @@
 #include "popup_internal.h"
 #include "tui.h"
+#include "utils.h"
 #include <ncursesw/curses.h>
 #include <stdio.h>
 #include <string.h>
@@ -117,12 +118,8 @@ void popup_render(void) {
 
   box(win, 0, 0);
   if (g_popup.title && g_popup.title[0]) {
-    int title_len = (int)strlen(g_popup.title);
-    int max_title = popup_w - 4;
-    if (title_len > max_title)
-      title_len = max_title;
-    if (title_len > 0)
-      mvwprintw(win, 0, 2, " %.*s ", title_len, g_popup.title);
+    int bytes = popup_text_clip(g_popup.title, popup_w - 5, 0, NULL);
+    mvwprintw(win, 0, 2, " %.*s ", bytes, g_popup.title);
   }
 
   int item_y_offset = 1;
@@ -130,7 +127,8 @@ void popup_render(void) {
     int text_w = popup_w - 10;
     if (text_w < 1)
       text_w = 1;
-    mvwprintw(win, 1, 2, "Find: %.*s", text_w, g_popup.query);
+    int start = popup_text_clip(g_popup.query, text_w, 1, NULL);
+    mvwprintw(win, 1, 2, "Find: %s", g_popup.query + start);
     item_y_offset = 2;
   }
 
@@ -154,7 +152,8 @@ void popup_render(void) {
       char check = is_selected ? 'x' : ' ';
       mvwprintw(win, i + item_y_offset, 1, "[%c] ", check);
     }
-    mvwprintw(win, i + item_y_offset, text_x, "%.*s", text_w,
+    int bytes = popup_text_clip(g_popup.items[idx].text, text_w, 0, NULL);
+    mvwprintw(win, i + item_y_offset, text_x, "%.*s", bytes,
               g_popup.items[idx].text);
 
     if (is_cursor)
@@ -166,9 +165,11 @@ void popup_render(void) {
   }
 
   if (g_popup.filterable) {
-    int x = 8 + g_popup.query_len;
-    if (x > popup_w - 2)
-      x = popup_w - 2;
+    int width;
+    int limit = popup_w - 10;
+    if (limit < 1) limit = 1;
+    popup_text_clip(g_popup.query, limit, 1, &width);
+    int x = 7 + width;
     wmove(win, 1, x);
   } else {
     wmove(win, 1 + (g_popup.cursor - g_popup.scroll),

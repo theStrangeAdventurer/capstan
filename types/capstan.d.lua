@@ -10,7 +10,7 @@
 ---@field command? string
 ---@field async? boolean
 ---@field history? boolean
----@field handler? fun(ctx: CapstanPluginContext): string?, string?, boolean?
+---@field handler? fun(ctx: CapstanPluginContext): string?, string|CapstanImageResult?, boolean?
 ---@field autocomplete? CapstanAutocompleteSpec
 ---@field tool? CapstanToolSpec
 ---@field hooks? table<string, fun(ctx: table): table>
@@ -18,11 +18,15 @@
 ---@field source_path? string
 ---@field _source_path? string
 
+---@class CapstanImageResult
+---@field text string
+---@field images {mime_type: string, data: string}[]
+
 ---@class CapstanPluginContext
 ---@field input string
 ---@field command string
 ---@field args string[]
----@field replace fun(self: CapstanPluginContext, ui_val: string, llm_val?: string): string, string
+---@field replace fun(self: CapstanPluginContext, ui_val: string, llm_val?: string|CapstanImageResult): string, string|CapstanImageResult
 ---@field error fun(self: CapstanPluginContext, ui_val: string, llm_val?: string): string, string, boolean
 
 ---@class CapstanAutocompleteSpec
@@ -88,7 +92,6 @@
 ---@field list fun(provider_name?: string): table[]?, string?
 ---@field list_all fun(): table[]
 ---@field set fun(provider_name: string, model: string): boolean?, string?
----@field set_weak fun(provider_name: string, model: string): boolean?, string?
 ---@field set_profile fun(profile_name: string, provider_name: string, model: string): boolean?, string?
 ---@field effective fun(profile_name?: string): table?
 

@@ -4,7 +4,10 @@
 No provider requests or personal config. The fixture replaces agent_entry only
 in an isolated test home and coordinates a blocking wait through marker files.
 """
+import base64
 import fcntl
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 import json
 import os
 from pathlib import Path
@@ -43,7 +46,13 @@ _G.fixture_wait = wait
 _G.should_auto_compact = function() return false end
 _G.agent_entry = function(messages)
   local input = messages[#messages].content
-  if input == "fold" or input == "fold_wait" then
+  if input == "active" then
+    http.post_stream("FIXTURE_STREAM_URL", "{}", {}, function(_, done)
+      if done then agent.finish_run() end
+    end)
+    mark("running")
+    return -- A local HTTP fixture keeps the stream open until Esc cancellation.
+  elseif input == "fold" or input == "fold_wait" then
     agent.append_ui('Shell: fixture\n', 'agent')
     local body = '[exit 0]\n'
     for i = 1, 21 do body = body .. string.format('BODY_%02d\n', i) end
@@ -100,7 +109,30 @@ def run_case(case):
   providers = {fixture = {model = "fixture", context_limit = 4096,
     models = {{id = "fixture", context_limit = 4096}}}},
 }\n''')
-        (config / "plugins/wait_input_test.lua").write_text(PLUGIN)
+        if case.startswith("file_image"):
+            fixture = Path(__file__).resolve().parent / "fixtures/vision-shapes.png"
+            (root / "Снимок.png").write_bytes(fixture.read_bytes())
+        stream_release = threading.Event()
+        server = None
+        stream_url = "unused"
+        if case == "autocomplete_busy":
+            class StreamHandler(BaseHTTPRequestHandler):
+                def do_POST(self):
+                    self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    self.wfile.flush()
+                    stream_release.wait(30)
+
+                def log_message(self, *_):
+                    pass
+
+            server = HTTPServer(("127.0.0.1", 0), StreamHandler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            stream_url = f"http://127.0.0.1:{server.server_port}/stream"
+        (config / "plugins/wait_input_test.lua").write_text(
+            PLUGIN.replace("FIXTURE_STREAM_URL", stream_url))
         (config / "plugins/wait_pick_test.lua").write_text(r'''
 return {id = "wait_pick_test", command = "/waitpick", history = false,
   autocomplete = {title = "Wait selection", fetch = function() return {"chosen"} end},
@@ -149,9 +181,9 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
         def send(text):
             os.write(master, text.encode("utf-8"))
 
-        def pause():
+        def pause(seconds=0.2):
             # Split a paste across more than the old 100 ms body timeout.
-            deadline = time.monotonic() + 0.2
+            deadline = time.monotonic() + seconds
             while time.monotonic() < deadline:
                 drain()
 
@@ -159,6 +191,57 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
             until(lambda: b"\x1b[?2004h" in screen, "terminal startup")
             # Wait for initial rendering after plugin and session initialization.
             until(lambda: b"ready" in screen, "initial screen")
+            if case.startswith("file_image"):
+                send(" /file\t")
+                until(lambda: b"Find:" in screen, "file finder")
+                send("Снимок")
+                pause()
+                send("\r")
+                until(lambda: b"ctx:file" in screen, "buffered selected image")
+                if case == "file_image_clear":
+                    send(" /new\r")
+                    pause()
+                send("inspect selected\r")
+                until(lambda: (root / "captured").exists(), "manual image context")
+                captured = json.loads((root / "captured").read_text())
+                images = [block["image_url"] for message in captured
+                          if isinstance(message["content"], list)
+                          for block in message["content"] if block["type"] == "image_url"]
+                if case == "file_image_clear":
+                    assert images == [], "cleared attachment leaked into new session"
+                else:
+                    expected = base64.b64encode((root / "Снимок.png").read_bytes()).decode()
+                    assert images == [{"url": "data:image/png;base64," + expected,
+                                       "detail": "auto"}], captured
+                    assert expected.encode() not in screen, "image data leaked into terminal"
+                print(f"TUI manual image: {case}: ok")
+                return
+
+            if case == "autocomplete_busy":
+                send("active\r")
+                until(lambda: (root / "running").exists(), "active asynchronous run")
+                send(" /waitpick\t")
+                until(lambda: b"Commands are unavailable" in screen, "blocked Tab")
+                assert b"Wait selection" not in screen, "busy autocomplete opened"
+                # This timed notification is non-modal: Enter does not dismiss it.
+                # Wait for expiry so a new rejection produces a distinct paint.
+                pause(1.4)
+                before = len(screen)
+                send("\r")
+                until(lambda: b"Commands are unavailable" in screen[before:], "blocked Enter")
+                assert not (root / "waiting").exists(), "busy handler executed"
+                send("\x1b")
+                until(lambda: b"[stopped]" in screen, "cancel active stream")
+                pause(1.4)  # A remaining timed notification blocks new popup windows.
+                send("\t")
+                until(lambda: b"Wait selection" in screen, "idle autocomplete restored")
+                send("\r")
+                until(lambda: (root / "waiting").exists(), "idle handler executes with preserved draft")
+                (root / "release").touch()
+                until(lambda: (root / "finished").exists(), "idle handler finished")
+                print(f"TUI command guard: {case}: ok")
+                return
+
             if case.startswith("permit"):
                 send(case + "\r")
                 prefix = ""
@@ -319,10 +402,14 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 proc.kill()
                 proc.wait(timeout=3)
             os.close(master)
+            if server is not None:
+                stream_release.set()
+                server.shutdown()
+                server.server_close()
 
 
 if __name__ == "__main__":
-    for scenario in ("queued", "handoff", "manual", "normal", "autocomplete",
+    for scenario in ("queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
                      "permit_handoff", "permit_new", "shell_multiline",
-                     "shell", "shell_wait", "shell_manual"):
+                     "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear"):
         run_case(scenario)

@@ -32,16 +32,6 @@ local function current_model()
 	return "(unavailable)"
 end
 
-local function weak_model()
-	if capstan and capstan.models and capstan.models.weak then
-		local ok, value = pcall(capstan.models.weak)
-		if ok and type(value) == "table" and value.provider and value.model then
-			return tostring(value.provider) .. "/" .. tostring(value.model)
-		end
-	end
-	return "(unavailable)"
-end
-
 local function profile_model(profile)
 	if capstan and capstan.models and capstan.models.profile then
 		local ok, value = pcall(capstan.models.profile, profile)
@@ -124,7 +114,6 @@ function plugin.handler(ctx)
 		"  active profile: " .. active_profile(),
 		"  current provider: " .. current_provider(),
 		"  current model: " .. current_model(),
-		"  weak model: " .. weak_model(),
 		"",
 		"Profile models",
 	}

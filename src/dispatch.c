@@ -188,10 +188,15 @@ static void flush_buffered_results(void) {
       size_t previous_size = messages->size;
       add_message(g_buffered_results.items[i].ui_result,
                   g_buffered_results.items[i].raw_result, MSG_USER);
-      if (messages->size > previous_size &&
-          g_buffered_results.items[i].shell_output_start != (size_t)-1) {
-        message_tag_shell_output(messages->items[messages->size - 1],
-                                  g_buffered_results.items[i].shell_output_start);
+      if (messages->size > previous_size) {
+        Message *message = messages->items[messages->size - 1];
+        message->images = g_buffered_results.items[i].images;
+        message->image_count = g_buffered_results.items[i].image_count;
+        g_buffered_results.items[i].images = NULL;
+        g_buffered_results.items[i].image_count = 0;
+        if (g_buffered_results.items[i].shell_output_start != (size_t)-1)
+          message_tag_shell_output(message,
+                                    g_buffered_results.items[i].shell_output_start);
       }
       g_buffered_results.items[i].ui_result = NULL;
       g_buffered_results.items[i].raw_result = NULL;
@@ -236,7 +241,8 @@ static void add_plugin_result(Plugin *p, PluginResult *r) {
     cmd++;
   char label[64];
   snprintf(label, sizeof(label), "ctx:%s", cmd);
-  buffer_plugin_result(label, r->ui_result, r->raw_result, r->shell_output_start);
+  buffer_plugin_result(label, r->ui_result, r->raw_result, r->shell_output_start,
+                       r->images, r->image_count);
   free(r);
 }
 
@@ -245,6 +251,7 @@ static void show_plugin_result(Plugin *p, PluginResult *r) {
                      r->ui_result ? r->ui_result : "", 0);
   free(r->ui_result);
   free(r->raw_result);
+  message_images_free(r->images, r->image_count);
   free(r);
 }
 
@@ -332,6 +339,16 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
   return 1;
 }
 
+static int commands_allowed(void) {
+  return dispatch_commands_allowed(agent_is_running(), dispatch_queue_size());
+}
+
+static void show_commands_unavailable(void) {
+  popup_show_message_ms("Queued input",
+                        "Commands are unavailable while the agent is running",
+                        0, 1200);
+}
+
 int dispatch_tab(void) {
   const char *text = input_get_text();
   char command[MAX_COMMAND_LEN];
@@ -339,6 +356,10 @@ int dispatch_tab(void) {
 
   if (!text[0] || !has_command(text, command, &cmd_end))
     return 0;
+  if (!commands_allowed()) {
+    show_commands_unavailable();
+    return 1;
+  }
 
   if (strcmp(command, "/") == 0)
     return open_commands();
@@ -407,7 +428,7 @@ void dispatch_submit(void) {
   int is_command = image_count == 0 && submitted[0] &&
                    has_command(submitted, command, &cmd_end);
 
-  if (agent_is_running() || submission_queue_size(&g_submission_queue) > 0) {
+  if (!commands_allowed()) {
     if (image_count > 0) {
       popup_show_message_ms("Queued input",
                             "Image prompts cannot be queued while the agent is running",
@@ -415,9 +436,7 @@ void dispatch_submit(void) {
       return;
     }
     if (is_command) {
-      popup_show_message_ms("Queued input",
-                            "Commands are unavailable while the agent is running",
-                            0, 1200);
+      show_commands_unavailable();
       return;
     }
     if (!submitted[0])
@@ -484,6 +503,13 @@ void dispatch_popup_result(void) {
   int sel_count;
   selected = popup_get_selected(&sel_count);
   if (selected && sel_count > 0) {
+    if (!commands_allowed()) {
+      popup_free_selected(selected, sel_count);
+      g_session_popup = 0;
+      popup_close();
+      show_commands_unavailable();
+      return;
+    }
     Plugin *p = popup_get_plugin();
     size_t cmd_end = popup_get_cmd_end();
     if (!p) {

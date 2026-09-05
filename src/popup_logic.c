@@ -1,3 +1,7 @@
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
+#include <wchar.h>
 #include "popup_internal.h"
 #include "finder.h"
 #include "utils.h"
@@ -25,6 +29,43 @@ long long popup_now_ms(void) {
 }
 
 int popup_row_prefix_width(int multi) { return multi ? 4 : 0; }
+
+static int popup_char_width(const char *text, size_t bytes) {
+  mbstate_t state = {0};
+  wchar_t wc;
+  size_t n = mbrtowc(&wc, text, bytes, &state);
+  if (n == (size_t)-1 || n == (size_t)-2) return 1;
+  int width = wcwidth(wc);
+  return width < 0 ? 1 : width;
+}
+
+int popup_text_clip(const char *text, int cells, int tail, int *width) {
+  int len = (int)strlen(text), pos = tail ? len : 0, used = 0;
+  if (cells < 0) cells = 0;
+  while (tail ? pos > 0 : pos < len) {
+    int next = tail ? get_prev_char_start(text, pos) : pos + 1;
+    if (!tail)
+      while (next < len && ((unsigned char)text[next] & 0xc0) == 0x80)
+        next++;
+    int start = tail ? next : pos;
+    int bytes = tail ? pos - next : next - pos;
+    int w = popup_char_width(text + start, (size_t)bytes);
+    if (w > cells - used) break;
+    used += w;
+    pos = next;
+  }
+  /* Do not display a suffix starting with detached combining marks. */
+  if (tail)
+    while (pos < len) {
+      int next = pos + 1;
+      while (next < len && ((unsigned char)text[next] & 0xc0) == 0x80)
+        next++;
+      if (popup_char_width(text + pos, (size_t)(next - pos)) != 0) break;
+      pos = next;
+    }
+  if (width) *width = used;
+  return pos;
+}
 
 PopupScrollbar popup_scrollbar_calc(int item_count, int visible, int scroll) {
   PopupScrollbar bar = {0, 0, 0};
@@ -160,6 +201,7 @@ void popup_open_with_plugin(PopupItem *items, int count, const char *title,
   g_popup.filterable = 0;
   g_popup.query[0] = '\0';
   g_popup.query_len = 0;
+  g_popup.query_pending_len = g_popup.query_pending_need = 0;
   g_popup.last_rows = -1;
   g_popup.last_cols = -1;
   g_popup.plugin = plugin;
@@ -227,6 +269,7 @@ void popup_drill_down(PopupItem *items, int count, const char *title) {
   g_popup.filterable = 0;
   g_popup.query[0] = '\0';
   g_popup.query_len = 0;
+  g_popup.query_pending_len = g_popup.query_pending_need = 0;
   g_popup.all_items = NULL;
   g_popup.all_item_count = 0;
   g_popup.item_count = count;
@@ -247,9 +290,43 @@ void popup_drill_down(PopupItem *items, int count, const char *title) {
 
 int popup_handle_key(int ch) {
   if (g_popup.filterable) {
+    if (g_popup.query_pending_len && ch >= 0x80 && ch <= 0xbf) {
+      int n = g_popup.query_pending_len;
+      int lead = g_popup.query_pending[0];
+      if (n == 1 && ((lead == 0xe0 && ch < 0xa0) ||
+                     (lead == 0xed && ch >= 0xa0) ||
+                     (lead == 0xf0 && ch < 0x90) ||
+                     (lead == 0xf4 && ch >= 0x90))) {
+        g_popup.query_pending_len = 0;
+        return 1;
+      }
+      g_popup.query_pending[n] = (unsigned char)ch;
+      if (++g_popup.query_pending_len == g_popup.query_pending_need) {
+        n = g_popup.query_pending_len;
+        if (g_popup.query_len + n < (int)sizeof(g_popup.query)) {
+          memcpy(g_popup.query + g_popup.query_len, g_popup.query_pending, n);
+          g_popup.query_len += n;
+          g_popup.query[g_popup.query_len] = '\0';
+          popup_apply_filter();
+        }
+        g_popup.query_pending_len = 0;
+      }
+      return 1;
+    }
+    int had_pending = g_popup.query_pending_len;
+    g_popup.query_pending_len = 0;
+    if (ch >= 0xc2 && ch <= 0xf4) {
+      g_popup.query_pending[0] = (unsigned char)ch;
+      g_popup.query_pending_len = 1;
+      g_popup.query_pending_need = ch < 0xe0 ? 2 : ch < 0xf0 ? 3 : 4;
+      return 1;
+    }
     if (ch == 127 || ch == 8 || ch == 0407) {
+      if (had_pending)
+        return 1;
       if (g_popup.query_len > 0) {
-        g_popup.query[--g_popup.query_len] = '\0';
+        g_popup.query_len = get_prev_char_start(g_popup.query, g_popup.query_len);
+        g_popup.query[g_popup.query_len] = '\0';
         popup_apply_filter();
       }
       return 1;
@@ -285,11 +362,13 @@ int popup_handle_key(int ch) {
     break;
   case POPUP_KEY_LEFT:
   case 'h':
+    if (g_popup.item_count <= 0) break;
     if (g_popup.multi && g_popup.selected[g_popup.cursor])
       g_popup.selected[g_popup.cursor] = 0;
     break;
   case POPUP_KEY_RIGHT:
   case 'l':
+    if (g_popup.item_count <= 0) break;
     if (g_popup.multi && !g_popup.selected[g_popup.cursor])
       g_popup.selected[g_popup.cursor] = 1;
     else if (g_popup.selected[g_popup.cursor]) {
@@ -403,6 +482,7 @@ void popup_close_data(void) {
   g_popup.filterable = 0;
   g_popup.query[0] = '\0';
   g_popup.query_len = 0;
+  g_popup.query_pending_len = g_popup.query_pending_need = 0;
   g_popup.cursor = 0;
   g_popup.scroll = 0;
   g_popup.max_visible = POPUP_DEFAULT_LIMIT;

@@ -18,9 +18,10 @@ headless runs.
   both the current messages and in-memory active session remain unchanged.
 - Commands, including session switching, remain unavailable while a top-level
   agent run is active, following the queued-input command policy.
-- After the first successful assistant response, Capstan asks the configured
-  weak model for a concise 3–7 word title in the user's language. If no weak
-  model is configured, the active model is used. Until that request succeeds,
+- After the first successful assistant response, Capstan asks the effective
+  active model for a concise 3–7 word title in the user's language, honoring
+  profile selections and interactive launch provider/model/reasoning overrides.
+  Until that request succeeds,
   the UTF-8-safe beginning of the first user message is used as a local fallback.
   Generation runs as background HTTP work without tools or a loading spinner,
   does not enter conversation history or append to the visible assistant
@@ -67,6 +68,17 @@ ignored by listing and fail closed when explicitly loaded; they do not crash TUI
 startup. Reads cap individual JSONL rows at 4 MiB and sessions at 10,000
 messages. A row exceeding the byte cap, an allocation failure, or an underlying
 read error invalidates the whole load and is never treated as a clean EOF.
+Before extracting fields, the loader validates every non-empty row as one
+complete JSON object, including metadata, messages, and image chunks. Missing
+closing delimiters, malformed numbers (such as `1garbage`), invalid escapes,
+raw control bytes/NUL, invalid UTF-8, and trailing non-whitespace are rejected.
+Validation bounds nesting to 64 levels. Fields are read only from the top-level
+object, with JSON whitespace allowed around separators; nested lookalike keys
+cannot supply required fields. Integer fields reject fractional/exponent tokens
+and overflow rather than silently truncating them. A failed load clears all partial state;
+load-or-create never replaces the malformed existing file. Legacy optional
+metadata defaults, empty rows after metadata, and a final row without a newline
+remain supported.
 Identifiers may contain spaces and UTF-8 text, but not slashes, backslashes,
 control characters, leading dots, or leading/trailing spaces; they must fit in
 the fixed 64-byte identifier field.
@@ -90,7 +102,9 @@ the fixed 64-byte identifier field.
 `make test` covers workspace isolation, active pointers, sorting, title
 creation, Unicode/multiline `text` and `raw_text` round trips, empty-placeholder
 filtering, explicit named sessions, load-or-create selection, malformed
-versions, oversized-row rejection, and `0600`/`0700` permissions. `make test-http-lua`
+versions, complete JSON validation (including truncated objects and `1garbage`),
+byte-for-byte preservation of malformed files on load-or-create, legacy
+load/save round trips, oversized-row rejection, and `0600`/`0700` permissions. `make test-http-lua`
 covers selected-session creation and restoration through the TUI
 session manager. `make test-build` verifies create-then-resume headless
 persistence in an isolated HOME as part of the linked-binary smoke checks.

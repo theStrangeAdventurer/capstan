@@ -116,8 +116,10 @@ local function write_all(path, content)
     end
     local file, err = io.open(path, "wb")
     if not file then return nil, err end
-    file:write(content or "")
-    file:close()
+    local written, write_err = file:write(content or "")
+    local closed, close_err = file:close()
+    if not written then return nil, write_err end
+    if not closed then return nil, close_err end
     return true, nil
 end
 
@@ -364,7 +366,9 @@ local function index_path(root, source_id)
     return root:gsub("/+$", "") .. "/index/" .. source_id .. ".json"
 end
 
-local function save_index(root, source_id, source_root, docs, decoded, mode, target_dir)
+local copy_to_wiki
+
+local function save_index(root, source_id, source_root, docs, decoded, mode, target_dir, files)
     local known = {}
     for _, doc in ipairs(docs) do known[doc.path] = doc end
     local entries = {}
@@ -381,7 +385,12 @@ local function save_index(root, source_id, source_root, docs, decoded, mode, tar
     end
     if #entries == 0 then
         for _, doc in ipairs(docs) do
-            table.insert(entries, sanitize_entry({ path = doc.path, title = doc.path }, known, source_id))
+            local entry = sanitize_entry({ path = doc.path, title = doc.path }, known, source_id)
+            entry.hash = doc.hash
+            if mode == "copy" then
+                entry.wiki_path = target_dir:gsub("/+$", "") .. "/" .. doc.path
+            end
+            table.insert(entries, entry)
         end
     end
     local payload = {
@@ -394,26 +403,63 @@ local function save_index(root, source_id, source_root, docs, decoded, mode, tar
         target_dir = target_dir,
         entries = entries,
     }
+    if mode == "copy" then
+        local ok, err = copy_to_wiki(root, source_root, files, entries, target_dir)
+        if not ok then return nil, "copy failed: " .. tostring(err) end
+    end
     return write_all(index_path(root, source_id), json.encode(payload))
 end
 
-local function save_fallback_index(root, source_id, source_root, docs, mode, target_dir, reason)
-    return save_index(root, source_id, source_root, docs, { entries = {} }, mode, target_dir), reason
-end
+-- Resolve missing paths through their existing ancestors, failing closed on
+-- dangling links. This deliberately does not use workspace write permissions:
+-- the configured wiki is its own containment boundary.
+local copy_realpath = workspace.creation_realpath
 
-local function copy_to_wiki(root, source_root, files, entries, target_dir)
-    target_dir = (target_dir or "sources"):gsub("^/+", ""):gsub("/+$", "")
-    if target_dir == "" or workspace.is_absolute_path(target_dir) or target_dir:find("..", 1, true) then
+local function plan_wiki_copies(root, source_root, files, target_dir)
+    if invalid_relative(target_dir) or target_dir:find("..", 1, true) then
         return nil, "copy target must be a relative wiki directory"
     end
-    local by_path = {}
-    for _, entry in ipairs(entries or {}) do by_path[entry.path] = entry end
+    local root_real = copy_realpath(root)
+    if not root_real then return nil, "cannot resolve copy wiki root" end
+    local sources = {}
+    for _, file in ipairs(files) do
+        local real = workspace.realpath(file)
+        if not real then return nil, "cannot resolve copy source: " .. file end
+        sources[real] = true
+    end
+    local plan = {}
     for _, file in ipairs(files) do
         local rel = relative_to_root(file, source_root)
         local dest = workspace.normalize_path(root .. "/" .. target_dir .. "/" .. rel)
-        if not workspace.path_is_within(dest, root) then
-            return nil, "copy target escapes wiki directory"
+        local real = copy_realpath(dest)
+        if not workspace.path_is_within(dest, root) or not real or
+            not workspace.path_is_within(real, root_real) then
+            return nil, "copy target resolves outside wiki directory or cannot be resolved"
         end
+        if sources[real] then return nil, "copy target would overwrite a source file" end
+        -- Reject final symlinks (including dangling ones) and compare inode
+        -- identity against EVERY source, not just the file being copied.
+        local quoted = workspace.shell_quote(dest)
+        local checks = { "[ ! -L " .. quoted .. " ]" }
+        for _, source in ipairs(files) do
+            checks[#checks + 1] = "[ ! " .. quoted .. " -ef " .. workspace.shell_quote(source) .. " ]"
+        end
+        local safe = os.execute(table.concat(checks, " && "))
+        if safe ~= true and safe ~= 0 then
+            return nil, "copy target is a symlink or would overwrite a source file"
+        end
+        plan[#plan + 1] = { file = file, rel = rel, dest = dest }
+    end
+    return plan
+end
+
+copy_to_wiki = function(root, source_root, files, entries, target_dir)
+    local plan, plan_err = plan_wiki_copies(root, source_root, files, target_dir)
+    if not plan then return nil, plan_err end
+    local by_path = {}
+    for _, entry in ipairs(entries or {}) do by_path[entry.path] = entry end
+    for _, item in ipairs(plan) do
+        local file, rel, dest = item.file, item.rel, item.dest
         local content, err = workspace.read_all(file)
         if not content then return nil, err or ("cannot read " .. file) end
         local entry = by_path[rel] or { path = rel, title = rel, kind = "source", index_policy = "always", context_policy = "retrieve_only" }
@@ -423,7 +469,7 @@ local function copy_to_wiki(root, source_root, files, entries, target_dir)
     return true, nil
 end
 
-local function run_weak_index(root, source_id, source_root, files, docs, mode, target_dir)
+local function run_index(root, source_id, source_root, files, docs, mode, target_dir)
     if not capstan or type(capstan.agent) ~= "table" or type(capstan.agent.run) ~= "function" then
         return nil, "agent runtime is not available"
     end
@@ -434,13 +480,6 @@ local function run_weak_index(root, source_id, source_root, files, docs, mode, t
         update_status = false,
         update_usage = false,
     }
-    if capstan.models and type(capstan.models.weak) == "function" then
-        local weak = capstan.models.weak()
-        if type(weak) == "table" then
-            opts.provider = weak.provider
-            opts.model = weak.model
-        end
-    end
     local chunks = {}
     local state = {
         done = false,
@@ -448,8 +487,19 @@ local function run_weak_index(root, source_id, source_root, files, docs, mode, t
         error = nil,
         fallback = false,
     }
+    local function validate_copy_plan()
+        if mode ~= "copy" then return true end
+        local plan, plan_err = plan_wiki_copies(root, source_root, files, target_dir)
+        if plan then return true end
+        state.error = tostring(plan_err)
+        state.done = true
+        notify_error("Wiki ingest copy failed: " .. state.error)
+        return false
+    end
     local function finish_with_fallback(reason)
-        local save_ok, save_err = save_fallback_index(root, source_id, source_root, docs, mode, target_dir, reason)
+        if not validate_copy_plan() then return end
+        if state.done then return end
+        local save_ok, save_err = save_index(root, source_id, source_root, docs, { entries = {} }, mode, target_dir, files)
         if not save_ok then
             state.error = tostring(save_err)
             state.done = true
@@ -481,22 +531,13 @@ local function run_weak_index(root, source_id, source_root, files, docs, mode, t
                 log("invalid metadata JSON: " .. tostring(decode_err))
                 return
             end
-            local save_ok, save_err = save_index(root, source_id, source_root, docs, decoded, mode, target_dir)
+            if not validate_copy_plan() then return end
+            local save_ok, save_err = save_index(root, source_id, source_root, docs, decoded, mode, target_dir, files)
             if not save_ok then
                 state.error = tostring(save_err)
                 state.done = true
                 notify_error("Wiki ingest failed: " .. tostring(save_err))
                 return
-            end
-            if mode == "copy" then
-                local entries = decoded.entries or {}
-                local copy_ok, copy_err = copy_to_wiki(root, source_root, files, entries, target_dir)
-                if not copy_ok then
-                    state.error = tostring(copy_err)
-                    state.done = true
-                    notify_error("Wiki ingest copy failed: " .. tostring(copy_err))
-                    return
-                end
             end
             state.ok = true
             state.done = true
@@ -542,7 +583,11 @@ local function ingest_options(options)
             return "Wiki ingest failed: copy target must be a relative wiki directory"
         end
     end
-    local ok, err = run_weak_index(root, source_id, source_root, files, docs, mode, target_dir)
+    if copy then
+        local plan, plan_err = plan_wiki_copies(root, source_root, files, target_dir)
+        if not plan then return "Wiki ingest failed: " .. tostring(plan_err) end
+    end
+    local ok, err = run_index(root, source_id, source_root, files, docs, mode, target_dir)
     if not ok then return "Wiki ingest failed: " .. tostring(err) end
     local suffix = err == "fallback" and " with fallback metadata" or ""
     return "Wiki ingest completed" .. suffix .. ": " .. tostring(#files) .. " Markdown file(s) from " .. source_root .. " using source `" .. source_id .. "`."
@@ -631,7 +676,18 @@ local function source_read(args)
     if not workspace.path_is_within(full, workspace.normalize_path(source_root)) then
         return "Wiki source read failed: path escapes source root", false
     end
-    local content, read_err = workspace.read_all(full)
+    local root_real = workspace.realpath(source_root)
+    if not root_real then
+        return "Wiki source read failed: cannot resolve source root", false
+    end
+    local full_real = workspace.realpath(full)
+    if not full_real then
+        return "Wiki source read failed: cannot resolve source file", false
+    end
+    if not workspace.path_is_within(full_real, root_real) then
+        return "Wiki source read failed: path resolves outside source root", false
+    end
+    local content, read_err = workspace.read_all(full_real)
     if not content then
         return "Wiki source read failed: " .. tostring(read_err or "cannot read file"), false
     end

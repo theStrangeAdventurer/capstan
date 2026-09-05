@@ -1,5 +1,6 @@
 #include "visual.h"
 #include "linemap.h"
+#include "scroll.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -269,6 +270,35 @@ void visual_move_word_backward(void) {
 void visual_get_cursor(int *line, int *col) {
     if (line) *line = g_visual.cursor_line;
     if (col) *col = g_visual.cursor_col;
+}
+
+void visual_scroll_view(int lines, int view_height) {
+    int count = linemap_count();
+    if (view_height < 1) view_height = 1;
+    int max_scroll = count > view_height ? count - view_height : 0;
+    int before = scroll_get();
+    long long target = (long long)before + lines;
+    if (target < 0) target = 0;
+    if (target > max_scroll) target = max_scroll;
+    scroll_set((int)target);
+    if (!g_visual.active || count <= 0) return;
+    int top = max_scroll - (int)target;
+    int bottom = top + view_height - 1;
+    if (bottom >= count) bottom = count - 1;
+    int line = g_visual.cursor_line - ((int)target - before);
+    if (line < top) line = top;
+    if (line > bottom) line = bottom;
+    int text = line;
+    while (text <= bottom && is_padding_line(text)) text++;
+    if (text > bottom) {
+        text = line;
+        while (text >= top && is_padding_line(text)) text--;
+    }
+    /* An all-padding viewport must not pull scrolling back toward text. */
+    g_visual.cursor_line = text >= top && text <= bottom ? text : line;
+    const LineInfo *li = linemap_get(g_visual.cursor_line);
+    if (g_visual.cursor_col > (li ? li->char_count : 0))
+        g_visual.cursor_col = li ? li->char_count : 0;
 }
 
 void visual_set_cursor_line(int line) {

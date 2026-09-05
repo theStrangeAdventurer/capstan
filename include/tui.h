@@ -2,6 +2,7 @@
 #define TUI_H
 
 #include <stddef.h>
+struct MessageImage;
 
 #define TUI_KEY_PASTE_BEGIN 0x2000
 #define TUI_KEY_CTRL_U     0x15
@@ -18,6 +19,8 @@ typedef struct {
   char *ui_result;
   char *raw_result;
   size_t shell_output_start;
+  struct MessageImage *images;
+  size_t image_count;
 } BufferedPluginResult;
 
 typedef struct {
@@ -37,7 +40,8 @@ int tui_focus_input_at_point(int rows, int cols, int y, int x);
 void tui_pump_blocking(void);
 int tui_handle_paste(int ch);
 void buffer_plugin_result(const char *label, char *ui_result, char *raw_result,
-                          size_t shell_output_start);
+                          size_t shell_output_start, struct MessageImage *images,
+                          size_t image_count);
 void buffered_results_clear(void);
 
 const char *tui_permit_prompt(const char *tool, const char *target);

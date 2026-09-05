@@ -179,7 +179,74 @@ static MunitResult test_builds_prompt_with_ingested_source_index(
   return MUNIT_OK;
 }
 
+static MunitResult test_rejects_invalid_index_arrays(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  const char *invalid[] = {
+      "[null]", "[true]", "[42]", "[{}]", "[[]]",
+      "[\"partial\",null]", "[\"partial\" \"other\"]",
+      "[\"partial\",]", "[,\"other\"]", "[\"partial\",,\"other\"]",
+      "[\"partial\"", "[", "null", "\"not an array\""};
+  const char *fields[] = {"use_when", "tags"};
+  char root[256];
+  snprintf(root, sizeof(root), "/tmp/capstan-wiki-invalid-%ld", (long)getpid());
+  make_dir(root);
+  char index_dir[256];
+  snprintf(index_dir, sizeof(index_dir), "%s/index", root);
+  make_dir(index_dir);
+  char index_file[256];
+  snprintf(index_file, sizeof(index_file), "%s/docs.json", index_dir);
+
+  for (size_t f = 0; f < sizeof(fields) / sizeof(fields[0]); f++) {
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+      char content[2048];
+      snprintf(content, sizeof(content),
+               "{\"source_id\":\"docs\",\"source_root\":\"/tmp/docs\",\"entries\":["
+               "{\"path\":\"before.md\",\"use_when\":[\"first\",\"second\"],"
+               "\"tags\":[\"docs\",\"guide\"]},"
+               "{\"path\":\"invalid.md\",\"%s\":%s},"
+               "{\"path\":\"empty.md\",\"use_when\":[ ],\"tags\":[]},"
+               "{\"path\":\"missing.md\"}]}", fields[f], invalid[i]);
+      write_file(index_file, content);
+      char *prompt = wiki_build_prompt(root);
+      munit_assert_not_null(prompt);
+      munit_assert_null(strstr(prompt, "invalid.md"));
+      munit_assert_null(strstr(prompt, "partial"));
+      munit_assert_not_null(strstr(prompt, "source:docs:before.md"));
+      munit_assert_not_null(strstr(prompt, "source:docs:empty.md"));
+      munit_assert_not_null(strstr(prompt, "source:docs:missing.md"));
+      munit_assert_not_null(strstr(prompt, "Use when: first; second"));
+      munit_assert_not_null(strstr(prompt, "Tags: docs; guide"));
+      free(prompt);
+      char *summary = wiki_build_summary(root);
+      munit_assert_not_null(summary);
+      munit_assert_not_null(strstr(summary, "Indexed documents: 3"));
+      munit_assert_null(strstr(summary, "invalid.md"));
+      free(summary);
+    }
+  }
+
+  /* An unterminated string/object cannot be resynchronized safely. */
+  write_file(index_file,
+             "{\"source_id\":\"docs\",\"source_root\":\"/tmp/docs\",\"entries\":["
+             "{\"path\":\"before.md\"},"
+             "{\"path\":\"invalid.md\",\"tags\":[\"unterminated");
+  char *summary = wiki_build_summary(root);
+  munit_assert_not_null(summary);
+  munit_assert_not_null(strstr(summary, "Indexed documents: 1"));
+  munit_assert_not_null(strstr(summary, "source:docs:before.md"));
+  munit_assert_null(strstr(summary, "invalid.md"));
+  free(summary);
+  unlink(index_file);
+  rmdir(index_dir);
+  rmdir(root);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/rejects_invalid_index_arrays", test_rejects_invalid_index_arrays,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/builds_prompt_with_core_and_metadata_only",
      test_builds_prompt_with_core_and_metadata_only, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

@@ -40,16 +40,8 @@ function M.set_model(provider_name, model, reasoning_effort)
     return models.set(M, provider_name or M.provider, model, reasoning_effort)
 end
 
-function M.set_weak_model(provider_name, model, reasoning_effort)
-    return models.set_weak(M, provider_name, model, reasoning_effort)
-end
-
 function M.set_profile_model(profile_name, provider_name, model, reasoning_effort)
     return models.set_profile(M, profile_name, provider_name, model, reasoning_effort)
-end
-
-function M.get_weak_model()
-    return models.weak(M)
 end
 
 -- Returns a chunk callback for http.post_stream that feeds SSE events into on_result.
@@ -352,9 +344,7 @@ local function make_guard(started_at)
         max_tool_calls = agent_config_number("max_tool_calls", 0),
         max_same_tool_call = agent_config_number("max_same_tool_call", 0),
         max_same_shell_command = agent_config_number("max_same_shell_command", 0),
-        max_generated_output_checks = agent_config_nonnegative("max_generated_output_checks", 0),
         total_tool_calls = 0,
-        generated_output_checks = 0,
         signatures = {},
         last_tool_signature = nil,
         same_tool_count = 0,
@@ -877,9 +867,23 @@ function M.run(opts, callbacks)
     return true, nil
 end
 
+-- Inherit only model routing; background work keeps its own run policy.
+local function interactive_model_options(opts)
+    for _, field in ipairs({"provider", "model", "reasoning_effort"}) do
+        if opts[field] == nil then opts[field] = interactive_run_options[field] end
+    end
+    return opts
+end
+
 if not _G.capstan then _G.capstan = {} end
 _G.capstan.agent = {
     run = function(opts, callbacks)
+        opts = copy_table(opts) or {}
+        -- Explicit model/provider/profile selections own their routing. Default
+        -- background callers (including Wiki ingest) inherit the active model.
+        if not opts.provider and not opts.model and not opts.profile then
+            interactive_model_options(opts)
+        end
         return M.run(opts, callbacks)
     end,
     configure_interactive = function(opts)
@@ -966,8 +970,8 @@ _G.should_auto_compact = function(messages, additional_text)
         return false, 0, 0, threshold
     end
 
-    local profile = effective_profile({})
-    local active, provider_name = prepare_provider({}, profile)
+    local profile = effective_profile(interactive_run_options)
+    local active, provider_name = prepare_provider(interactive_run_options, profile)
     if not active then
         logging.runtime_log("compact",
             "auto_check skipped unknown_provider=" .. tostring(provider_name),
@@ -1022,44 +1026,7 @@ Preserve only information needed to continue the work correctly:
 Do not write a conversational recap. Do not omit concrete file names, model/provider choices, test results, or unresolved work. Use concise Markdown.
 ]]
 
-local function compact_weak_model_fits(weak, compact_messages, automatic)
-    if not weak then return false end
-    local profile = effective_profile({})
-    local active = prepare_provider({
-        provider = weak.provider,
-        model = weak.model,
-        update_status = false,
-        update_usage = false,
-    }, profile)
-    if not active then return false end
-    local context_limit = models.ensure_context_limit(active)
-    if not context_limit or context_limit <= 0 then
-        if automatic then
-            logging.runtime_log("compact", string.format(
-                "weak_model_skipped context_limit=unknown provider=%s model=%s",
-                tostring(weak.provider),
-                tostring(weak.model)
-            ), "warn")
-            return false
-        end
-        return true
-    end
-    local request_messages = build_messages(compact_messages, profile)
-    local estimated_tokens = tokens.estimate_messages_tokens(request_messages, {})
-    local fits = estimated_tokens * 100 < context_limit * 90
-    if not fits then
-        logging.runtime_log("compact", string.format(
-            "weak_model_skipped estimated_tokens=%d context_limit=%d provider=%s model=%s",
-            estimated_tokens,
-            context_limit,
-            tostring(weak.provider),
-            tostring(weak.model)
-        ), "warn")
-    end
-    return fits
-end
-
-local function compact_run_options(messages, automatic)
+local function compact_run_options(messages)
     local compact_messages = {}
     for _, message in ipairs(messages or {}) do
         table.insert(compact_messages, message)
@@ -1069,11 +1036,6 @@ local function compact_run_options(messages, automatic)
         content = compact_instruction,
     })
 
-    local weak = models.weak(M)
-    if weak and
-       not compact_weak_model_fits(weak, compact_messages, automatic) then
-        weak = nil
-    end
     local opts = {
         messages = compact_messages,
         max_turns = 1,
@@ -1083,27 +1045,18 @@ local function compact_run_options(messages, automatic)
         update_usage = false,
         skip_after_agent_turn = true,
     }
-    if weak then
-        opts.provider = weak.provider
-        opts.model = weak.model
-        if weak.reasoning_effort == "default" then
-            opts.reasoning_effort_default = true
-        else
-            opts.reasoning_effort = weak.reasoning_effort
-        end
-    end
-    return opts, weak
+    return interactive_model_options(opts)
 end
 
-_G.compact_entry = function(messages, automatic)
+_G.compact_entry = function(messages)
     if not messages or #messages == 0 then
         popup.error("Compact", "No conversation to compact")
         return
     end
 
     local chunks = {}
-    local opts, weak = compact_run_options(messages, automatic == true)
-    agent.set_activity(weak and "Compacting" or "Compacting")
+    local opts = compact_run_options(messages)
+    agent.set_activity("Compacting")
     agent.set_thinking(true)
     M.run(opts, {
         on_text = function(chunk)
@@ -1153,7 +1106,6 @@ local function generate_session_title()
     if not session_id or session_title_jobs[session_id] then return end
     session_title_jobs[session_id] = true
 
-    local weak = models.weak(M)
     local opts = {
         messages = {{
             role = "user",
@@ -1169,17 +1121,8 @@ local function generate_session_title()
         update_usage = false,
         skip_after_agent_turn = true,
     }
-    if weak then
-        opts.provider = weak.provider
-        opts.model = weak.model
-        if weak.reasoning_effort == "default" then
-            opts.reasoning_effort_default = true
-        else
-            opts.reasoning_effort = weak.reasoning_effort
-        end
-    end
 
-    M.run(opts, {
+    M.run(interactive_model_options(opts), {
         -- Title generation is metadata work. Supplying an explicit text
         -- callback prevents M.run's UI-visible agent.append fallback.
         on_text = function() end,

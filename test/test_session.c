@@ -222,6 +222,94 @@ static MunitResult test_incomplete_image_chunk_fails_closed(
   return MUNIT_OK;
 }
 
+static MunitResult test_json_validation(const MunitParameter params[],
+                                         void *data) {
+  (void)params;
+  (void)data;
+  munit_assert_true(session_store_init("/repo/json-validation"));
+  const char *header = " { \"version\" : 1, \"id\" : \"strict\", \"title\" : \"Legacy\" }\n";
+  const char *bad_rows[] = {
+      "{\"version\":1,\"id\":\"strict\",\"title\":\"Legacy\"",
+      "{\"version\":1garbage,\"id\":\"strict\",\"title\":\"Legacy\"}",
+      "{\"role\":\"user\",\"text\":\"hello\",\"raw_text\":\"hello\"",
+      "{\"role\":\"user\",\"text\":\"hello\",\"raw_text\":\"hello\"}garbage",
+      "{\"role\":\"user\",\"text\":\"\\q\",\"raw_text\":\"hello\"}",
+      "{\"role\":\"user\",\"text\":\"\\u12\",\"raw_text\":\"hello\"}",
+      "{\"role\":\"user\",\"text\":\"hello\",\"raw_text\":\"hello\",}",
+      "{\"role\":\"user\",\"text\":\"hello\",\"raw_text\":\"hello\",\"extra\":[1,]}",
+      "{\"type\":\"image\",\"index\":0,\"mime_type\":\"image/png\",\"data\":\"YWJj\",\"final\":1garbage}",
+      "{\"extra\":{\"role\":\"user\"},\"text\":\"hello\",\"raw_text\":\"hello\"}",
+      "{\"role\":\"user\",\"text\":\"hello\",\"raw_text\":\"hello\"}",
+  };
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/strict.jsonl", session_store_dir());
+  for (size_t i = 0; i < sizeof(bad_rows) / sizeof(bad_rows[0]); i++) {
+    char original[1024];
+    int len = snprintf(original, sizeof(original), "%s%s%s",
+                       i < 2 ? "" : header,
+                       i == 8 ? "{\"role\":\"user\",\"text\":\"image\","
+                                "\"raw_text\":\"image\"}\n" : "",
+                       bad_rows[i]);
+    /* A NUL must not hide bytes after an otherwise valid row. */
+    if (i + 1 == sizeof(bad_rows) / sizeof(bad_rows[0])) {
+      original[len++] = '\0';
+      original[len++] = 'x';
+    }
+    FILE *f = fopen(path, "wb");
+    munit_assert_not_null(f);
+    munit_assert_size(fwrite(original, 1, (size_t)len, f), ==, (size_t)len);
+    munit_assert_int(fclose(f), ==, 0);
+    Session loaded;
+    munit_assert_false(session_load("strict", &loaded));
+    munit_assert_null(loaded.messages);
+    munit_assert_size(loaded.message_count, ==, 0);
+    munit_assert_string_equal(loaded.id, "");
+    int created = 1;
+    munit_assert_false(session_load_or_create_named(&loaded, "strict", &created));
+    munit_assert_false(created);
+    munit_assert_false(session_save(&loaded));
+    SessionInfo *items = NULL;
+    size_t count = 0;
+    munit_assert_true(session_list(&items, &count));
+    munit_assert_size(count, ==, 0);
+    session_list_free(items);
+    f = fopen(path, "rb");
+    munit_assert_not_null(f);
+    char unchanged[1024];
+    munit_assert_size(fread(unchanged, 1, sizeof(unchanged), f), ==, (size_t)len);
+    munit_assert_memory_equal((size_t)len, original, unchanged);
+    munit_assert_int(fclose(f), ==, 0);
+  }
+  const char *bad_versions[] = {"1.5", "1e2", "999999999999999999999999"};
+  for (size_t i = 0; i < sizeof(bad_versions) / sizeof(bad_versions[0]); i++) {
+    FILE *f = fopen(path, "wb");
+    munit_assert_not_null(f);
+    fprintf(f, "{\"version\":%s,\"id\":\"strict\",\"title\":\"Legacy\"}",
+            bad_versions[i]);
+    munit_assert_int(fclose(f), ==, 0);
+    Session loaded;
+    munit_assert_false(session_load("strict", &loaded));
+  }
+  /* Legacy metadata omits optional fields; blank rows and final EOF remain OK. */
+  FILE *f = fopen(path, "wb");
+  munit_assert_not_null(f);
+  fputs(header, f);
+  fputs("\n{\"role\":\"user\",\"text\":\"hello\",\"raw_text\":\"hello\","
+        "\"extra\": [true, false, null, {\"n\": -1.25e+2}]}\t", f);
+  munit_assert_int(fclose(f), ==, 0);
+  Session loaded;
+  munit_assert_true(session_load("strict", &loaded));
+  munit_assert_false(loaded.title_generated);
+  munit_assert_size(loaded.message_count, ==, 1);
+  munit_assert_true(session_save(&loaded));
+  session_free(&loaded);
+  munit_assert_true(session_load("strict", &loaded));
+  munit_assert_string_equal(loaded.title, "Legacy");
+  munit_assert_string_equal(loaded.messages[0].text, "hello");
+  session_free(&loaded);
+  return MUNIT_OK;
+}
+
 static MunitResult test_title(const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -308,6 +396,8 @@ static MunitTest tests[] = {
      teardown, MUNIT_TEST_OPTION_NONE, NULL},
     {"/incomplete_image_chunk_fails_closed",
      test_incomplete_image_chunk_fails_closed, setup, teardown,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/json_validation", test_json_validation, setup, teardown,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/title", test_title, setup, teardown, MUNIT_TEST_OPTION_NONE, NULL},
     {"/named_session_is_exact_and_not_active",

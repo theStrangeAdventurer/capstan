@@ -1,6 +1,7 @@
 #include "app_config.h"
 #include "editor.h"
 #include "input.h"
+#include <errno.h>
 #include <ncursesw/curses.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,21 +46,10 @@ static int write_initial_text(int fd, const char *text) {
   return 0;
 }
 
-static int read_prompt_file(const char *path) {
-  FILE *f = fopen(path, "rb");
-  if (!f)
-    return -1;
-
-  char buf[INPUT_BUFFER_SIZE];
-  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-  int failed = ferror(f);
-  fclose(f);
-  if (failed)
-    return -1;
-
-  buf[n] = '\0';
-  input_set_text(buf);
-  return 0;
+static void show_retained_prompt(const char *reason, const char *path) {
+  char message[INPUT_BUFFER_SIZE];
+  snprintf(message, sizeof(message), "%s; prompt file retained at %s", reason, path);
+  input_set_text(message);
 }
 
 int editor_open_prompt(const char *initial_text) {
@@ -108,6 +98,7 @@ int editor_open_prompt(const char *initial_text) {
   def_prog_mode();
   endwin();
   int status = system(command);
+  int launch_errno = errno;
   reset_prog_mode();
   refresh();
 
@@ -119,18 +110,27 @@ int editor_open_prompt(const char *initial_text) {
   else
     ok = 0;
 
+  char reason[256];
   if (!ok) {
-    unlink(path);
-    input_set_text("Editor exited with an error");
+    if (status == -1)
+      snprintf(reason, sizeof(reason), "Cannot launch editor: %s", strerror(launch_errno));
+    else if (WIFEXITED(status))
+      snprintf(reason, sizeof(reason), "Editor exited with status %d", WEXITSTATUS(status));
+    else if (WIFSIGNALED(status))
+      snprintf(reason, sizeof(reason), "Editor terminated by signal %d", WTERMSIG(status));
+    else
+      snprintf(reason, sizeof(reason), "Editor did not exit normally");
+    show_retained_prompt(reason, path);
     return -1;
   }
 
-  int result = read_prompt_file(path);
+  char prompt[INPUT_BUFFER_SIZE];
+  if (editor_read_prompt_file(path, prompt, sizeof(prompt), reason, sizeof(reason)) != 0) {
+    show_retained_prompt(reason, path);
+    return -1;
+  }
+
+  input_set_text(prompt);
   unlink(path);
-  if (result != 0) {
-    input_set_text("Failed to read editor temp file");
-    return -1;
-  }
-
   return 0;
 }

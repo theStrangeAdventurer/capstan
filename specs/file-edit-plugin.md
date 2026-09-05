@@ -8,6 +8,9 @@ structured `path`, `old_text`, `new_text`, and optional `replace_all` arguments.
 
 - Relative paths resolve against the configured
   [workspace directory](workspace-directory.md).
+- Model calls may edit inside the effective configured Wiki outside the workspace,
+  with normal `file_write` permissions. Realpath confinement rejects escaping and
+  dangling symlinks; arbitrary external paths remain denied.
 - `old_text` must be non-empty.
 - If `old_text` is not found, the command fails without writing.
 - If `old_text` appears more than once and `replace_all` is not true, the command

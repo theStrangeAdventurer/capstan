@@ -1,6 +1,7 @@
 #include "munit.h"
 #include "linemap.h"
 #include "visual.h"
+#include "scroll.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -470,7 +471,45 @@ static MunitResult test_word_backward_boundary(const MunitParameter params[], vo
     return MUNIT_OK;
 }
 
+static MunitResult test_scroll_view(const MunitParameter p[], void *d) {
+    (void)p; (void)d;
+    setup(NULL, NULL);
+    scroll_reset();
+    scroll_update_content(linemap_count(), 3);
+    visual_enter_selection();
+    visual_scroll_view(3, 3); /* wheel: cursor follows viewport upward */
+    int line;
+    visual_get_cursor(&line, NULL);
+    munit_assert_int(scroll_get(), ==, 3);
+    munit_assert_int(line, ==, 4);
+    scroll_update_content(linemap_count(), 3);
+    munit_assert_int(scroll_get(), ==, 3);
+    visual_scroll_view(5, 3); /* PgUp clamps at top */
+    visual_get_cursor(&line, NULL);
+    munit_assert_int(scroll_get(), ==, 6);
+    munit_assert_int(line, ==, 1);
+    int sl, sc, el, ec;
+    visual_selection_range(&sl, &sc, &el, &ec);
+    munit_assert_int(el, ==, 7); /* anchor preserved */
+    visual_scroll_view(-5, 3);
+    visual_get_cursor(&line, NULL);
+    munit_assert_int(scroll_get(), ==, 1);
+    munit_assert_int(line, >=, 5);
+    munit_assert_int(line, <=, 7);
+    visual_scroll_view(-3, 3);
+    munit_assert_true(scroll_is_following());
+    visual_scroll_view(1, 1); /* padding-only viewport must remain visible */
+    visual_get_cursor(&line, NULL);
+    munit_assert_int(line, ==, linemap_count() - 2);
+    visual_exit();
+    visual_scroll_view(2, 3);
+    munit_assert_false(visual_cursor_visible());
+    teardown(NULL);
+    return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/scroll_view", test_scroll_view, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/enter_active", test_enter_sets_active, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/resume_restores_cursor", test_resume_restores_cursor, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

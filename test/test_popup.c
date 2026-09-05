@@ -3,6 +3,7 @@
 #include "popup_internal.h"
 #include "utils.h"
 #include <limits.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -644,7 +645,62 @@ static MunitResult test_scrollbar_clamps_scroll_and_thumb(
   return MUNIT_OK;
 }
 
+static MunitResult test_filterable_utf8(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  PopupItem items[] = {{"привет", "ru"}, {"alpha", "en"}};
+  popup_open_filterable_with_plugin(items, 2, "Find", 5, 0, NULL, 0);
+  popup_handle_key(0xd0);
+  munit_assert_string_equal(g_popup.query, "");
+  munit_assert_int(g_popup.item_count, ==, 2);
+  popup_handle_key(0xbf);
+  munit_assert_string_equal(g_popup.query, "п");
+  munit_assert_int(g_popup.item_count, ==, 1);
+  const unsigned char *rest = (const unsigned char *)"ривет";
+  while (*rest) popup_handle_key(*rest++);
+  munit_assert_string_equal(g_popup.query, "привет");
+  popup_handle_key(0407);
+  munit_assert_string_equal(g_popup.query, "приве");
+  for (int i = 0; i < 5; i++) popup_handle_key(127);
+  munit_assert_string_equal(g_popup.query, "");
+  popup_handle_key(0xed); popup_handle_key(0xa0); popup_handle_key(0x80);
+  munit_assert_string_equal(g_popup.query, "");
+  for (int i = 0; i < 254; i++) popup_handle_key('a');
+  popup_handle_key(0xd0); popup_handle_key(0xbf);
+  munit_assert_int(g_popup.query_len, ==, 254);
+  popup_handle_key(POPUP_KEY_RIGHT); /* empty results are safe */
+  popup_handle_key(0xd0); popup_handle_key(127);
+  munit_assert_int(g_popup.query_len, ==, 254);
+  popup_close_data();
+  return MUNIT_OK;
+}
+
+static MunitResult test_text_cells(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  char *saved = my_strdup(setlocale(LC_CTYPE, NULL));
+  const char *locale = setlocale(LC_CTYPE, "C.UTF-8");
+  if (!locale) locale = setlocale(LC_CTYPE, "en_US.UTF-8");
+  munit_assert_not_null(locale);
+  int width;
+  munit_assert_int(popup_text_clip("привет", 3, 0, &width), ==, 6);
+  munit_assert_int(width, ==, 3);
+  munit_assert_int(popup_text_clip("a界b", 2, 0, &width), ==, 1);
+  munit_assert_int(width, ==, 1);
+  munit_assert_int(popup_text_clip("a界b", 2, 1, &width), ==, 4);
+  munit_assert_int(width, ==, 1);
+  munit_assert_int(popup_text_clip("a界b", 3, 1, &width), ==, 1);
+  munit_assert_int(width, ==, 3);
+  munit_assert_int(popup_text_clip("e\xcc\x81x", 1, 0, &width), ==, 3);
+  munit_assert_int(width, ==, 1);
+  munit_assert_int(popup_text_clip("界\xcc\x81", 1, 1, &width), ==, 5);
+  munit_assert_int(width, ==, 0);
+  setlocale(LC_CTYPE, saved);
+  free(saved);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+  {"/text_cells", test_text_cells, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/filterable_utf8", test_filterable_utf8, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/open_active", test_open_active, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/close_data_inactive", test_close_data_inactive, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/error_message_auto_closes", test_error_message_auto_closes, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

@@ -14,8 +14,16 @@ returns the edited text to the input box without submitting it to the LLM.
 After the editor exits successfully, the temporary file contents replace the
 input buffer. The user must press Enter again to submit the edited prompt.
 
-If the editor cannot be launched or exits with an error, the input buffer is
-replaced with a short error message.
+Only complete text up to `INPUT_BUFFER_SIZE - 1` bytes (currently 8191) is
+imported, including an exact-limit draft. The limit counts UTF-8 bytes, not
+characters. Larger files are never partially imported. Embedded NUL bytes are
+also rejected rather than silently truncating the draft.
+
+On overflow, open/read failure, or unsuccessful editor exit, the temporary file
+is left untouched for recovery. The input buffer shows the specific cause
+(byte limit, OS error, exit code, or signal) and the temporary file path.
+Successful imports replace the draft and remove the temporary file. These local
+errors and drafts are not automatically sent to the model or persisted as chat.
 
 ## Editor selection
 
@@ -69,7 +77,10 @@ refresh();
 
 ## Testing Notes
 
-The editor flow depends on ncurses and an interactive external process, so it is
-not covered by the current unit test binary. Pure helper logic should be
-extracted if this feature gains behavior that can be tested without ncurses or
-process control.
+`src/editor_prompt.c` owns bounded, transactional file reading without curses.
+It leaves the destination unchanged on failure and never modifies/removes the
+file; `src/editor.c` owns UI diagnostics and successful-import cleanup.
+`test/test_editor.c` covers exact-limit input, UTF-8 overflow, unchanged destination
+and complete retained file, empty input, NUL rejection, open failure and read
+failure. Interactive smoke testing should additionally check failed editor exits
+and recovery-path diagnostics; process control and ncurses remain in the adapter.

@@ -555,7 +555,61 @@ static MunitResult test_tool_write_rejects_symlink_escape(
   return MUNIT_OK;
 }
 
+static MunitResult test_wiki_write_confinement(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  char base[4096], root[4096], work[4096], note[4096], link_path[4096], outside[4096];
+  make_tmp_dir(base, sizeof(base), "wiki-write-boundary");
+  snprintf(root, sizeof(root), "%s/wiki", base);
+  snprintf(work, sizeof(work), "%s/work", base);
+  snprintf(note, sizeof(note), "%s/nested/note.md", root);
+  snprintf(link_path, sizeof(link_path), "%s/link", root);
+  snprintf(outside, sizeof(outside), "%s/outside.md", base);
+  munit_assert_int(mkdir(work, 0700), ==, 0);
+  lua_State *L = new_state();
+  set_capstan_workdir(L, work);
+  lua_getglobal(L, "capstan");
+  lua_pushstring(L, root); lua_setfield(L, -2, "wiki_path"); lua_pop(L, 1);
+  load_file_write_plugin(L);
+  lua_getfield(L, -1, "tool"); lua_getfield(L, -1, "permission");
+  munit_assert_string_equal(lua_tostring(L, -1), "file_write"); lua_pop(L, 2);
+  /* Missing Wiki root and nested parents can be created. */
+  call_handler_tool(L, note, "first");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Created")); lua_pop(L, 2);
+  call_handler_tool_mode(L, note, " second", "append");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Appended")); lua_pop(L, 2);
+  FILE *f = fopen(note, "r"); munit_assert_not_null(f);
+  char content[32] = {0}; fread(content, 1, sizeof(content) - 1, f); fclose(f);
+  munit_assert_string_equal(content, "first second");
+  /* Final dangling link, escaping parent link, traversal and sibling prefix. */
+  munit_assert_int(symlink(outside, link_path), ==, 0);
+  call_handler_tool(L, link_path, "bad");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Cannot write")); lua_pop(L, 2);
+  unlink(link_path);
+  munit_assert_int(symlink(base, link_path), ==, 0);
+  char escaped[4096]; snprintf(escaped, sizeof(escaped), "%s/outside.md", link_path);
+  call_handler_tool(L, escaped, "bad");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Cannot write")); lua_pop(L, 2);
+  snprintf(escaped, sizeof(escaped), "%s/../outside.md", root);
+  call_handler_tool(L, escaped, "bad");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Cannot write")); lua_pop(L, 2);
+  snprintf(escaped, sizeof(escaped), "%s-other.md", root);
+  call_handler_tool(L, escaped, "bad");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Cannot write")); lua_pop(L, 2);
+  munit_assert_int(access(escaped, F_OK), ==, -1);
+  munit_assert_int(access(outside, F_OK), ==, -1);
+  munit_assert_int(luaL_dostring(L, "capstan.runtime_options = {disable_wiki=true}"), ==, LUA_OK);
+  call_handler_tool(L, note, "bad");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Cannot write"));
+  lua_close(L);
+  unlink(link_path); unlink(note);
+  snprintf(note, sizeof(note), "%s/nested", root); rmdir(note);
+  rmdir(root); rmdir(work); rmdir(base);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/wiki_write_confinement", test_wiki_write_confinement, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/relative_path_uses_launch_pwd", test_relative_path_uses_launch_pwd, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/relative_path_prefers_capstan_workdir",

@@ -11,7 +11,10 @@ and optional `mode` arguments.
 - Missing content writes an empty file.
 - Structured tool calls read `path`, `content`, and `mode` from `ctx.tool_args`;
   positional slash-command arguments are used only for manual `/write` calls.
-- Absolute paths are used as provided.
+- Absolute paths are used as provided. Model calls may write inside the effective
+  configured Wiki even outside the workspace, with normal `file_write` permissions.
+  Wiki destinations and existing ancestors must resolve inside the real Wiki root;
+  escaping or dangling symlinks fail closed. Other external writes remain denied.
 - Relative paths are resolved against the configured
   [workspace directory](workspace-directory.md).
 - Missing parent directories are created before writing.

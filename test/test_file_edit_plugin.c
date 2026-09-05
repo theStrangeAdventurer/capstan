@@ -3,6 +3,7 @@
 #include <lua.h>
 #include <lualib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -21,8 +22,17 @@ static lua_State *new_state(void) {
   return L;
 }
 
+static int l_capstan_realpath(lua_State *L) {
+  char resolved[4096];
+  if (realpath(luaL_checkstring(L, 1), resolved)) lua_pushstring(L, resolved);
+  else lua_pushnil(L);
+  return 1;
+}
+
 static void set_capstan_workdir(lua_State *L, const char *path) {
   lua_newtable(L);
+  lua_pushcfunction(L, l_capstan_realpath);
+  lua_setfield(L, -2, "realpath");
   lua_pushstring(L, path);
   lua_setfield(L, -2, "workdir");
   lua_setglobal(L, "capstan");
@@ -233,7 +243,49 @@ static MunitResult test_preserves_utf8_bom(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_wiki_edit_confinement(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  char base[4096], root[4096], work[4096], note[4096], alias[4096], outside[4096];
+  make_tmp_dir(base, sizeof(base), "wiki-edit-boundary");
+  snprintf(root, sizeof(root), "%s/wiki", base);
+  snprintf(work, sizeof(work), "%s/work", base);
+  snprintf(note, sizeof(note), "%s/note.md", root);
+  snprintf(alias, sizeof(alias), "%s/alias.md", root);
+  snprintf(outside, sizeof(outside), "%s/wiki-other.md", base);
+  munit_assert_int(mkdir(root, 0700), ==, 0);
+  munit_assert_int(mkdir(work, 0700), ==, 0);
+  write_file(note, "old"); write_file(outside, "old");
+  lua_State *L = new_state(); set_capstan_workdir(L, work);
+  lua_getglobal(L, "capstan");
+  lua_newtable(L); lua_newtable(L);
+  lua_pushstring(L, root); lua_setfield(L, -2, "path");
+  lua_setfield(L, -2, "wiki"); lua_setfield(L, -2, "config"); lua_pop(L, 1);
+  load_file_edit_plugin(L);
+  lua_getfield(L, -1, "tool"); lua_getfield(L, -1, "permission");
+  munit_assert_string_equal(lua_tostring(L, -1), "file_write"); lua_pop(L, 2);
+  /* Contained symlinks remain usable. */
+  munit_assert_int(symlink(note, alias), ==, 0);
+  call_handler_tool(L, alias, "old", "new", 0);
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Edited")); lua_pop(L, 2);
+  char content[32]; read_file(note, content, sizeof(content));
+  munit_assert_string_equal(content, "new");
+  unlink(alias); munit_assert_int(symlink(outside, alias), ==, 0);
+  call_handler_tool(L, alias, "old", "bad", 0);
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Cannot edit")); lua_pop(L, 2);
+  call_handler_tool(L, outside, "old", "bad", 0);
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Cannot edit")); lua_pop(L, 2);
+  read_file(outside, content, sizeof(content)); munit_assert_string_equal(content, "old");
+  unlink(outside);
+  call_handler_tool(L, alias, "old", "bad", 0);
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "Cannot edit"));
+  munit_assert_int(access(outside, F_OK), ==, -1);
+  lua_close(L); unlink(alias); unlink(note); rmdir(root); rmdir(work); rmdir(base);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/wiki_edit_confinement", test_wiki_edit_confinement, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/replaces_single_exact_fragment", test_replaces_single_exact_fragment,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/not_found_does_not_write", test_not_found_does_not_write, NULL, NULL,

@@ -25,12 +25,6 @@ listing models returned by every configured provider's models API.
   provider and makes that provider active. Direct command selection of a
   reasoning-capable model must add the effort as the next argument; `default`
   is an explicit valid choice.
-- `/models --weak<Tab>` opens the same fuzzy-search popup, but selections are
-  saved as the weak model.
-- `/models --weak <provider> <model-id>` sets the weak model directly. The weak
-  model is stored as both provider and model so background features such as
-  compacting can use a cheaper model from a different provider. Weak model
-  selection does not change the active provider.
 - `/models --profile <profile> <provider> <model-id>` sets a provider/model
   override for that workflow profile. Plain `/models` targets
   the current active profile; explicit provider arguments target the global
@@ -39,7 +33,7 @@ listing models returned by every configured provider's models API.
   `agent.set_info` when the effective active model changes.
 - The command is a no-history control command: its result is shown as UI
   feedback but is not sent to the model and does not trigger an agent request.
-- Selected primary models, profile models, weak model, and their optional
+- Selected primary models, profile models, and their optional
   reasoning-effort choices are persisted in [runtime state](runtime-state.md),
   not in `config.lua`.
 
@@ -59,10 +53,6 @@ listing models returned by every configured provider's models API.
   provider's model.
 - `set_for(provider, model_id, reasoning_effort?)` updates and persists an
   explicit provider's primary model.
-- `weak()` returns the selected weak `{ provider, model, reasoning_effort? }`,
-  or `nil`.
-- `set_weak(provider, model_id, reasoning_effort?)` updates and persists the
-  weak model.
 - `profile(profile_name)` returns a selected profile model, or `nil`.
 - `set_profile(profile_name, provider, model_id, reasoning_effort?)` updates
   and persists a profile model.

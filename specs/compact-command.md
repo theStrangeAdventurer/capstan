@@ -21,29 +21,21 @@ handoff and replaces the visible message history with that summary.
 
 ## Model Selection
 
-`/compact` prefers `capstan.models.weak()` when a weak provider/model has been
-configured through `/models --weak` or `config.lua`.
-Profile-specific models configured through `/models --profile ...` or
-`agent.profile_models` do not affect compacting.
+Manual and automatic compaction use the effective active model, including
+profile selections and interactive launch `--provider`/`--model` and reasoning
+overrides. Model selection uses the same runtime resolver as ordinary requests.
+Legacy `weak_model` config/state fields are ignored.
 
-If no weak model is configured, compacting falls back to the active primary
-provider/model. Compact requests pass `update_status = false` and
-`update_usage = false`, so fallback does not change the visible provider/model
-status line or token counters.
-
-The compact run disables model tools with `tools = {}` and uses `max_turns = 1`.
-When the weak model has a known context limit, Capstan first estimates the
-complete compact request against that limit. If it would consume 90% or more,
-the weak model is skipped and the active primary model performs the summary.
-For manual `/compact`, an unknown weak-model limit preserves the configured
-weak-model behavior. Automatic compaction fails safe: it skips a weak model
-whose capacity cannot be verified and uses the active primary model whose
-known limit caused the threshold decision.
+Compact requests pass `update_status = false` and `update_usage = false`, so
+neither the visible model status nor token counters change. The compact run
+disables model tools with `tools = {}` and uses `max_turns = 1`.
 
 ## Automatic Compaction
 
 Before an ordinary interactive submission, Capstan estimates the next complete
-model request. The estimate includes system and profile instructions, existing
+model request using the effective active model's context limit, including
+interactive launch overrides (not the underlying global model). The estimate
+includes system and profile instructions, existing
 history, the pending user text, and the currently available model-tool schemas.
 Text uses a script-aware UTF-8 estimate: ASCII keeps the common four-byte
 approximation, two-byte code points are charged more heavily, and CJK/emoji
@@ -76,12 +68,13 @@ C owns the message array, so `src/agent.c` exposes:
   history and inserts the compacted handoff message.
 
 Lua owns provider policy, so `agent/runtime.lua` builds the compact prompt,
-selects the weak model, runs the normal `capstan.agent.run` path, and calls the
+selects the effective active model, runs the normal `capstan.agent.run` path, and calls the
 C replacement callback on completion.
 
 ## Tests
 
 `make test-http-lua` covers history replacement, busy-state release, provider
 errors, whitespace summaries, hook suppression, automatic threshold decisions,
-non-ASCII estimates, and weak-model context fallback. `make test-build`
+non-ASCII estimates, and effective model selection for profile and interactive
+launch overrides (including unknown context limits). `make test-build`
 verifies embedded runtime assets still load in the standalone binary.

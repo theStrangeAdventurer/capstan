@@ -9,6 +9,21 @@ function M.embedded_asset_name(path)
     return path:match("^embedded:(.*)$")
 end
 
+-- One ordering/deduplication policy for file-read execution and permissions.
+function M.file_read_paths(args)
+    local paths, seen = {}, {}
+    local function append(path)
+        if type(path) ~= "string" or path == "" or seen[path] then return end
+        seen[path] = true
+        paths[#paths + 1] = path
+    end
+    if type(args.paths) == "table" then
+        for _, path in ipairs(args.paths) do append(path) end
+    end
+    append(args.path)
+    return paths
+end
+
 function M.is_absolute_path(path)
     return type(path) == "string" and path:sub(1, 1) == "/"
 end
@@ -160,17 +175,43 @@ local function path_is_allowed_skill_read(requested_path, target_real)
     return false
 end
 
+-- Resolve creation targets through existing ancestors without following dangling
+-- links. Shared by Wiki copies and model writes; not an authorization bypass.
+function M.creation_realpath(path)
+    local real = M.realpath(path)
+    if real then return real end
+    local quoted = M.shell_quote(path)
+    local absent = os.execute("[ ! -e " .. quoted .. " ] && [ ! -L " .. quoted .. " ]")
+    if absent ~= true and absent ~= 0 then return nil end
+    local parent = M.dirname(path)
+    if parent == path or path == "/" or path == "." then return nil end
+    local parent_real = M.creation_realpath(parent)
+    if not parent_real then return nil end
+    return M.normalize_path(parent_real .. "/" .. (path:match("([^/]+)$") or ""))
+end
+
 function M.model_path_allowed(path, mode, opts)
     if not (_G.capstan and type(_G.capstan.realpath) == "function") then
         return true
+    end
+
+    local resolved = M.resolve_path(path)
+    if mode == "write" and opts and opts.allow_wiki_write then
+        local root = M.configured_wiki_root()
+        if root and M.path_is_within(M.normalize_path(resolved), root) then
+            local root_real = M.creation_realpath(root)
+            local target_real = M.creation_realpath(resolved)
+            if root_real and target_real and M.path_is_within(target_real, root_real) then
+                return true
+            end
+            return false, "resolved path escapes configured wiki directory or cannot be resolved"
+        end
     end
 
     local workdir = M.real_workspace()
     if not workdir then
         return false, "workspace realpath failed"
     end
-
-    local resolved = M.resolve_path(path)
     local target_real = M.realpath(resolved)
     if target_real then
         if M.path_is_within(target_real, workdir) then
@@ -257,14 +298,102 @@ function M.wiki_relative_path(path)
     return full:sub(#root:gsub("/+$", "") + 2)
 end
 
+-- Only a lexical check, not a shell interpreter or an OS sandbox. Keep quoted
+-- and escaped operators in words; real operators delimit words without spaces.
+local function shell_scope_tokens(command)
+    local tokens, word, heredocs = {}, {}, {}
+    local started, quoted, quote = false, false, nil
+    local function flush()
+        if started then
+            local value = table.concat(word)
+            local previous = tokens[#tokens]
+            if previous and previous.kind == "redirect" and
+                (previous.value == "<<" or previous.value == "<<-") then
+                heredocs[#heredocs + 1] = {
+                    delimiter = value, strip_tabs = previous.value == "<<-", literal = quoted,
+                }
+            end
+            tokens[#tokens + 1] = { kind = "word", value = value }
+        end
+        word, started, quoted = {}, false, false
+    end
+    local i = 1
+    while i <= #command do
+        local c, next_c = command:sub(i, i), command:sub(i + 1, i + 1)
+        if quote == "'" then
+            if c == quote then quote = nil else word[#word + 1] = c end
+        elseif c == "\\" then
+            if next_c == "" then return nil, "incomplete shell escape" end
+            if next_c == "\n" then
+                i = i + 1
+            elseif not quote or next_c:match('[\\$`"]') then
+                word[#word + 1], started, quoted = next_c, true, true
+                i = i + 1
+            else
+                word[#word + 1] = c
+            end
+        elseif c == "`" or (c == "$" and next_c == "(") then
+            return nil, "dynamic home or command substitution is outside workspace policy"
+        elseif quote then
+            if c == quote then quote = nil else word[#word + 1] = c end
+        elseif c == "'" or c == '"' then
+            quote, started, quoted = c, true, true
+        elseif c == "<" or c == ">" or (c == "&" and next_c == ">") then
+            -- An unquoted number immediately before an operator is an IO fd,
+            -- not a command or argument (2>file, but not '2'>file).
+            if not quoted and table.concat(word):match("^%d+$") then
+                word, started = {}, false
+            end
+            flush()
+            local op = c
+            if next_c == c or next_c == "&" or
+                (c == "<" and next_c == ">") or
+                (c == ">" and next_c == "|") or
+                (c == "&" and next_c == ">") then
+                op, i = op .. next_c, i + 1
+            end
+            local third = command:sub(i + 1, i + 1)
+            if (op == "<<" and (third == "-" or third == "<")) or
+                (op == "&>" and third == ">") then
+                op, i = op .. third, i + 1
+            end
+            tokens[#tokens + 1] = { kind = "redirect", value = op }
+        elseif c:match("[;|&()\n]") then
+            flush()
+            tokens[#tokens + 1] = { kind = "separator", value = c }
+            if c == "\n" then
+                -- Heredoc bodies are data, not shell words or redirections.
+                for _, doc in ipairs(heredocs) do
+                    local found = false
+                    while i < #command do
+                        local eol = command:find("\n", i + 1, true) or (#command + 1)
+                        local line = command:sub(i + 1, eol - 1)
+                        if doc.strip_tabs then line = line:gsub("^\t+", "") end
+                        i = eol
+                        if line == doc.delimiter then found = true; break end
+                        if not doc.literal and (line:find("$(", 1, true) or line:find("`", 1, true)) then
+                            return nil, "command substitution in heredoc is outside workspace policy"
+                        end
+                    end
+                    if not found then return nil, "unterminated shell heredoc" end
+                end
+                heredocs = {}
+            end
+        elseif c:match("%s") then
+            flush()
+        else
+            word[#word + 1], started = c, true
+        end
+        i = i + 1
+    end
+    if quote then return nil, "unterminated shell quote" end
+    flush()
+    if #heredocs > 0 then return nil, "unterminated shell heredoc" end
+    return tokens
+end
+
 local function shell_token_value(token)
-    token = tostring(token or "")
-    token = token:gsub("^[%(%{]+", ""):gsub("[%)%},;]+$", "")
-    token = token:gsub("^%d*[<>]+", "")
-    token = token:gsub("^[\"']", ""):gsub("[\"']$", "")
-    local assigned = token:match("^[%w_]+=(.+)$")
-    if assigned then token = assigned end
-    return token
+    return token:match("^[%w_]+=(.+)$") or token
 end
 
 local function shell_path_candidate(token)
@@ -302,26 +431,38 @@ function M.shell_command_within_workspace(command)
         cd_target_seen = false
         return true
     end
-    for raw in command:gmatch("%S+") do
-        local token = raw
-        local leading = token:match("^([|;&]+)")
-        if leading then
+    local tokens, token_err = shell_scope_tokens(command)
+    if not tokens then return false, token_err end
+    local redirect = nil
+    for _, item in ipairs(tokens) do
+        local token = item.value
+        if item.kind ~= "word" and redirect then
+            return false, "missing shell redirection target"
+        end
+        if item.kind == "separator" then
             local ok, err = finish_command()
             if not ok then return false, err end
-            token = token:sub(#leading + 1)
-        end
-        if token ~= "" then
-            local redirection_target = token:match("^%d*[<>]+") ~= nil
+        elseif item.kind == "redirect" then
+            redirect = token
+        else
             local candidate = shell_path_candidate(token)
             if candidate == false then
                 return false, "dynamic home or command substitution is outside workspace policy"
             end
-            if redirection_target and candidate then
-                local resolved = M.normalize_path(candidate, current_dir)
-                if resolved ~= "/" then resolved = resolved:gsub("/+$", "") end
-                if not M.path_is_within(resolved, root) then
-                    return false, "shell path escapes workspace: " .. resolved
+            if redirect then
+                -- Heredoc delimiters, here-strings and numeric fd duplication
+                -- operands are not filenames. Other targets consume one word
+                -- without changing the command position (even before `cd`).
+                local is_data = redirect == "<<" or redirect == "<<-" or redirect == "<<<"
+                local is_fd = (redirect == ">&" or redirect == "<&") and
+                    (token:match("^%d+%-?$") or token == "-")
+                if not is_data and not is_fd and token ~= "/dev/null" then
+                    local resolved = M.normalize_path(token, current_dir)
+                    if token == "" or not M.path_is_within(resolved, root) then
+                        return false, "shell path escapes workspace: " .. resolved
+                    end
                 end
+                redirect = nil
             elseif command_position then
                 command_name = shell_token_value(token)
                 command_position = false
@@ -350,11 +491,8 @@ function M.shell_command_within_workspace(command)
                 end
             end
         end
-        if raw:match("[|;&]+$") then
-            local ok, err = finish_command()
-            if not ok then return false, err end
-        end
     end
+    if redirect then return false, "missing shell redirection target" end
     local ok, err = finish_command()
     if not ok then return false, err end
     return true

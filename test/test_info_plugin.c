@@ -25,15 +25,6 @@ static int l_path_join(lua_State *L) {
   return 1;
 }
 
-static int l_weak_model(lua_State *L) {
-  lua_newtable(L);
-  lua_pushstring(L, "openrouter");
-  lua_setfield(L, -2, "provider");
-  lua_pushstring(L, "minimax/minimax-m3");
-  lua_setfield(L, -2, "model");
-  return 1;
-}
-
 static int push_model(lua_State *L, const char *provider, const char *model) {
   lua_newtable(L);
   lua_pushstring(L, provider);
@@ -120,8 +111,6 @@ static lua_State *new_state(void) {
   lua_newtable(L);
   set_const_string(L, "current_provider", "deepseek");
   set_const_string(L, "current_model", "deepseek-chat");
-  lua_pushcfunction(L, l_weak_model);
-  lua_setfield(L, -2, "weak");
   lua_pushcfunction(L, l_profile_model);
   lua_setfield(L, -2, "profile");
   lua_pushcfunction(L, l_effective_model);
@@ -204,7 +193,7 @@ static MunitResult test_info_includes_runtime_paths(const MunitParameter params[
   munit_assert_true(strstr(ui, "active profile: implement") != NULL);
   munit_assert_true(strstr(ui, "current provider: deepseek") != NULL);
   munit_assert_true(strstr(ui, "current model: deepseek-chat") != NULL);
-  munit_assert_true(strstr(ui, "weak model: openrouter/minimax/minimax-m3") != NULL);
+  munit_assert_null(strstr(ui, "weak model:"));
   munit_assert_true(strstr(ui, "fast: configured openrouter/fast-model; uses openrouter/fast-model; effort low") != NULL);
   munit_assert_true(strstr(ui, "implement: configured (default); uses deepseek/deepseek-chat; effort medium") != NULL);
   munit_assert_true(strstr(ui, "plan: configured openrouter/plan-model; uses openrouter/plan-model; effort high") != NULL);

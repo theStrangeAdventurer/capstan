@@ -20,6 +20,12 @@ Model-tool handlers return successful UI/model values with
 message while marking the tool row and runtime event as an error. Throwing is
 reserved for unexpected plugin defects and adds a traceback diagnostic.
 
+The optional model value may be `{text = "...", images = {{mime_type =
+"image/png", data = "base64..."}}}` for typed image attachments. Manual commands
+preserve this value through `ctx:replace` and the buffered context queue; only
+text is displayed, and images reach the next user message as structured content.
+Image-producing adapters validate signatures and the 10 MiB per-image limit.
+
 The built-in `self-improvement` skill, when explicitly enabled, instructs the
 agent to write durable extensions here instead of embedding plugin code inside
 `config.lua`.

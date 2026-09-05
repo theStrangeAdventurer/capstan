@@ -169,6 +169,12 @@ static int message_half_page_lines(void) {
   return half_page > 0 ? half_page : 1;
 }
 
+static void message_scroll(int delta) {
+  int pane_h = 1;
+  message_pane_geometry(NULL, NULL, &pane_h, NULL);
+  visual_scroll_view(delta, pane_h);
+}
+
 static int mouse_to_visual_position(const MEVENT *event, int *out_line,
                                     int *out_col) {
   int pane_y, pane_x, pane_h, pane_w;
@@ -278,11 +284,11 @@ static void handle_mouse_event(MEVENT *event) {
     return;
   }
   if (event->bstate & BUTTON4_PRESSED) {
-    scroll_up(3);
+    message_scroll(3);
     return;
   }
   if (event->bstate & BUTTON5_PRESSED) {
-    scroll_down(3);
+    message_scroll(-3);
     return;
   }
 
@@ -1648,27 +1654,13 @@ int main(int argc, char *argv[]) {
 
     if (mode_get() == FOCUS_MESSAGES) {
       if (ch == KEY_PPAGE) {
-        scroll_up(5);
-        int vc_line;
-        visual_get_cursor(&vc_line, NULL);
-        visual_set_cursor_line(vc_line + 5);
+        message_scroll(5);
       } else if (ch == KEY_NPAGE) {
-        scroll_down(5);
-        int vc_line;
-        visual_get_cursor(&vc_line, NULL);
-        visual_set_cursor_line(vc_line - 5);
+        message_scroll(-5);
       } else if (ch == TUI_KEY_CTRL_U) {
-        int half_page = message_half_page_lines();
-        scroll_up(half_page);
-        int vc_line;
-        visual_get_cursor(&vc_line, NULL);
-        visual_set_cursor_line(vc_line + half_page);
+        message_scroll(message_half_page_lines());
       } else if (ch == KEY_CTRL_D) {
-        int half_page = message_half_page_lines();
-        scroll_down(half_page);
-        int vc_line;
-        visual_get_cursor(&vc_line, NULL);
-        visual_set_cursor_line(vc_line - half_page);
+        message_scroll(-message_half_page_lines());
       } else if (ch == '0')
         visual_move_line_start();
       else if (ch == '$')

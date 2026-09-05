@@ -128,6 +128,15 @@ the command token, such as `</workspace/input command` and
 directory used to validate later command segments, so paths such as `cmake ..`
 are resolved from the nested directory. Missing or dynamic `cd` targets fail
 closed because their resulting directory cannot be proven to stay in scope.
+Operators are recognized without spaces (`printf x>out`, `cat<input`,
+`2>>errors`, `&>out`). Quoted or escaped `>`/`<` characters remain word data;
+quoted filenames retain spaces. Leading redirections do not consume the command
+position, and chained redirections each have their target checked. Numeric file
+descriptor duplication (`2>&1`) is not a path. Heredoc bodies and here-string
+operands are data, not redirection filenames; command substitution in unquoted
+heredocs is rejected. Unterminated quotes, heredocs, or missing redirection
+operands fail closed. This remains a lexical check of visible paths, not a full
+shell interpreter or protection against arbitrary code and filesystem races.
 
 The handler reports a successful tool result only when the process exits zero
 without timing out. Completion-review validation therefore ignores failed test,

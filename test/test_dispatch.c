@@ -62,7 +62,21 @@ static MunitResult test_blocking_enter_requires_top_level_run(
   return MUNIT_OK;
 }
 
+static MunitResult test_commands_require_idle_and_empty_queue(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  munit_assert_true(dispatch_commands_allowed(0, 0));
+  munit_assert_false(dispatch_commands_allowed(1, 0));
+  munit_assert_false(dispatch_commands_allowed(0, 1));
+  munit_assert_false(dispatch_commands_allowed(1, 5));
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/commands_require_idle_and_empty_queue",
+     test_commands_require_idle_and_empty_queue, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/no_command_for_plain_text", test_no_command_for_plain_text, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/parses_leading_command", test_parses_leading_command, NULL, NULL,

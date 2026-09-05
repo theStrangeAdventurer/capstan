@@ -15,7 +15,11 @@ argument, while runtime validation rejects empty or unusable values. Allowing
 both known fields is the compatibility trade-off.
 
 - `paths` batches ordinary workspace reads into one model tool call. Entries
-  are de-duplicated while preserving their order.
+  are de-duplicated while preserving their order. The dispatcher checks each
+  disk path individually (including an appended `path`) before the handler
+  reads anything. A permission denial rejects the entire call, with no partial
+  reads. Target/session grants retain the same meaning as for a single read.
+  A batch is never replaced by a singular Wiki read.
 - Batch reads deliberately reject sensitive paths and paths outside the
   workspace. Use the singular `path` form for those paths so the existing
   target-specific permission prompt remains in force.
@@ -29,10 +33,11 @@ both known fields is the compatibility trade-off.
   as `embedded:skills/wiki-onboarding/SKILL.md` and does not touch the
   filesystem. The shared `workspace.embedded_asset_name` parser identifies
   these references for the reader and dispatcher; they must not be normalized
-  against the workspace or routed into Wiki reads. Permission targets, tool
-  logs, and UI status preserve the literal `embedded:` reference. Existing
-  file-read permission rules still apply; embedded reads do not grant access
-  to files outside the workspace.
+  against the workspace or routed into Wiki reads. Tool logs, UI status, and
+  model history preserve the literal `embedded:` reference. Embedded reads
+  skip filesystem permission checks and prompts, individually and in batches;
+  this grants no access to disk. Actions described by an embedded skill still
+  require their own normal permissions.
 - Missing, empty, or unavailable embedded assets return an embedded-read error,
   without falling back to disk reads or directory listings. Tool descriptions
   explicitly tell the model how to read these references.
@@ -47,7 +52,9 @@ both known fields is the compatibility trade-off.
   `--` so path text cannot become additional shell commands or options.
 - PNG, JPEG, GIF, and WebP files are detected from their file signatures and
   returned to the agent as typed image content. Their raw bytes are never
-  inserted into a JSON text field.
+  inserted into a JSON text field. This also applies to manual `/file` selection:
+  images stay with the buffered context badge until the next submission, then
+  become structured user-message attachments and persist with the session.
 - Other binary files return a short size description instead of raw bytes, so
   invalid UTF-8 cannot corrupt the next provider request.
 
@@ -78,6 +85,7 @@ selection behavior. `make test-http-lua` covers README fallback,
 workspace-relative file reads, model-tool `ctx.tool_args.path` handling,
 embedded asset reads, directory path listing, and shell-quoting regression for
 directory listing. Dispatcher regression tests verify embedded references in
-permissions, logs, UI, and model history, no filesystem access (including when
-Wiki overlaps the workspace), and missing/unavailable/empty asset errors plus
-explicit permission denial.
+logs, UI, and model history, no filesystem or permission access (including when
+Wiki overlaps the workspace), and missing/unavailable/empty asset errors.
+Batch tests cover per-path denial (also under YOLO), prompts, target grants,
+deduplication, mixed disk/embedded reads, and combined `paths`/`path` arguments.

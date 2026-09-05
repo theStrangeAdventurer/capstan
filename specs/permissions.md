@@ -14,8 +14,13 @@ gate. If a model returns a tool call that was not in the filtered tool list for
 the active run, Capstan returns an unavailable-tool result without checking
 permissions or running plugin handlers.
 
-Available agent-initiated tool calls go through `permit.check(tool, target)`
-before the plugin handler runs. If plugin metadata declares `tool.permission`,
+Available agent-initiated tool calls requiring permission go through
+`permit.check(tool, target)` before the plugin handler runs. For `file_read`,
+every requested disk path is checked separately before any reads; denial of
+one target rejects the entire batch. Embedded runtime assets (`embedded:`)
+are permission-free in both singular and batch reads: they contain shipped
+instructions, not user files. Actions requested by those instructions still
+use normal tool permissions. If plugin metadata declares `tool.permission`,
 that value is used as the permission tool name; otherwise the model-facing tool
 name is used. The decision is one of:
 
@@ -42,6 +47,13 @@ For `wiki_ingest`, any positive popup choice persists the `file_read` permission
 for the approved source path. This makes the user's explicit ingest consent
 stable for future wiki indexing and source-read workflows without changing the
 one-shot meaning of `Yes` for unrelated tools.
+
+Model `file_write` and `file_edit` may target the effective configured Wiki even
+outside the workspace, but still require ordinary `file_write` permission for the
+actual destination. `agent.workspace` owns confinement: Wiki writes resolve the
+root and target through existing ancestors, reject escaping/dangling symlinks,
+and fail closed when resolution fails. This exception grants no arbitrary
+external write access and does not alter skill/read exceptions.
 
 `wiki_read` is permission-free because it is constrained to Capstan's effective
 wiki root, which defaults to internal application state. Reading an external

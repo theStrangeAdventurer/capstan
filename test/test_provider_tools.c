@@ -2760,7 +2760,7 @@ static MunitResult test_provider_models_set_persists_state_file(
   return MUNIT_OK;
 }
 
-static MunitResult test_provider_config_sets_weak_model(
+static MunitResult test_provider_config_ignores_legacy_weak_model(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -2776,19 +2776,20 @@ static MunitResult test_provider_config_sets_weak_model(
   lua_getglobal(L, "capstan");
   lua_getfield(L, -1, "models");
   lua_getfield(L, -1, "weak");
-  rc = lua_pcall(L, 0, 1, 0);
+  munit_assert_true(lua_isnil(L, -1));
+  rc = luaL_dostring(L,
+      "local runtime = require('agent.provider_config').build()\n"
+      "assert(runtime.weak_model == nil)\n"
+      "assert(runtime.provider == 'openrouter')\n"
+      "assert(capstan.models.current_model() == 'config/model')\n");
   munit_assert_int(rc, ==, LUA_OK);
-  lua_getfield(L, -1, "provider");
-  lua_getfield(L, -2, "model");
-  munit_assert_string_equal(lua_tostring(L, -2), "deepseek");
-  munit_assert_string_equal(lua_tostring(L, -1), "deepseek-chat");
 
   reset_captures(L);
   lua_close(L);
   return MUNIT_OK;
 }
 
-static MunitResult test_provider_state_weak_model_overrides_config(
+static MunitResult test_provider_state_ignores_legacy_weak_model(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -2804,20 +2805,22 @@ static MunitResult test_provider_state_weak_model_overrides_config(
 
   lua_getglobal(L, "capstan");
   lua_getfield(L, -1, "models");
-  lua_getfield(L, -1, "weak");
-  rc = lua_pcall(L, 0, 1, 0);
+  lua_getfield(L, -1, "set_weak");
+  munit_assert_true(lua_isnil(L, -1));
+  rc = luaL_dostring(L,
+      "local runtime = require('agent.provider_config').build()\n"
+      "assert(runtime.weak_model == nil)\n"
+      "assert(capstan.models.current_model() == 'config/model')\n"
+      "assert(require('agent.state').weak_model == nil)\n"
+      "assert(require('agent.state').set_weak_model == nil)\n");
   munit_assert_int(rc, ==, LUA_OK);
-  lua_getfield(L, -1, "provider");
-  lua_getfield(L, -2, "model");
-  munit_assert_string_equal(lua_tostring(L, -2), "openrouter");
-  munit_assert_string_equal(lua_tostring(L, -1), "state/weak");
 
   reset_captures(L);
   lua_close(L);
   return MUNIT_OK;
 }
 
-static MunitResult test_provider_models_set_weak_persists_state_file(
+static MunitResult test_provider_models_persistence_drops_legacy_weak_model(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -2829,22 +2832,17 @@ static MunitResult test_provider_models_set_weak_persists_state_file(
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 1);
 
-  lua_getglobal(L, "capstan");
-  lua_getfield(L, -1, "models");
-  lua_getfield(L, -1, "set_weak");
-  lua_pushstring(L, "openrouter");
-  lua_pushstring(L, "persisted/weak");
-  lua_pushstring(L, "low");
-  rc = lua_pcall(L, 3, 2, 0);
+  set_capstan_state_weak_model(L, "openrouter", "legacy/model");
+  rc = luaL_dostring(L,
+      "assert(capstan.models.set_for('openrouter', 'persisted/main', 'low'))");
   munit_assert_int(rc, ==, LUA_OK);
-  munit_assert_true(lua_toboolean(L, -2));
 
   char contents[768];
   read_file(temp_state_path, contents, sizeof(contents));
-  munit_assert_true(strstr(contents, "weak_model = {") != NULL);
-  munit_assert_true(strstr(contents, "provider = \"openrouter\"") != NULL);
-  munit_assert_true(strstr(contents, "model = \"persisted/weak\"") != NULL);
-  munit_assert_true(strstr(contents, "reasoning_effort = \"low\"") != NULL);
+  munit_assert_null(strstr(contents, "weak_model"));
+  munit_assert_null(strstr(contents, "legacy/model"));
+  munit_assert_not_null(strstr(contents, "persisted/main"));
+  munit_assert_not_null(strstr(contents, "low"));
 
   unlink(temp_state_path);
   reset_captures(L);
@@ -2890,7 +2888,7 @@ static MunitResult test_provider_models_set_profile_persists_state_file(
   return MUNIT_OK;
 }
 
-static MunitResult test_compact_uses_weak_model_and_replaces_history(
+static MunitResult test_compact_uses_active_model_and_replaces_history(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -2922,7 +2920,8 @@ static MunitResult test_compact_uses_weak_model_and_replaces_history(
   agent_compact(L);
   munit_assert_true(agent_is_running());
   munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
-  munit_assert_true(strstr(captured_body, "\"model\":\"weak/model\"") != NULL);
+  munit_assert_not_null(strstr(captured_body, "\"model\":\"config/model\""));
+  munit_assert_null(strstr(captured_body, "weak/model"));
   munit_assert_true(strstr(captured_body, "\"tools\"") == NULL);
   munit_assert_true(strstr(captured_body, "operational handoff summary") != NULL);
 
@@ -3072,6 +3071,72 @@ static MunitResult test_auto_compact_estimates_pending_request_and_can_disable(
   return MUNIT_OK;
 }
 
+static MunitResult test_default_api_run_inherits_launch_model(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+  rc = luaL_dostring(L,
+      "assert(capstan.agent.configure_interactive({provider = 'openrouter', model = 'launch/wiki', reasoning_effort = 'low'}))\n"
+      "local opts = {messages = {{role = 'user', content = 'Index Wiki'}}, tools = {}, max_turns = 1, update_status = false, update_usage = false}\n"
+      "assert(capstan.agent.run(opts, {on_text = function() end}))\n"
+      "assert(opts.model == nil and opts.provider == nil and opts.reasoning_effort == nil)\n");
+  if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
+  munit_assert_not_null(strstr(captured_body, "\"model\":\"launch/wiki\""));
+  munit_assert_not_null(strstr(captured_body, "\"effort\":\"low\""));
+  send_text_done(L, "Indexed");
+  rc = luaL_dostring(L,
+      "assert(capstan.agent.run({model = 'explicit/wiki', messages = {}, tools = {}}, {on_text = function() end}))");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_not_null(strstr(captured_body, "\"model\":\"explicit/wiki\""));
+  munit_assert_null(strstr(captured_body, "launch/wiki"));
+  send_text_done(L, "Indexed explicitly");
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_auto_compact_threshold_uses_launch_overrides(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  int rc = luaL_dostring(L,
+      "capstan.config.providers.openrouter.context_limit = 1000000\n"
+      "capstan.config.providers.openrouter.models = {\n"
+      "  {id = 'launch/small', context_length = 1000},\n"
+      "  {id = 'launch/large', context_length = 1000000}}\n"
+      "capstan.config.providers.deepseek = {models = {{id = 'launch/other', context_length = 2000}}}\n"
+      "local runtime = assert(loadfile('agent/runtime.lua'))()\n"
+      "local messages = {{role = 'user', content = string.rep('x', 12000)}}\n"
+      "local trigger, estimate, limit = should_auto_compact(messages, '')\n"
+      "assert(not trigger and limit == 1000000)\n"
+      "assert(capstan.agent.configure_interactive({model = 'launch/small'}))\n"
+      "trigger, estimate, limit = should_auto_compact(messages, '')\n"
+      "assert(trigger and limit == 1000)\n"
+      "assert(capstan.agent.configure_interactive({model = 'launch/large'}))\n"
+      "trigger, estimate, limit = should_auto_compact(messages, '')\n"
+      "assert(not trigger and limit == 1000000)\n"
+      "assert(capstan.agent.configure_interactive({provider = 'deepseek', model = 'launch/other'}))\n"
+      "trigger, estimate, limit = should_auto_compact(messages, '')\n"
+      "assert(trigger and limit == 2000)\n"
+      "assert(capstan.agent.configure_interactive({model = 'launch/unknown'}))\n"
+      "trigger, estimate, limit = should_auto_compact(messages, '')\n"
+      "assert(not trigger and limit == 0)\n"
+      "assert(runtime.providers.openrouter.model == 'config/model')\n");
+  if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_token_estimate_is_conservative_for_utf8(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -3102,7 +3167,7 @@ static MunitResult test_token_estimate_is_conservative_for_utf8(
   return MUNIT_OK;
 }
 
-static MunitResult test_compact_skips_weak_model_with_smaller_context(
+static MunitResult test_compact_ignores_legacy_model_context(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -3132,8 +3197,9 @@ static MunitResult test_compact_skips_weak_model_with_smaller_context(
   munit_assert_true(agent_is_running());
   munit_assert_true(strstr(captured_body, "\"model\":\"config/model\"") !=
                     NULL);
-  munit_assert_true(strstr(captured_logs,
-                           "[compact] weak_model_skipped") != NULL);
+  munit_assert_null(strstr(captured_logs, "weak_model_skipped"));
+  munit_assert_null(strstr(captured_body, "weak/model"));
+  munit_assert_null(strstr(captured_body, "\"tools\""));
   send_text_done(L, "short handoff");
   munit_assert_false(agent_is_running());
 
@@ -3143,7 +3209,7 @@ static MunitResult test_compact_skips_weak_model_with_smaller_context(
   return MUNIT_OK;
 }
 
-static MunitResult test_auto_compact_skips_weak_model_with_unknown_context(
+static MunitResult test_auto_compact_uses_launch_model(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
@@ -3157,6 +3223,10 @@ static MunitResult test_auto_compact_skips_weak_model_with_unknown_context(
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 1);
 
+  rc = luaL_dostring(L,
+      "assert(capstan.agent.configure_interactive({provider = 'openrouter', model = 'launch/model', reasoning_effort = 'low'}))");
+  munit_assert_int(rc, ==, LUA_OK);
+
   char *history = malloc(strlen("history for automatic compact") + 1);
   munit_assert_not_null(history);
   strcpy(history, "history for automatic compact");
@@ -3164,11 +3234,11 @@ static MunitResult test_auto_compact_skips_weak_model_with_unknown_context(
 
   agent_auto_compact(L);
   munit_assert_true(agent_is_running());
-  munit_assert_true(strstr(captured_body, "\"model\":\"config/model\"") !=
-                    NULL);
-  munit_assert_true(strstr(
-      captured_logs,
-      "[compact] weak_model_skipped context_limit=unknown") != NULL);
+  munit_assert_not_null(strstr(captured_body, "\"model\":\"launch/model\""));
+  munit_assert_not_null(strstr(captured_body, "\"effort\":\"low\""));
+  munit_assert_null(strstr(captured_logs, "weak_model_skipped"));
+  munit_assert_null(strstr(captured_body, "unknown/weak"));
+  munit_assert_null(strstr(captured_body, "\"tools\""));
   send_text_done(L, "automatic handoff");
   munit_assert_false(agent_is_running());
 
@@ -3876,7 +3946,7 @@ static MunitResult test_embedded_read_dispatch_preserves_reference(
   };
   const char *expected[] = {
       "in-memory skill content", "missing embedded asset", "missing embedded asset",
-      "embedded assets are unavailable", "Permission denied for file_read",
+      "embedded assets are unavailable", "in-memory skill content",
   };
   for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
     lua_State *L = new_provider_state();
@@ -3927,10 +3997,10 @@ static MunitResult test_embedded_read_dispatch_preserves_reference(
         "assert(embedded_test_messages[1].tool_calls[1]['function'].arguments == json.encode({path = embedded_test_path}))\n"
         "embedded_test_result = embedded_test_messages[#embedded_test_messages].content\n");
     if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
-    munit_assert_string_equal(captured_permit_target, paths[i]);
-    munit_assert_int(permit_check_calls, ==, 1);
+    munit_assert_int(permit_check_calls, ==, 0);
+    munit_assert_int(permit_prompt_calls, ==, 0);
     lua_getglobal(L, "embedded_test_reads");
-    munit_assert_int(lua_tointeger(L, -1), ==, i >= 3 ? 0 : 1);
+    munit_assert_int(lua_tointeger(L, -1), ==, i == 3 ? 0 : 1);
     lua_pop(L, 1);
     lua_getglobal(L, "embedded_test_result");
     munit_assert_not_null(strstr(lua_tostring(L, -1), expected[i]));
@@ -3942,6 +4012,137 @@ static MunitResult test_embedded_read_dispatch_preserves_reference(
     reset_captures(L);
     lua_close(L);
   }
+  return MUNIT_OK;
+}
+
+static MunitResult test_file_read_batch_checks_each_target(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_workdir(L, "/repo/project");
+  load_real_file_plugin(L);
+  int rc = luaL_dostring(L,
+      "local tools = require('agent.tools')\n"
+      "local json = require('vendor.rxi.json')\n"
+      "local available = tools.collect({disable_subagents = true})\n"
+      "local checked, opened, prompted = {}, {}, {}\n"
+      "local denied, decision, ask = nil, 'allow', false\n"
+      "local scope = {allowed_targets = {}, allowed_tools = {}}\n"
+      "capstan.realpath = function(path) return path end\n"
+      "capstan.embedded_asset = function(path)\n"
+      "  assert(path == 'skills/test/SKILL.md'); return 'built-in instructions'\n"
+      "end\n"
+      "io.open = function(path)\n"
+      "  opened[#opened + 1] = path\n"
+      "  return {read = function() return 'content for ' .. path end, close = function() end}\n"
+      "end\n"
+      "permit.check = function(tool, target)\n"
+      "  assert(tool == 'file_read'); checked[#checked + 1] = target\n"
+      "  if target == denied then return 'deny' end\n"
+      "  return ask and 'ask' or 'allow'\n"
+      "end\n"
+      "local function run(args)\n"
+      "  checked, opened, prompted = {}, {}, {}\n"
+      "  local result, ok\n"
+      "  tools.handle_tool_calls({}, available, {{id = 'batch', name = 'file_read',\n"
+      "    arguments = json.encode(args)}}, '', function(msgs) result = msgs[#msgs].content end,\n"
+      "    {permission_scope = scope, callbacks = {\n"
+      "      on_permission_request = function(_, target)\n"
+      "        prompted[#prompted + 1] = target; return decision\n"
+      "      end,\n"
+      "      on_tool_done = function(_, _, success) ok = success end}})\n"
+      "  return result, ok\n"
+      "end\n"
+      "denied = '/repo/project/private.md'\n"
+      "local result, ok = run({paths = {'public.md', 'private.md'}})\n"
+      "assert(not ok and result:find('Permission denied', 1, true))\n"
+      "assert(#opened == 0 and #checked == 2 and checked[2] == denied)\n"
+      "scope.yolo = true\n"
+      "result, ok = run({paths = {'public.md'}, path = 'private.md'})\n"
+      "assert(not ok and #opened == 0 and #checked == 2)\n"
+      "scope.yolo = nil; denied = nil\n"
+      "result, ok = run({paths = {'public.md', 'embedded:skills/test/SKILL.md', 'public.md'}, path = 'other.md'})\n"
+      "assert(ok and #checked == 2 and #opened == 2)\n"
+      "assert(checked[1] == '/repo/project/public.md' and checked[2] == '/repo/project/other.md')\n"
+      "assert(result:find('built-in instructions', 1, true))\n"
+      "ask = true; decision = 'deny'\n"
+      "result, ok = run({paths = {'public.md', 'other.md'}})\n"
+      "assert(not ok and #opened == 0 and #prompted == 1)\n"
+      "decision = 'allow_session'\n"
+      "result, ok = run({paths = {'public.md', 'other.md'}, path = 'public.md'})\n"
+      "assert(ok and #opened == 2 and #prompted == 2)\n"
+      "assert(scope.allowed_targets.file_read['/repo/project/public.md'])\n"
+      "assert(scope.allowed_targets.file_read['/repo/project/other.md'])\n"
+      "result, ok = run({paths = {'public.md', 'other.md'}})\n"
+      "assert(ok and #checked == 2 and #opened == 2 and #prompted == 0)\n"
+      "result, ok = run({paths = {'embedded:skills/test/SKILL.md'}})\n"
+      "assert(ok and #checked == 0 and #opened == 0 and #prompted == 0)\n"
+      "capstan.wiki_path = '/repo/project/wiki'\n"
+      "result, ok = run({paths = {'public.md'}, path = '/repo/project/wiki/note.md'})\n"
+      "assert(ok and #checked == 2 and #opened == 2)\n"
+      "assert(opened[2] == '/repo/project/wiki/note.md')\n");
+  if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_vcs_rejects_untrusted_resolved_path(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_workdir(L, "/repo/project");
+  set_capstan_workspace_root(L, "/repo/project");
+  int rc = luaL_dostring(L,
+      "plugins.vcs = assert(loadfile('plugins/vcs.lua'))()\n"
+      "local dispatcher = require('agent.tools')\n"
+      "local json = require('vendor.rxi.json')\n"
+      "local available = dispatcher.collect({disable_subagents = true})\n"
+      "local target, executed, redirect, swap\n"
+      "capstan.realpath = function(path)\n"
+      "  if path == '/repo/project/missing.md' then return nil end\n"
+      "  if path == '/repo/project/link.md' then return redirect or '/repo/project/public.md' end\n"
+      "  return path\n"
+      "end\n"
+      "permit.check = function(tool, path)\n"
+      "  assert(tool == 'file_read'); target = path\n"
+      "  if swap then redirect = '/repo/project/private.md' end\n"
+      "  return path == '/repo/project/private.md' and 'deny' or 'allow'\n"
+      "end\n"
+      "tools = {exec = function(argv)\n"
+      "  executed[#executed + 1] = argv\n"
+      "  return {exit = 0, stdout = 'diff output', stderr = ''}\n"
+      "end}\n"
+      "local function run(path, injected)\n"
+      "  executed = {}\n"
+      "  local result, ok\n"
+      "  dispatcher.handle_tool_calls({}, available, {{id = 'vcs', name = 'vcs',\n"
+      "    arguments = json.encode({operation = 'diff', path = path, _resolved_vcs_path = injected})}}, '',\n"
+      "    function(msgs) result = msgs[#msgs].content end, {callbacks = {\n"
+      "      on_tool_done = function(_, _, success) ok = success end}})\n"
+      "  return result, ok\n"
+      "end\n"
+      "local result, ok = run('missing.md', '/repo/project/private.md')\n"
+      "assert(not ok and #executed == 0 and result:find('path does not exist', 1, true))\n"
+      "result, ok = run('../outside.md', '/repo/project/public.md')\n"
+      "assert(not ok and #executed == 0 and result:find('escapes workspace', 1, true))\n"
+      "result, ok = run('private.md', '/repo/project/public.md')\n"
+      "assert(not ok and #executed == 0 and result:find('Permission denied', 1, true))\n"
+      "result, ok = run('public.md', '/outside/private.md')\n"
+      "assert(ok and #executed == 2 and target == '/repo/project/public.md')\n"
+      "assert(executed[2][#executed[2]] == target)\n"
+      "result, ok = run('link.md', '/outside/private.md')\n"
+      "assert(ok and executed[2][#executed[2]] == target and target == '/repo/project/public.md')\n"
+      "swap = true\n"
+      "result, ok = run('link.md', '/outside/private.md')\n"
+      "assert(not ok and #executed == 0 and result:find('changed after permission check', 1, true))\n");
+  if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
+  reset_captures(L);
+  lua_close(L);
   return MUNIT_OK;
 }
 
@@ -5089,6 +5290,7 @@ static MunitResult test_session_title_generation_is_silent(
   lua_pop(L, 1);
   rc = luaL_dostring(
       L,
+      "assert(capstan.agent.configure_interactive({provider = 'openrouter', model = 'launch/title', reasoning_effort = 'low'}))\n"
       "agent.session_title_context = function()\n"
       "  return 'session-1', 'How do sessions work?', 'They are persisted.'\n"
       "end\n"
@@ -5103,6 +5305,9 @@ static MunitResult test_session_title_generation_is_silent(
   munit_assert_int(post_stream_calls, ==, 2);
   munit_assert_true(captured_stream_background);
   munit_assert_string_equal(captured_agent_appends, "Visible answer");
+  munit_assert_not_null(strstr(captured_body, "\"model\":\"launch/title\""));
+  munit_assert_not_null(strstr(captured_body, "\"effort\":\"low\""));
+  munit_assert_null(strstr(captured_body, "\"tools\""));
   munit_assert_true(strstr(captured_body, "How do sessions work?") != NULL);
   munit_assert_true(strstr(captured_body, "They are persisted.") != NULL);
   lua_getglobal(L, "session_after_turn_calls");
@@ -5230,42 +5435,52 @@ static MunitResult test_tool_guard_allows_repeated_shell_by_default(
   return MUNIT_OK;
 }
 
-static MunitResult test_tool_guard_soft_skips_redundant_generated_output_checks(
+static MunitResult test_shell_artifact_inspections_use_normal_execution(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
 
-  lua_State *L = new_provider_state();
-  reset_captures(L);
-  set_permit_decision("allow");
-  set_agent_config_number(L, "max_generated_output_checks", 1);
+  /* Missing, zero, and positive legacy limits must not skip tool execution. */
+  for (int legacy_limit = -1; legacy_limit <= 1; legacy_limit++) {
+    lua_State *L = new_provider_state();
+    reset_captures(L);
+    set_permit_decision("allow");
+    if (legacy_limit >= 0)
+      set_agent_config_number(L, "max_generated_output_checks", legacy_limit);
 
-  int rc = luaL_dofile(L, "agent/runtime.lua");
-  munit_assert_int(rc, ==, LUA_OK);
-  lua_pop(L, 1);
+    int rc = luaL_dofile(L, "agent/runtime.lua");
+    munit_assert_int(rc, ==, LUA_OK);
+    lua_pop(L, 1);
+    call_agent_entry(L);
+    munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
 
-  call_agent_entry(L);
-  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
-  send_tool_call(L, "call_generated_check_1", "shell",
-                 "{\\\"command\\\":\\\"grep metric-card dist/app.js\\\"}");
-  int permit_calls_after_first = permit_check_calls;
-  send_tool_call(L, "call_generated_check_2", "shell",
-                 "{\\\"command\\\":\\\"cat dist/app.js\\\"}");
+    const char *commands[] = {"grep metric-card dist/app.js", "ls build/",
+                              "head out/report.txt", "cat coverage/report.txt",
+                              "grep metric-card src/App.tsx"};
+    for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+      char args[256], id[64], result[256];
+      snprintf(args, sizeof(args), "{\\\"command\\\":\\\"%s\\\"}", commands[i]);
+      snprintf(id, sizeof(id), "inspection_%zu", i);
+      snprintf(result, sizeof(result), "shell llm: %s", commands[i]);
+      send_tool_call(L, id, "shell", args);
+      munit_assert_int(permit_check_calls, ==, (int)i + 1);
+      munit_assert_not_null(strstr(captured_body, result));
+      munit_assert_not_null(strstr(captured_agent_appends, result));
+    }
+    munit_assert_null(strstr(captured_logs, "generated_output_check_skipped"));
+    munit_assert_null(strstr(captured_agent_appends, "[stopped:"));
 
-  munit_assert_int(permit_check_calls, ==, permit_calls_after_first);
-  munit_assert_true(strstr(captured_body,
-                           "Skipped redundant generated-output inspection") !=
-                    NULL);
-  munit_assert_true(strstr(captured_logs,
-                           "generated_output_check_skipped") != NULL);
-  munit_assert_true(strstr(captured_agent_appends, "[stopped:") == NULL);
+    /* Removing the inspection quota must not bypass ordinary permissions. */
+    set_permit_decision("deny");
+    send_tool_call(L, "inspection_denied", "shell",
+                   "{\\\"command\\\":\\\"cat coverage/denied.txt\\\"}");
+    munit_assert_int(permit_check_calls, ==, 6);
+    munit_assert_not_null(strstr(captured_body, "Permission denied"));
+    munit_assert_null(strstr(captured_body, "shell llm: cat coverage/denied.txt"));
 
-  send_tool_call(L, "call_source_check", "shell",
-                 "{\\\"command\\\":\\\"grep metric-card src/App.tsx\\\"}");
-  munit_assert_int(permit_check_calls, ==, permit_calls_after_first + 1);
-
-  reset_captures(L);
-  lua_close(L);
+    reset_captures(L);
+    lua_close(L);
+  }
   return MUNIT_OK;
 }
 
@@ -6163,6 +6378,70 @@ static MunitResult test_workdir_only_checks_leading_redirection_paths(
   munit_assert_true(strstr(lua_tostring(L, -1), "shell llm:") != NULL);
   lua_pop(L, 1);
 
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_workdir_only_checks_compact_shell_redirections(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("ask");
+  set_capstan_workdir(L, "/repo/project");
+  set_capstan_workspace_root(L, "/repo/project");
+  int rc = luaL_dostring(L,
+      "local tools = require('agent.tools')\n"
+      "local json = require('vendor.rxi.json')\n"
+      "local available = tools.collect()\n"
+      "local scope = {allowed_tools = {}, full_control = true, workdir_only = true}\n"
+      "local denied = {\n"
+      "  'printf x>/outside/file', 'printf x>>/outside/file',\n"
+      "  'cat</outside/file', 'printf x 2>/outside/file',\n"
+      "  'printf x&>/outside/file', 'printf x&>>/outside/file',\n"
+      "  'printf x>|/outside/file', 'cat<>/outside/file',\n"
+      "  'printf x > /outside/file', '> /outside/file printf x',\n"
+      "  [[printf x>\"/outside/file with spaces\"]],\n"
+      "  [[printf x>'/outside/file']], [[printf x>/out'side'/file]],\n"
+      "  'printf x>ok>/outside/file', 'printf x;cat</outside/file',\n"
+      "  '>out cd build;printf x>../../outside',\n"
+      "  'cd build&&printf x>../../outside',\n"
+      "  [[cat<<'END'\nbody\nEND\nprintf x>/outside/file]],\n"
+      "}\n"
+      "for _, command in ipairs(denied) do\n"
+      "  local result\n"
+      "  tools.handle_tool_calls({}, available, {{id='compact-denied', name='shell', arguments=json.encode({command=command})}}, '', function(msgs) result=msgs[#msgs].content end, {tools=available, silent_tools=true, permission_scope=scope})\n"
+      "  assert(result:find('shell path escapes workspace', 1, true), command .. ': ' .. tostring(result))\n"
+      "end\n"
+      "local allowed = {\n"
+      "  'printf x>out', 'printf x>>/repo/project/out',\n"
+      "  [[printf '%s' 'x>/outside/file']], [[printf '%s' \"x>/outside/file\"]],\n"
+      "  [[printf x\\>/outside/file]], [[printf x\\>\\>/outside/file]],\n"
+      "  [[printf '%s' '>'/outside/file]],\n"
+      "  [[printf x>\"/repo/project/out with spaces\"]],\n"
+      "  [[printf x>/repo/project/out\\ with\\ spaces]],\n"
+      "  'printf x>/dev/null 2>&1', 'printf x 1>&2', 'cat 3<&0',\n"
+      "  'printf x&>>/repo/project/out',\n"
+      "  'cd build&&printf x>../out', '>out cd build;printf x>../out',\n"
+      "  [[cat<<'END'\nprint(\"don't\") x>/outside/file $(literal)\nEND]],\n"
+      "  [[cat<<<'x>/outside/file']],\n"
+      "}\n"
+      "for _, command in ipairs(allowed) do\n"
+      "  local ok, err = require('agent.workspace').shell_command_within_workspace(command)\n"
+      "  assert(ok, command .. ': ' .. tostring(err))\n"
+      "end\n"
+      "local check = require('agent.workspace').shell_command_within_workspace\n"
+      "assert(not check('printf x>'))\n"
+      "assert(not check('cat<<END'))\n"
+      "assert(not check([[cat<<END\nbody]]))\n"
+      "assert(not check([[cat<<END\n$(pwd)\nEND]]))\n"
+      "assert(not check([[printf x>\"unterminated]]))\n");
+  if (rc != LUA_OK) munit_logf(MUNIT_LOG_ERROR, "%s", lua_tostring(L, -1));
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int(permit_check_calls, ==, 0);
+  munit_assert_int(permit_prompt_calls, ==, 0);
   reset_captures(L);
   lua_close(L);
   return MUNIT_OK;
@@ -7173,20 +7452,20 @@ static MunitTest tests[] = {
     {"/provider_models_set_persists_state_file",
      test_provider_models_set_persists_state_file, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/provider_config_sets_weak_model",
-     test_provider_config_sets_weak_model, NULL, NULL, MUNIT_TEST_OPTION_NONE,
+    {"/provider_config_ignores_legacy_weak_model",
+     test_provider_config_ignores_legacy_weak_model, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
-    {"/provider_state_weak_model_overrides_config",
-     test_provider_state_weak_model_overrides_config, NULL, NULL,
+    {"/provider_state_ignores_legacy_weak_model",
+     test_provider_state_ignores_legacy_weak_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/provider_models_set_weak_persists_state_file",
-     test_provider_models_set_weak_persists_state_file, NULL, NULL,
+    {"/provider_models_persistence_drops_legacy_weak_model",
+     test_provider_models_persistence_drops_legacy_weak_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_set_profile_persists_state_file",
      test_provider_models_set_profile_persists_state_file, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/compact_uses_weak_model_and_replaces_history",
-     test_compact_uses_weak_model_and_replaces_history, NULL, NULL,
+    {"/compact_uses_active_model_and_replaces_history",
+     test_compact_uses_active_model_and_replaces_history, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/compact_whitespace_result_preserves_history",
      test_compact_whitespace_result_preserves_history, NULL, NULL,
@@ -7197,14 +7476,20 @@ static MunitTest tests[] = {
     {"/auto_compact_estimates_pending_request_and_can_disable",
      test_auto_compact_estimates_pending_request_and_can_disable, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/default_api_run_inherits_launch_model",
+     test_default_api_run_inherits_launch_model, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/auto_compact_threshold_uses_launch_overrides",
+     test_auto_compact_threshold_uses_launch_overrides, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/token_estimate_is_conservative_for_utf8",
      test_token_estimate_is_conservative_for_utf8, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/compact_skips_weak_model_with_smaller_context",
-     test_compact_skips_weak_model_with_smaller_context, NULL, NULL,
+    {"/compact_ignores_legacy_model_context",
+     test_compact_ignores_legacy_model_context, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/auto_compact_skips_weak_model_with_unknown_context",
-     test_auto_compact_skips_weak_model_with_unknown_context, NULL, NULL,
+    {"/auto_compact_uses_launch_model",
+     test_auto_compact_uses_launch_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_read_schema_requires_known_argument_without_composition",
      test_file_read_schema_requires_known_argument_without_composition, NULL,
@@ -7254,6 +7539,12 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_read_permission_target_uses_path",
      test_file_read_permission_target_uses_path, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/file_read_batch_checks_each_target",
+     test_file_read_batch_checks_each_target, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/vcs_rejects_untrusted_resolved_path",
+     test_vcs_rejects_untrusted_resolved_path, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/embedded_read_dispatch_preserves_reference",
      test_embedded_read_dispatch_preserves_reference, NULL, NULL,
@@ -7327,8 +7618,8 @@ static MunitTest tests[] = {
     {"/tool_guard_allows_repeated_shell_by_default",
      test_tool_guard_allows_repeated_shell_by_default, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/tool_guard_soft_skips_redundant_generated_output_checks",
-     test_tool_guard_soft_skips_redundant_generated_output_checks, NULL, NULL,
+    {"/shell_artifact_inspections_use_normal_execution",
+     test_shell_artifact_inspections_use_normal_execution, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_guard_shell_repeat_resets_after_other_tool",
      test_tool_guard_shell_repeat_resets_after_other_tool, NULL, NULL,
@@ -7391,6 +7682,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/full_run_permission_skips_other_tool_prompts",
      test_full_run_permission_skips_other_tool_prompts, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/workdir_only_checks_compact_shell_redirections",
+     test_workdir_only_checks_compact_shell_redirections, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/workdir_only_full_control_allows_workspace_shell",
      test_workdir_only_full_control_allows_workspace_shell, NULL, NULL,

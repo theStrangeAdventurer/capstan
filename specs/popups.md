@@ -33,6 +33,16 @@ input. Printable keys fuzzy-filter and rank command names using the same finder
 as model, file, and session popups. Backspace edits the query; arrows navigate
 results; `Enter` or `Tab` inserts the selected command into the main input.
 
+UTF-8 input (including Cyrillic) is assembled from terminal bytes before
+filtering; incomplete/invalid sequences are never published as query text.
+Backspace removes a complete code point. The 255-byte query limit never splits
+a character. Query display follows its tail, with character-based clipping and
+cursor placement; list labels and titles also avoid splitting UTF-8 characters.
+The existing finder owns ranking (no additional Unicode case-folding policy).
+Pure popup regressions cover split input, deletion, malformed sequences, buffer
+limits, and empty-result navigation. PTY checks should type Cyrillic into a
+filterable list and verify its visible query, cursor and selected result.
+
 ## Scrollbar
 
 List popups render a slim scrollbar only when the item count exceeds the visible

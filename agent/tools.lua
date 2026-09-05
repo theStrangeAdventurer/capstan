@@ -297,41 +297,6 @@ local function shell_signature(args)
     return tostring(args.command or "") .. "\0" .. tostring(args.timeout or "")
 end
 
-local function is_generated_output_inspection(args)
-    local command = tostring(args and args.command or ""):lower()
-    if command == "" then return false end
-    local has_generated_path = command:find("dist/", 1, true) or
-        command:find("build/", 1, true) or
-        command:find("out/", 1, true) or
-        command:find("coverage/", 1, true)
-    if not has_generated_path then return false end
-
-    local padded = " " .. command
-    local inspectors = {
-        " grep ", " rg ", " cat ", " sed ", " head ", " tail ",
-        " wc ", " strings ", " find ", " ls ", " node -e ",
-        " python -c ", " python3 -c ",
-    }
-    for _, needle in ipairs(inspectors) do
-        if padded:find(needle, 1, true) then return true end
-    end
-    return false
-end
-
-local function generated_output_skip_reason(tool_name, args, run_ctx)
-    if tool_name ~= "shell" or not is_generated_output_inspection(args) then
-        return nil
-    end
-    local guard = run_ctx and run_ctx.guard
-    if not guard then return nil end
-    guard.generated_output_checks = (tonumber(guard.generated_output_checks) or 0) + 1
-    local limit = tonumber(guard.max_generated_output_checks)
-    if limit == nil or limit < 0 or guard.generated_output_checks <= limit then
-        return nil
-    end
-    return "Skipped redundant generated-output inspection. A primary validation already has a static inspection; inspect source, run a direct behavioral check, or report the requirement as unverified instead of probing the same generated artifacts again."
-end
-
 local function guard_duration_error(guard)
     if not guard or not guard.max_duration_ms or guard.max_duration_ms <= 0 then
         return nil
@@ -927,7 +892,9 @@ end
 -- root-confined reader, so route that equivalent request to the canonical tool
 -- before permission handling. External paths remain ordinary file_read calls.
 local function route_internal_wiki_read(tool_name, args)
-    if tool_name ~= "file_read" or type(args) ~= "table" then return tool_name, args, false end
+    if tool_name ~= "file_read" or type(args) ~= "table" or type(args.paths) == "table" then
+        return tool_name, args, false
+    end
     local relative = workspace.wiki_relative_path(args.path)
     if not relative then return tool_name, args, false end
     return "wiki_read", {path = relative}, true
@@ -1493,84 +1460,74 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                         logging.runtime_log("tool", string.format("call name=%s target=%s args=%s", tool_name, target, redacted_tool_arguments(tool_name, tc.arguments) or ""))
                     end
 
-                    local skip_reason = generated_output_skip_reason(tool_name, args, run_ctx)
-                    if skip_reason then
-                        result_content = skip_reason
-                        logging.runtime_log("tool_guard", "generated_output_check_skipped command=" .. logging.compact(display_command or "", 300))
-                        if show_generic_status then
-                            append_status(tool_status_prefix(tool_name, display_target, display_command))
-                            append_status(tool_status_suffix("— skipped redundant generated-output inspection", display_command))
-                        end
-                    else
+                    do
                         local permission_scope = run_ctx and run_ctx.permission_scope or nil
-                        local perm = "allow"
-                        local explicit_allow = false
-                        local shell_scope_ok = true
-                        local shell_scope_reason = nil
-                        if permission_tool == "shell" and permission_scope and permission_scope.workdir_only then
-                            shell_scope_ok, shell_scope_reason = workspace.shell_command_within_workspace(args.command)
-                        end
-                        if not shell_scope_ok then
-                            perm = "deny"
-                            logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=deny reason=%s", permission_tool, tool_name, target, tostring(shell_scope_reason)))
-                        elseif permission_tool then
-                            perm, explicit_allow = permit.check(permission_tool, target)
-                            if perm ~= "deny" and scope_allows_target(permission_scope, permission_tool, target) then
-                                perm = "allow"
-                                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
-                            else
-                                if (permission_tool == "file_read" or permission_tool == "file_write") and workspace.is_sensitive_path(target) and perm == "allow" and not explicit_allow then
-                                    perm = "ask"
-                                end
-                                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
-                            end
-                        end
-
+                        local targets = tool_name == "file_read" and workspace.file_read_paths(args) or {target}
+                        local authorized = true
                         if show_generic_status then
                             append_status(tool_status_prefix(tool_name, display_target, display_command))
                         end
-
-                        if perm == "deny" then
-                            result_content = shell_scope_reason or ("Permission denied for " .. tool_name .. " " .. target)
-                            if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
-                        elseif perm == "ask" then
-                            local decision, prompt_wait_ms, prompt_error = permission_prompt(run_ctx, permission_tool, target, {
-                                tool_name = tool_name,
-                                arguments = args,
-                                tool_call_id = tc.id,
-                            })
-                            permission_wait_ms = permission_wait_ms + prompt_wait_ms
-                            if prompt_error ~= nil then error(prompt_error, 0) end
-                            logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
-                            if decision == "deny" then
-                                result_content = "User denied " .. tool_name .. " " .. target
-                                if show_generic_status then append_status(tool_status_suffix("— denied by user", display_command)) end
+                        -- Check every disk target before reading any part of a batch.
+                        for _, requested_target in ipairs(targets) do
+                            if not permission_tool or (tool_name == "file_read" and
+                                workspace.embedded_asset_name(requested_target)) then goto next_target end
+                            local target = normalize_permission_target(permission_tool, requested_target)
+                            local perm = "allow"
+                            local explicit_allow = false
+                            local shell_scope_ok = true
+                            local shell_scope_reason = nil
+                            if permission_tool == "shell" and permission_scope and permission_scope.workdir_only then
+                                shell_scope_ok, shell_scope_reason = workspace.shell_command_within_workspace(args.command)
+                            end
+                            if not shell_scope_ok then
+                                perm = "deny"
+                                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=deny reason=%s", permission_tool, tool_name, target, tostring(shell_scope_reason)))
                             else
-                                if should_persist_prompt_decision(tool_name, permission_tool, decision) then
-                                    permit.grant(permission_tool, target, true)
-                                    permit.save()
-                                end
-                                if not apply_prompt_decision(decision, permission_scope, permission_tool, target) then
-                                    result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
-                                    if show_generic_status then append_status(tool_error_status(result_content, display_command), tool_name == "shell" and "shell" or nil) end
+                                perm, explicit_allow = permit.check(permission_tool, target)
+                                if perm ~= "deny" and scope_allows_target(permission_scope, permission_tool, target) then
+                                    perm = "allow"
+                                    logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=allow scope=run", permission_tool, tool_name, target))
                                 else
-                                    local tool_ok
-                                    result_content, tool_ok = execute_tool(tool_name, args, run_ctx,
-                                        tool_permission_context(permission_tool, target),
-                                        display_command)
-                                    event_ok = tool_ok == true
-                                    mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
-                                    mark_validation(run_ctx, tool_name, args, tool_ok)
-                                    if tool_ok then
-                                        logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d images=%d", tool_name, target, #tool_result_text(result_content), #tool_result_images(result_content)))
-                                        if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command), tool_name == "shell" and "shell" or nil) end
-                                    else
-                                        logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(tool_result_text(result_content), 240)))
+                                    if (permission_tool == "file_read" or permission_tool == "file_write") and workspace.is_sensitive_path(target) and perm == "allow" and not explicit_allow then
+                                        perm = "ask"
+                                    end
+                                    logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=%s", permission_tool, tool_name, target, perm))
+                                end
+                            end
+
+                            if perm == "deny" then
+                                authorized = false
+                                result_content = shell_scope_reason or ("Permission denied for " .. tool_name .. " " .. target)
+                                if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
+                            elseif perm == "ask" then
+                                local decision, prompt_wait_ms, prompt_error = permission_prompt(run_ctx, permission_tool, target, {
+                                    tool_name = tool_name,
+                                    arguments = args,
+                                    tool_call_id = tc.id,
+                                })
+                                permission_wait_ms = permission_wait_ms + prompt_wait_ms
+                                if prompt_error ~= nil then error(prompt_error, 0) end
+                                logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
+                                if decision == "deny" then
+                                    authorized = false
+                                    result_content = "User denied " .. tool_name .. " " .. target
+                                    if show_generic_status then append_status(tool_status_suffix("— denied by user", display_command)) end
+                                else
+                                    if should_persist_prompt_decision(tool_name, permission_tool, decision) then
+                                        permit.grant(permission_tool, target, true)
+                                        permit.save()
+                                    end
+                                    authorized = apply_prompt_decision(decision, permission_scope, permission_tool, target)
+                                    if not authorized then
+                                        result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
                                         if show_generic_status then append_status(tool_error_status(result_content, display_command), tool_name == "shell" and "shell" or nil) end
                                     end
                                 end
                             end
-                        else
+                            if not authorized then break end
+                            ::next_target::
+                        end
+                        if authorized then
                             local tool_ok
                             result_content, tool_ok = execute_tool(tool_name, args, run_ctx,
                                         tool_permission_context(permission_tool, target),

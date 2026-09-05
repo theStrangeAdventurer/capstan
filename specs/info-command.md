@@ -16,7 +16,7 @@ The popup includes:
 - config directory and important config paths
 - skill directories and embedded skill sources loaded by the runtime
 - state directory, runtime state, permissions file, and current log file
-- active profile, current provider/model, weak provider/model, profile-specific
+- active profile, current provider/model, profile-specific
   model configuration, the model each profile uses after fallback resolution,
   and the effective reasoning effort for each profile when the model runtime is
   available

@@ -10,9 +10,9 @@
 
 static int l_ctx_replace(lua_State *L) {
   const char *ui_val = luaL_checkstring(L, 2);
-  const char *llm_val = lua_isnoneornil(L, 3) ? ui_val : luaL_checkstring(L, 3);
+  int llm_index = lua_isnoneornil(L, 3) ? 2 : 3;
   lua_pushstring(L, ui_val);
-  lua_pushstring(L, llm_val);
+  lua_pushvalue(L, llm_index);
   return 2;
 }
 
@@ -602,7 +602,33 @@ static MunitResult test_tool_read_permission_does_not_allow_symlink_escape(
   return MUNIT_OK;
 }
 
+static MunitResult test_manual_image_retains_pixels(
+    const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  lua_State *L = new_state();
+  load_file_plugin(L);
+  call_handler(L, "test/fixtures/vision-shapes.png");
+  munit_assert_not_null(strstr(lua_tostring(L, -2), "image/png"));
+  munit_assert_true(lua_istable(L, -1));
+  lua_getfield(L, -1, "text");
+  munit_assert_not_null(strstr(lua_tostring(L, -1), "attached for visual inspection"));
+  munit_assert_null(strstr(lua_tostring(L, -1), "iVBOR"));
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "images");
+  munit_assert_size(lua_rawlen(L, -1), ==, 1);
+  lua_rawgeti(L, -1, 1);
+  lua_getfield(L, -1, "mime_type");
+  munit_assert_string_equal(lua_tostring(L, -1), "image/png");
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "data");
+  munit_assert_true(strncmp(lua_tostring(L, -1), "iVBOR", 5) == 0);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/manual_image_retains_pixels", test_manual_image_retains_pixels,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/readme_fallback_reads_readme_md", test_readme_fallback_reads_readme_md,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/relative_path_uses_capstan_workdir",

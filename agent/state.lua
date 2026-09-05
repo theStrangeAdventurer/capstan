@@ -36,22 +36,6 @@ function M.provider()
     return nil
 end
 
-function M.weak_model()
-    local st = state()
-    local value = st.weak_model
-    if type(value) == "table" and
-       type(value.provider) == "string" and value.provider ~= "" and
-       type(value.model) == "string" and value.model ~= "" then
-        return {
-            provider = value.provider,
-            model = value.model,
-            reasoning_effort = type(value.reasoning_effort) == "string" and
-                value.reasoning_effort or nil,
-        }
-    end
-    return nil
-end
-
 function M.profile_models()
     local st = state()
     local out = {}
@@ -106,16 +90,6 @@ function M.set_model(provider_name, model, reasoning_effort)
     end
     st.model_reasoning_efforts[provider_name] = reasoning_effort
     st.provider = provider_name
-    return M.save()
-end
-
-function M.set_weak_model(provider_name, model, reasoning_effort)
-    local st = state()
-    st.weak_model = {
-        provider = provider_name,
-        model = model,
-        reasoning_effort = reasoning_effort,
-    }
     return M.save()
 end
 
@@ -184,17 +158,6 @@ function M.save()
         end
     end
     file:write("  },\n")
-    if type(st.weak_model) == "table" and
-       type(st.weak_model.provider) == "string" and
-       type(st.weak_model.model) == "string" then
-        file:write("  weak_model = {\n")
-        file:write("    provider = ", serialize.quote(st.weak_model.provider), ",\n")
-        file:write("    model = ", serialize.quote(st.weak_model.model), ",\n")
-        if type(st.weak_model.reasoning_effort) == "string" then
-            file:write("    reasoning_effort = ", serialize.quote(st.weak_model.reasoning_effort), ",\n")
-        end
-        file:write("  },\n")
-    end
     file:write("  vcs_by_workspace = {\n")
     if type(st.vcs_by_workspace) == "table" then
         local keys = {}

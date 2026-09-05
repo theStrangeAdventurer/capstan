@@ -3,6 +3,7 @@
 
 #include <lua.h>
 #include "popup.h"
+#include "agent.h"
 
 extern lua_State *L;
 
@@ -38,6 +39,8 @@ typedef struct {
   char *ui_result;
   char *raw_result;
   size_t shell_output_start; /* Zero-based UI offset; (size_t)-1 if untagged. */
+  MessageImage *images;
+  size_t image_count;
 } PluginResult;
 
 typedef struct {

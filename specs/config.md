@@ -53,7 +53,6 @@ return {
     max_tool_calls = 0,
     max_same_tool_call = 0,
     max_same_shell_command = 0,
-    max_generated_output_checks = 0,
     completion_review = false,
     auto_compact_percent = 80,
   },
@@ -122,14 +121,13 @@ return {
   [Subagents](subagents.md). It is enabled by default when the field is omitted.
 - `agent.max_turns`, `max_duration_sec`, `stream_timeout_sec`,
   `max_stream_retries`, `max_tool_calls`,
-  `max_same_tool_call`, `max_same_shell_command`, and
-  `max_generated_output_checks` limit runaway agent/tool loops. Missing values
-  fall back to the built-in defaults.
+  `max_same_tool_call`, and `max_same_shell_command` limit runaway agent/tool
+  loops. Missing values fall back to the built-in defaults.
   `agent.max_turns` (built-in default `80`) governs interactive runs; headless
   `capstan run` and ACP sessions override it with a 200-turn budget unless
   `--max-turns` is passed.
-  Zero disables `max_tool_calls`, both repeated-call guards, and the soft
-  generated-output inspection limit; all four default to zero.
+  Zero disables `max_tool_calls` and both repeated-call guards; all three
+  default to zero.
   `stream_timeout_sec` bounds one streaming model request (zero disables this
   per-request limit); `max_stream_retries` retries a transient transport or
   server failure only before it has emitted text, so a stalled transport cannot
@@ -168,8 +166,9 @@ return {
   [Agent Profiles](agent-profiles.md#user-profiles).
 - `agent.profile_models` can set default provider/model pairs per workflow
   profile. A profile model is used for normal agent runs when that profile is
-  active, without changing the global primary model. `weak_model` remains a
-  separate background/compact model.
+  active, without changing the global primary model. Compaction and session
+  titles use the same effective active model, including interactive launch
+  overrides. Legacy `weak_model` fields are ignored.
 - `agent.reasoning_effort` sets the default effort policy for agent runs.
   Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
   `max`. Run options such as `capstan run --reasoning-effort low` override this
