@@ -14,6 +14,7 @@ from pathlib import Path
 import pty
 import re
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -52,6 +53,12 @@ _G.agent_entry = function(messages)
     end)
     mark("running")
     return -- A local HTTP fixture keeps the stream open until Esc cancellation.
+  elseif input == "markdown" then
+    local body = '**MD_BOLD** *MD_ITALIC* MD_PLAIN\n\n' ..
+      '| Key | Value |\n| :--- | ---: |\n| item | **MD_CELL** |\n\n' ..
+      '```diff\n- **MD_OLD**\n+ *MD_NEW*\n```\nMD_LAST'
+    mark('markdown_source', body)
+    agent.append(body, 'agent')
   elseif input == "fold" or input == "fold_wait" then
     agent.append_ui('Shell: fixture\n', 'agent')
     local body = '[exit 0]\n'
@@ -109,9 +116,58 @@ def run_case(case):
   providers = {fixture = {model = "fixture", context_limit = 4096,
     models = {{id = "fixture", context_limit = 4096}}}},
 }\n''')
+        if case.startswith("reasoning"):
+            (config / "config.lua").write_text('''return {
+  provider = "fixture",
+  providers = {fixture = {model = "fixture", context_limit = 4096,
+    default_reasoning_efforts = {"high", "low", "medium"},
+    models = {{id = "fixture", context_limit = 4096}}}},
+}\n''')
+            (config / "plugins/reasoning_test.lua").write_text(r'''
+local json = require('vendor.rxi.json')
+local step = capstan.agent.step_reasoning_effort
+local count = 0
+capstan.agent.step_reasoning_effort = function(direction)
+  local value, err = step(direction)
+  count = count + 1
+  local file = assert(io.open('effort', 'w'))
+  file:write(json.encode({count = count, value = value, error = err,
+    info = capstan.models.effective()}))
+  file:close()
+  return value, err
+end
+return {id = 'reasoning_test'}
+''')
         if case.startswith("file_image"):
             fixture = Path(__file__).resolve().parent / "fixtures/vision-shapes.png"
             (root / "Снимок.png").write_bytes(fixture.read_bytes())
+        if case == "workspace_footer":
+            git_env = {"PATH": os.defpath, "HOME": str(home),
+                       "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}
+            def git(*args):
+                subprocess.run(["git", *args], cwd=root, env=git_env,
+                               check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            git("init", "-q")
+            (root / ".gitignore").write_text("*\n!tracked\n")
+            (root / "tracked").write_text("old\n" * 34)
+            git("add", "tracked")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "-c", "commit.gpgsign=false", "commit", "-qm", "initial")
+            (root / "tracked").write_text("new\n" * 128)
+        if case == "workspace_footer_custom":
+            (config / "plugins/footer_test.lua").write_text(r'''
+capstan.config.vcs = {default = "custom", adapters = {
+  custom = {commands = {
+    status = {"printf", "custom status"},
+    summary = {"printf", "%s", "files-v1\nM\t128\t34\tfile\ndone\n"}}},
+  unsupported = {commands = {status = {"printf", "old status"}}},
+}}
+return {id = "footer_test", command = "/footer_switch", history = false,
+  handler = function()
+    assert(require('agent.vcs').select('unsupported'))
+    return 'switched'
+  end}
+''')
         stream_release = threading.Event()
         server = None
         stream_url = "unused"
@@ -191,6 +247,83 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
             until(lambda: b"\x1b[?2004h" in screen, "terminal startup")
             # Wait for initial rendering after plugin and session initialization.
             until(lambda: b"ready" in screen, "initial screen")
+            if case.startswith("reasoning"):
+                if case == "reasoning_wait":
+                    send("delegate\r")
+                    until(lambda: (root / "waiting").exists(), "reasoning nested wait")
+                send("draft")
+                count = 0
+                def step_key(key, expected):
+                    nonlocal count
+                    count += 1
+                    send(key)
+                    def changed():
+                        try:
+                            return json.loads((root / "effort").read_text())["count"] == count
+                        except (FileNotFoundError, json.JSONDecodeError):
+                            return False
+                    until(changed, "effort hotkey")
+                    result = json.loads((root / "effort").read_text())
+                    assert result["value"] == expected, result
+                    assert result["info"].get("reasoning_effort") == (None if expected == "default" else expected)
+                    return result
+                step_key("\x1b[1;2A", "high")
+                until(lambda: b"reasoning:high" in screen, "reasoning footer")
+                step_key("\x1b[1;2A", "high")
+                step_key("\x1b[1;2B", "medium")
+                step_key("\x1b[1;2B", "low")
+                step_key("\x1b[1;2B", "default")
+                step_key("\x1b[1;2B", "default")
+                if case == "reasoning":
+                    send("\x1b[Z")  # Shift-Tab: plan retains its own high default.
+                    result = step_key("\x1b[1;2B", "medium")
+                    assert result["info"]["profile"] == "plan"
+                    send("\x1b[Z")
+                    result = step_key("\x1b[1;2A", "low")
+                    assert result["info"]["profile"] == "implement"
+                    send("\x06")  # Effort shortcuts also work with message focus.
+                    step_key("\x1b[1;2A", "medium")
+                    send("\x06")
+                # Pasted shortcut bytes remain literal, with no effort change.
+                send("\x1b[200~\x1b[1;2A\x1b[201~")
+                pause()
+                assert json.loads((root / "effort").read_text())["count"] == count
+                if case == "reasoning_wait":
+                    (root / "release").touch()
+                    until(lambda: (root / "finished").exists(), "reasoning wait end")
+                send(" suffix\r")
+                until(lambda: (root / "captured").exists(), "draft after effort keys")
+                captured = json.loads((root / "captured").read_text())
+                assert captured[-1]["content"] == "draft\x1b[1;2A suffix", captured
+                print(f"TUI reasoning: {case}: keys, limits, footer, draft and paste: ok")
+                return
+
+            if case.startswith("workspace_footer"):
+                until(lambda: b"+128" in screen and "−34".encode() in screen, "VCS footer")
+                output = bytes(screen)
+                assert sgr_attributes(output.split(b"+128", 1)[0])[0] == 65
+                assert sgr_attributes(output.split("−34".encode(), 1)[0])[0] == 95
+                assert sgr_attributes(output.split(b"1 file", 1)[0]) == (None, False, False)
+                assert root.name.encode() in output, "working directory missing"
+                send("hello\r")
+                until(lambda: (root / "captured").exists(), "message with footer visible")
+                captured = json.loads((root / "captured").read_text())
+                assert captured[-1]["content"] == "hello", "footer leaked into model input"
+                before = len(screen)
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 35, 0, 0))
+                proc.send_signal(signal.SIGWINCH)
+                until(lambda: b"+128" in screen[before:], "narrow footer")
+                assert b"1 file" not in screen[before:], "file count did not yield to path"
+                if case == "workspace_footer_custom":
+                    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 110, 0, 0))
+                    proc.send_signal(signal.SIGWINCH)
+                    pause()
+                    before = len(screen)
+                    send(" /footer_switch\r")
+                    until(lambda: b"diff unavailable" in screen[before:], "unsupported adapter, no Git fallback")
+                print(f"TUI {case}: colors, path, narrow layout and model isolation: ok")
+                return
+
             if case.startswith("file_image"):
                 send(" /file\t")
                 until(lambda: b"Find:" in screen, "file finder")
@@ -215,6 +348,45 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                                        "detail": "auto"}], captured
                     assert expected.encode() not in screen, "image data leaked into terminal"
                 print(f"TUI manual image: {case}: ok")
+                return
+
+            if case == "markdown":
+                send("markdown\r")
+                until(lambda: b"MD_LAST" in screen, "Markdown message")
+                output = bytes(screen)
+                assert b"**MD_BOLD**" not in output and b"*MD_ITALIC*" not in output
+                assert sgr_attributes(output.split(b"MD_BOLD", 1)[0])[1:] == (True, False)
+                assert sgr_attributes(output.split(b"MD_PLAIN", 1)[0])[1:] == (False, True)
+                italic = False
+                for match in re.finditer(rb"\x1b\[([0-9;]*)m", output.split(b"MD_ITALIC", 1)[0]):
+                    for value in match[1].split(b";"):
+                        code = int(value or b"0")
+                        if code in (0, 23): italic = False
+                        elif code == 3: italic = True
+                assert italic, "Markdown emphasis did not enable terminal italics"
+                assert "┌".encode() in output and "└".encode() in output
+                assert sgr_attributes(output.split(b"MD_CELL", 1)[0])[1:] == (True, False)
+                assert b"- **MD_OLD**" in output and b"+ *MD_NEW*" in output
+                assert sgr_attributes(output.split(b"- **MD_OLD**", 1)[0])[0] == 95
+                assert sgr_attributes(output.split(b"+ *MD_NEW*", 1)[0])[0] == 65
+                before = len(screen)
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 14, 0, 0))
+                # This child has no controlling terminal; notify ncurses explicitly.
+                proc.send_signal(signal.SIGWINCH)
+                def narrow_fields():
+                    plain = re.sub(rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|\([A-Z0-9])", b"", bytes(screen[before:]))
+                    return b"Key: item" in plain
+                until(narrow_fields, "narrow table labelled fields")
+                before = len(screen)
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 110, 0, 0))
+                proc.send_signal(signal.SIGWINCH)
+                until(lambda: "┌".encode() in screen[before:], "table restored after resize")
+                send("capture markdown\r")
+                until(lambda: (root / "captured").exists(), "raw Markdown model context")
+                captured = json.loads((root / "captured").read_text())
+                expected = (root / "markdown_source").read_text()
+                assert any(m["role"] == "assistant" and m["content"] == expected for m in captured), captured
+                print("TUI Markdown: styles, table resize, diff and raw model context: ok")
                 return
 
             if case == "autocomplete_busy":
@@ -409,7 +581,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
 
 
 if __name__ == "__main__":
-    for scenario in ("queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
+    for scenario in ("reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
                      "permit_handoff", "permit_new", "shell_multiline",
                      "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear"):
         run_case(scenario)

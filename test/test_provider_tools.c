@@ -3897,6 +3897,51 @@ static MunitResult test_vcs_unborn_diff_is_complete_and_disables_git_extensions(
   return MUNIT_OK;
 }
 
+static MunitResult test_vcs_summary_uses_selected_adapter(
+    const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  lua_State *L = new_provider_state();
+  int rc = luaL_dostring(L,
+      "package.loaded['agent.vcs'] = nil\n"
+      "local saved = {}\n"
+      "package.loaded['agent.state'] = {\n"
+      " vcs_for_workspace = function(root) return saved[root] end,\n"
+      " set_vcs_for_workspace = function(root, name) saved[root] = name; return true end,\n"
+      "}\n"
+      "capstan.workspace_root = '/one'\n"
+      "capstan.config = {}\n"
+      "capstan.config.vcs = {default = 'custom', adapters = {\n"
+      " custom = {commands = {status = {'custom', 'status'},\n"
+      " diff = {'custom', 'diff'}, diff_path = {'custom', 'diff', '{path}'},\n"
+      " summary = {'custom', 'summary'}}},\n"
+      " old = {commands = {status = {'old', 'status'}}},\n"
+      "}}\n"
+      "local vcs = require('agent.vcs')\n"
+      "local name, argv, format, asset = vcs.summary()\n"
+      "assert(name == 'custom' and argv[2] == 'summary' and format == 'files' and not asset)\n"
+      "tools = {exec = function(command)\n"
+      " assert(command[1] == vcs.current()); return {exit = 0, stdout = 'ok', stderr = ''}\n"
+      "end}\n"
+      "assert(vcs.run('diff').adapter == name)\n"
+      "assert(vcs.select('git'))\n"
+      "name, argv, format, asset = vcs.summary()\n"
+      "assert(name == 'git' and argv[1] == 'sh' and format == 'git' and asset == 'agent/vcs_git_stats.sh')\n"
+      "capstan.workspace_root = '/two'\n"
+      "assert(vcs.summary() == 'custom')\n"
+      "assert(vcs.select('old'))\n"
+      "name, argv = vcs.summary(); assert(name == 'old' and argv == nil)\n"
+      "capstan.config.vcs.adapters.git = {commands = {status = {'not-git'}}}\n"
+      "assert(vcs.select('git'))\n"
+      "name, argv, format, asset = vcs.summary()\n"
+      "assert(name == 'git' and not argv and not asset)\n"
+      "assert(vcs.select('custom'))\n"
+      "capstan.config.vcs.adapters.custom.commands.summary = {'bad', '{path}'}\n"
+      "name, argv = vcs.summary(); assert(name == 'custom' and not argv)\n");
+  if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_vcs_permission_target_uses_workspace_root(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -7669,6 +7714,8 @@ static MunitTest tests[] = {
     {"/vcs_unborn_diff_is_complete_and_disables_git_extensions",
      test_vcs_unborn_diff_is_complete_and_disables_git_extensions, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/vcs_summary_uses_selected_adapter", test_vcs_summary_uses_selected_adapter,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/vcs_permission_target_uses_workspace_root",
      test_vcs_permission_target_uses_workspace_root, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

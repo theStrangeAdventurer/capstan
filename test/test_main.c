@@ -32,6 +32,7 @@ extern MunitSuite usage_suite;
 extern MunitSuite utils_suite;
 extern MunitSuite visual_suite;
 extern MunitSuite wiki_suite;
+extern MunitSuite workspace_status_suite;
 
 int main(int argc, char *argv[]) {
   MunitSuite suites[] = {
@@ -67,6 +68,7 @@ int main(int argc, char *argv[]) {
     utils_suite,
     visual_suite,
     wiki_suite,
+    workspace_status_suite,
     {NULL, NULL, NULL, 0, 0}
   };
   MunitSuite suite = {

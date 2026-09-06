@@ -6,6 +6,7 @@ local M = {}
 local builtin = {
     git = {
         label = "Git",
+        summary_asset = "agent/vcs_git_stats.sh",
         commands = {
             status = { "git", "--no-optional-locks", "-c", "core.fsmonitor=false",
                 "status", "--short" },
@@ -74,6 +75,22 @@ function M.current()
     local configured = config().default
     if type(configured) == "string" and adapters[configured] then return configured end
     return "git"
+end
+
+-- Pure descriptor lookup: rendering must never execute a Lua tool or shell.
+-- Only the built-in adapter can reference an embedded collector asset.
+function M.summary()
+    local name = M.current()
+    local adapter = M.adapters()[name]
+    if adapter == builtin.git then
+        return name, { "sh", "-c" }, "git", adapter.summary_asset
+    end
+    local command = adapter.commands.summary
+    if not command then return name, nil end
+    for _, value in ipairs(command) do
+        if value == "{path}" or value:find("\0", 1, true) then return name, nil end
+    end
+    return name, command, "files"
 end
 
 function M.select(name)

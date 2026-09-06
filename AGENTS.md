@@ -309,6 +309,7 @@ Feature specs:
 - [Terminal runtime](specs/terminal-runtime.md)
 - [Markdown rendering](specs/markdown-rendering.md)
 - [Workspace directory](specs/workspace-directory.md)
+- [Workspace footer](specs/workspace-footer.md)
 - [VCS tool](specs/vcs-tool.md)
 - [Wiki](specs/wiki.md)
   - Built-in `wiki-onboarding` skill guides first-time setup when `/wiki` is run without configured `wiki.path`.

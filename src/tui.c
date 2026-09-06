@@ -75,6 +75,7 @@ void buffered_results_clear(void) {
 }
 
 void init_tui(void) {
+  atexit(workspace_status_shutdown);
   agent_enable_shell_output(1);
   if (has_colors()) {
     start_color();
@@ -348,6 +349,82 @@ static void render_start_screen_content(WINDOW *win, int height, int width,
   wattron(win, dim);
   mvwadd_clipped(win, content.ready_y + 1, x, lines->shortcuts, content.width);
   wattroff(win, dim);
+}
+
+/* Descriptor lookup only: all process I/O stays in the nonblocking collector.
+ * Restore the Lua stack, including when rendering inside a tool callback. */
+static int footer_summary_descriptor(lua_State *l) {
+  lua_getglobal(l, "require");
+  lua_pushliteral(l, "agent.vcs");
+  lua_call(l, 1, 1);
+  lua_getfield(l, -1, "summary");
+  lua_call(l, 0, 4);
+  return 4;
+}
+
+static void configure_workspace_footer(void) {
+  if (!L) return;
+  int top = lua_gettop(L);
+  const char **argv = NULL;
+  lua_pushcfunction(L, footer_summary_descriptor);
+  if (lua_pcall(L, 0, 4, 0) != LUA_OK) goto unavailable;
+  if (!lua_isstring(L, -4) || !lua_istable(L, -3) ||
+      !lua_isstring(L, -2)) goto unavailable;
+  size_t count = lua_rawlen(L, -3);
+  if (!count || count > 256 || !lua_checkstack(L, (int)count + 1)) goto unavailable;
+  argv = calloc(count + 2, sizeof(char *));
+  if (!argv) goto unavailable;
+  int command = lua_gettop(L) - 2;
+  for (size_t i = 0; i < count; i++) {
+    lua_rawgeti(L, command, (lua_Integer)i + 1);
+    size_t length = 0;
+    if (lua_type(L, -1) != LUA_TSTRING) goto unavailable;
+    argv[i] = lua_tolstring(L, -1, &length);
+    if (!length || strlen(argv[i]) != length) goto unavailable;
+    /* Keep values rooted on the stack until configure copies them. */
+  }
+  int git_format = strcmp(lua_tostring(L, top + 3), "git") == 0;
+  if (!lua_isnil(L, top + 4)) {
+    if (lua_type(L, top + 4) != LUA_TSTRING) goto unavailable;
+    const EmbeddedAsset *asset = embedded_asset_find(lua_tostring(L, top + 4));
+    if (!asset) goto unavailable;
+    argv[count] = asset->data;
+  }
+  workspace_status_configure(lua_tostring(L, top + 1), argv, git_format);
+  free(argv);
+  lua_settop(L, top);
+  return;
+unavailable:
+  free(argv);
+  workspace_status_configure(NULL, NULL, 0);
+  lua_settop(L, top);
+}
+
+static void render_workspace_footer(WINDOW *win, int y, int width) {
+  configure_workspace_footer();
+  TuiWorkspaceFooter footer;
+  tui_layout_workspace_footer(width, app_workdir(), getenv("HOME"),
+                               workspace_status_poll(app_workspace_root()), &footer);
+  int saved = getattrs(win);
+  if (footer.path[0]) {
+    wattrset(win, dim_gray_attr());
+    mvwprintw(win, y, 2, " %s ", footer.path);
+  }
+  if (footer.summary_width) {
+    int x = width - footer.summary_width - 4;
+    wattrset(win, A_NORMAL);
+    mvwaddch(win, y, x++, ' ');
+    mvwaddstr(win, y, x, footer.files);
+    x += text_columns(footer.files, strlen(footer.files));
+    wattrset(win, g_diff_add_color_pair ? COLOR_PAIR(g_diff_add_color_pair) : A_NORMAL);
+    mvwaddstr(win, y, x, footer.added);
+    x += text_columns(footer.added, strlen(footer.added));
+    wattrset(win, g_diff_del_color_pair ? COLOR_PAIR(g_diff_del_color_pair) : A_NORMAL);
+    mvwaddstr(win, y, x, footer.deleted);
+    wattrset(win, A_NORMAL);
+    waddch(win, ' ');
+  }
+  wattrset(win, saved);
 }
 
 static void render_start_screen(WINDOW *win, int height, int width) {
@@ -881,6 +958,8 @@ void render_all(void) {
       }
     }
   }
+
+  render_workspace_footer(input_win, input_h - 1, inner_w);
 
   int content_w = inner_w - 2;
   int input_len = (int)strlen(input);
