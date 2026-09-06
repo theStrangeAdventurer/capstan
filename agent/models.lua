@@ -5,9 +5,9 @@ local state = require("agent.state")
 local M = {}
 
 local models_cache_by_url = {}
-local valid_reasoning_efforts = {
-    none = true, minimal = true, low = true, medium = true, high = true, xhigh = true, max = true,
-}
+local reasoning_effort_order = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+local valid_reasoning_efforts = {}
+for _, effort in ipairs(reasoning_effort_order) do valid_reasoning_efforts[effort] = true end
 
 local function normalize_selected_reasoning_effort(value)
     if value == nil or value == "" then return nil end
@@ -188,7 +188,52 @@ function M.list(runtime, provider_name)
     if not ok then
         return nil, "Models response is not valid JSON"
     end
+    models_cache_by_url[url] = type(decoded) == "table" and decoded.data or nil
     return normalize_models_response(decoded, provider), nil
+end
+
+-- Hotkeys must never fetch a catalog or enter a blocking HTTP wait.
+function M.cached_reasoning_efforts(runtime, provider_name, model)
+    local provider = runtime.providers[provider_name]
+    if not provider then return {} end
+    local catalog = provider.models
+    if type(catalog) ~= "table" then
+        local url = provider_models_url(provider)
+        catalog = url and models_cache_by_url[url]
+    end
+    for _, item in ipairs(type(catalog) == "table" and catalog or {}) do
+        if type(item) == "table" and item.id == model then
+            return model_reasoning_efforts(provider, item) or {}
+        end
+    end
+    return model_reasoning_efforts(provider, {id = model}) or {}
+end
+
+function M.step_reasoning_effort(efforts, current, direction)
+    if direction ~= 1 and direction ~= -1 then return nil, "Invalid effort direction" end
+    local supported = {}
+    for _, effort in ipairs(efforts or {}) do supported[effort] = true end
+    local choices = {"default"}
+    for _, effort in ipairs(reasoning_effort_order) do
+        if supported[effort] then table.insert(choices, effort) end
+    end
+    if #choices == 1 then
+        return nil, "Reasoning levels unavailable; select a model with /models"
+    end
+    current = current or "default"
+    local rank = {default = 0}
+    for i, effort in ipairs(reasoning_effort_order) do rank[effort] = i end
+    local current_rank = rank[current] or 0
+    if direction > 0 then
+        for _, effort in ipairs(choices) do
+            if rank[effort] > current_rank then return effort end
+        end
+    else
+        for i = #choices, 1, -1 do
+            if rank[choices[i]] < current_rank then return choices[i] end
+        end
+    end
+    return current
 end
 
 function M.list_all(runtime)
@@ -261,6 +306,20 @@ function M.set(runtime, provider_name, model, reasoning_effort)
     return true, nil
 end
 
+-- Canonical restore policy for commands, shortcuts, status, and requests.
+-- Explicit choices are stored verbatim; restored choices must still be supported.
+function M.saved_profile_effort(runtime, profile_name, provider_name, model)
+    local normalized = profiles.normalize(profile_name)
+    if not normalized then return nil end
+    local saved = state.profile_reasoning_effort(normalized, provider_name, model)
+    if not saved then return nil end
+    if saved == "default" then return saved end
+    for _, effort in ipairs(M.cached_reasoning_efforts(runtime, provider_name, model)) do
+        if effort == saved then return saved end
+    end
+    return "default"
+end
+
 function M.profile(runtime, profile_name)
     local normalized = profiles.normalize(profile_name)
     if not normalized then return nil end
@@ -272,7 +331,8 @@ function M.profile(runtime, profile_name)
         return {
             provider = value.provider,
             model = value.model,
-            reasoning_effort = value.reasoning_effort,
+            reasoning_effort = M.saved_profile_effort(runtime, normalized, value.provider, value.model)
+                or value.reasoning_effort,
         }
     end
     return nil
@@ -294,6 +354,9 @@ function M.set_profile(runtime, profile_name, provider_name, model, reasoning_ef
     end
     local normalized_effort, effort_err = normalize_selected_reasoning_effort(reasoning_effort)
     if effort_err then return false, effort_err end
+    if not normalized_effort then
+        normalized_effort = M.saved_profile_effort(runtime, normalized, provider_name, model) or "default"
+    end
     if type(runtime.profile_models) ~= "table" then
         runtime.profile_models = {}
     end
@@ -340,6 +403,9 @@ function M.install_runtime_api(runtime)
         end,
         set_for = function(provider_name, model, reasoning_effort)
             return M.set(runtime, provider_name, model, reasoning_effort)
+        end,
+        saved_profile_effort = function(profile_name, provider_name, model)
+            return M.saved_profile_effort(runtime, profile_name, provider_name, model)
         end,
         profile = function(profile_name)
             return M.profile(runtime, profile_name)

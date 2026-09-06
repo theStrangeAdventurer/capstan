@@ -10,6 +10,9 @@
 #include "linemap.h"
 #include "mode.h"
 #include "permit_prompt.h"
+#include "plugins.h"
+#include "embedded_assets.h"
+#include <lauxlib.h>
 #include "popup.h"
 #include "scroll.h"
 #include "start_screen.h"
@@ -1091,6 +1094,38 @@ void tui_paste_clipboard_image(void) {
   popup_show_message_ms("Clipboard", message, 0, 700);
 }
 
+#if APP_KEY_SHIFT_UP != KEY_SR || APP_KEY_SHIFT_DOWN != KEY_SF
+#error "Reasoning shortcut keys must match ncurses"
+#endif
+
+int tui_handle_reasoning_shortcut(int ch) {
+  if (ch != APP_KEY_SHIFT_UP && ch != APP_KEY_SHIFT_DOWN)
+    return 0;
+  if (!L)
+    return 1;
+  int top = lua_gettop(L);
+  const char *error = "Reasoning controls are unavailable";
+  lua_getglobal(L, "capstan");
+  if (!lua_istable(L, -1))
+    goto done;
+  lua_getfield(L, -1, "agent");
+  if (!lua_istable(L, -1))
+    goto done;
+  lua_getfield(L, -1, "step_reasoning_effort");
+  if (!lua_isfunction(L, -1))
+    goto done;
+  lua_pushinteger(L, ch == APP_KEY_SHIFT_UP ? 1 : -1);
+  if (lua_pcall(L, 1, 2, 0) != LUA_OK)
+    error = lua_tostring(L, -1);
+  else
+    error = lua_isnil(L, -2) ? lua_tostring(L, -1) : NULL;
+done:
+  if (error)
+    popup_show_message("Reasoning", error, 1);
+  lua_settop(L, top);
+  return 1;
+}
+
 int tui_handle_input_shortcut(int ch) {
   if (ch == TUI_KEY_CTRL_V) {
     tui_paste_clipboard_image();
@@ -1152,6 +1187,9 @@ void tui_pump_blocking(void) {
       popup_message_handle_key(ch);
       continue;
     }
+
+    if (!popup_is_active() && tui_handle_reasoning_shortcut(ch))
+      continue;
 
     if (mode_get() == FOCUS_INPUT && tui_handle_input_shortcut(ch))
       continue;

@@ -1495,6 +1495,8 @@ int main(int argc, char *argv[]) {
   timeout(0);
   keypad(stdscr, TRUE);
   define_key("\033[200~", TUI_KEY_PASTE_BEGIN);
+  define_key("\033[1;2A", APP_KEY_SHIFT_UP);
+  define_key("\033[1;2B", APP_KEY_SHIFT_DOWN);
   terminal_reset_mouse_modes();
   mousemask(ALL_MOUSE_EVENTS, NULL);
   terminal_enable_bracketed_paste();
@@ -1600,6 +1602,11 @@ int main(int argc, char *argv[]) {
       MEVENT event;
       if (getmouse(&event) == OK)
         handle_mouse_event(&event);
+      render_all();
+      continue;
+    }
+
+    if (tui_handle_reasoning_shortcut(ch)) {
       render_all();
       continue;
     }

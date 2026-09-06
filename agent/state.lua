@@ -56,6 +56,34 @@ function M.profile_models()
     return out
 end
 
+-- History is keyed structurally: model ids may contain slashes or separators.
+function M.profile_reasoning_effort(profile_name, provider_name, model)
+    local st = state()
+    local values = st.profile_reasoning_efforts
+    for _, key in ipairs({profile_name, provider_name, model}) do
+        values = type(values) == "table" and values[key] or nil
+    end
+    if type(values) == "string" and values ~= "" then return values end
+    -- Older state remembers only the active model. Never reuse it for another.
+    local selected = type(st.profile_models) == "table" and st.profile_models[profile_name]
+    if type(selected) == "table" and selected.provider == provider_name and
+       selected.model == model and type(selected.reasoning_effort) == "string" then
+        return selected.reasoning_effort
+    end
+    return nil
+end
+
+local function remember_profile_effort(st, profile_name, provider_name, model, effort)
+    if type(effort) ~= "string" or effort == "" then return end
+    if type(st.profile_reasoning_efforts) ~= "table" then st.profile_reasoning_efforts = {} end
+    local values = st.profile_reasoning_efforts
+    for _, key in ipairs({profile_name, provider_name}) do
+        if type(values[key]) ~= "table" then values[key] = {} end
+        values = values[key]
+    end
+    values[model] = effort
+end
+
 function M.vcs_for_workspace(workspace_root)
     local st = state()
     if type(st.vcs_by_workspace) ~= "table" then return nil end
@@ -98,6 +126,13 @@ function M.set_profile_model(profile_name, provider_name, model, reasoning_effor
     if type(st.profile_models) ~= "table" then
         st.profile_models = {}
     end
+    local previous = st.profile_models[profile_name]
+    if type(previous) == "table" and type(previous.provider) == "string" and
+       type(previous.model) == "string" then
+        remember_profile_effort(st, profile_name, previous.provider, previous.model,
+            M.profile_reasoning_effort(profile_name, previous.provider, previous.model))
+    end
+    remember_profile_effort(st, profile_name, provider_name, model, reasoning_effort)
     st.profile_models[profile_name] = {
         provider = provider_name,
         model = model,
@@ -197,6 +232,10 @@ function M.save()
         end
     end
     file:write("  },\n")
+    file:write("  profile_reasoning_efforts = ")
+    serialize.write_value(file, type(st.profile_reasoning_efforts) == "table" and
+        st.profile_reasoning_efforts or {}, "  ")
+    file:write(",\n")
     file:write("}\n")
     file:close()
     return true, nil

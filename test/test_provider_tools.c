@@ -2694,6 +2694,39 @@ static MunitResult test_provider_models_set_for_persists_active_provider(
   return MUNIT_OK;
 }
 
+static MunitResult test_reasoning_shortcuts(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  int rc = luaL_dofile(L, "test/test_reasoning_shortcuts.lua");
+  if (rc != LUA_OK)
+    munit_errorf("%s", lua_tostring(L, -1));
+  munit_assert_string_equal(last_agent_reasoning_effort, "low");
+  unlink(temp_state_path);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_reasoning_memory(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_provider_config(L);
+  int rc = luaL_dofile(L, "test/test_reasoning_memory.lua");
+  if (rc != LUA_OK)
+    munit_errorf("%s", lua_tostring(L, -1));
+  unlink(temp_state_path);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_provider_models_set_publishes_effective_effort(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -7542,7 +7575,11 @@ static MunitTest tests[] = {
     {"/provider_models_set_for_persists_active_provider",
      test_provider_models_set_for_persists_active_provider, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/reasoning_shortcuts", test_reasoning_shortcuts, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/external_file_permissions", test_external_file_permissions, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/reasoning_memory", test_reasoning_memory, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_set_publishes_effective_effort",
      test_provider_models_set_publishes_effective_effort, NULL, NULL,

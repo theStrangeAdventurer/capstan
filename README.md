@@ -182,6 +182,7 @@ model-, and machine-specific.
 Controls:
 
 - press **Shift-Tab** to cycle every configured profile in the TUI;
+- press **Shift-↑ / Shift-↓** to raise/lower reasoning effort for the active profile;
 - run `/implement` or `/plan` for the built-in profiles;
 - use `capstan run --profile <name>` in headless mode;
 - use `/models` to assign models and reasoning effort globally or per profile.

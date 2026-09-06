@@ -121,7 +121,9 @@ plugin.autocomplete = {
 				provider = models.current_provider()
 			end
 			local value = packed_value(kind, profile, provider, model.id)
-			if type(model.reasoning_efforts) == "table" and #model.reasoning_efforts > 0 then
+			local saved_effort = kind == "profile" and models.saved_profile_effort and
+				models.saved_profile_effort(profile, provider, model.id)
+			if not saved_effort and type(model.reasoning_efforts) == "table" and #model.reasoning_efforts > 0 then
 				value = effort_drill_value(kind, profile, provider, model.id, model.reasoning_efforts)
 			end
 			table.insert(items, {
@@ -186,14 +188,12 @@ function plugin.handler(ctx)
 		if not models.set_profile then
 			return ctx:replace("Cannot set profile model: provider runtime does not support profile model state")
 		end
-		local efforts = models.reasoning_efforts and models.reasoning_efforts(provider, model) or {}
-		if efforts and #efforts > 0 and not reasoning_effort then
-			return ctx:replace("Reasoning effort is required: default, " .. table.concat(efforts, ", "))
-		end
 		local ok, err = models.set_profile(profile, provider, model, reasoning_effort)
 		if not ok then
 			return ctx:replace("Cannot set profile model: " .. tostring(err))
 		end
+		local selected = models.profile and models.profile(profile)
+		reasoning_effort = selected and selected.reasoning_effort or reasoning_effort
 		refresh_status()
 		return ctx:replace(string.format("Profile model set: %s %s/%s (reasoning: %s)",
 			profile, provider, model, reasoning_effort or "default"))

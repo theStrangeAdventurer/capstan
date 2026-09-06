@@ -157,11 +157,16 @@ local function copy_table(value)
     return out
 end
 
-local function request_reasoning(provider, effort)
+local function request_reasoning(provider, effort, use_default)
     local reasoning = copy_table(provider and provider.reasoning) or {}
     local provider_effort = normalize_reasoning_effort(provider and provider.reasoning_effort)
     if provider_effort then reasoning.effort = provider_effort end
-    if effort then reasoning.effort = effort end
+    if effort then
+        reasoning.effort = effort
+    elseif use_default then
+        -- An explicit/restored default must not resurrect provider overrides.
+        reasoning.effort = nil
+    end
     if provider and provider.reasoning_max_tokens then
         reasoning.max_tokens = provider.reasoning_max_tokens
     end
@@ -171,8 +176,10 @@ local function request_reasoning(provider, effort)
     return next(reasoning) and reasoning or nil
 end
 
-local function apply_request_reasoning(request, provider, effort)
-    local reasoning = request_reasoning(provider, effort)
+local function apply_request_reasoning(request, provider, effort, opts)
+    local use_default = provider.selected_reasoning_effort == "default" or
+        (opts and opts.reasoning_effort_default)
+    local reasoning = request_reasoning(provider, effort, use_default)
     if not reasoning then return end
 
     local effort_field = provider and provider.reasoning_effort_field
@@ -227,16 +234,36 @@ local function prepare_provider(opts, profile)
     return active, provider_name
 end
 
+-- Compatibility shim for launch-time routing/effort overrides: a manual TUI
+-- choice wins for that profile and model, without changing other profiles or
+-- mutating the options snapshot of an in-flight run.
+local interactive_effort_profiles = {}
+local function interactive_options(profile_name)
+    local opts = copy_table(interactive_run_options)
+    local profile = profiles.get(profile_name) or effective_profile(opts)
+    local selected = profile and interactive_effort_profiles[profile.name] and
+        models.profile(M, profile.name)
+    if selected then
+        local active, provider_name = prepare_provider(opts, profile)
+        if active and provider_name == selected.provider and active.model == selected.model then
+            opts.reasoning_effort = normalize_reasoning_effort(selected.reasoning_effort)
+            opts.reasoning_effort_default = selected.reasoning_effort == "default"
+        end
+    end
+    return opts
+end
+
 local function effective_model_info(profile_name)
-    local profile = profiles.get(profile_name) or effective_profile(interactive_run_options)
-    local active, provider_name = prepare_provider(interactive_run_options, profile)
+    local opts = interactive_options(profile_name)
+    local profile = profiles.get(profile_name) or effective_profile(opts)
+    local active, provider_name = prepare_provider(opts, profile)
     if not active then
         return nil, provider_name
     end
     return {
         provider = provider_name,
         model = active.model,
-        reasoning_effort = effective_reasoning_effort(active, interactive_run_options, profile),
+        reasoning_effort = effective_reasoning_effort(active, opts, profile),
         profile = profile and profile.name or nil,
     }, nil
 end
@@ -782,7 +809,7 @@ function M.run(opts, callbacks)
             stream = true,
             stream_options = {include_usage = true}
         }
-        apply_request_reasoning(request, active, effort)
+        apply_request_reasoning(request, active, effort, opts)
 
         local headers = {
             ["Content-Type"] = "application/json",
@@ -869,8 +896,13 @@ end
 
 -- Inherit only model routing; background work keeps its own run policy.
 local function interactive_model_options(opts)
-    for _, field in ipairs({"provider", "model", "reasoning_effort"}) do
-        if opts[field] == nil then opts[field] = interactive_run_options[field] end
+    local selected = interactive_options()
+    if opts.reasoning_effort == nil and opts.reasoning_effort_default == nil then
+        opts.reasoning_effort = selected.reasoning_effort
+        opts.reasoning_effort_default = selected.reasoning_effort_default
+    end
+    for _, field in ipairs({"provider", "model"}) do
+        if opts[field] == nil then opts[field] = selected[field] end
     end
     return opts
 end
@@ -895,6 +927,7 @@ _G.capstan.agent = {
             return nil, "unknown profile: " .. tostring(opts.profile)
         end
         interactive_run_options = {}
+        interactive_effort_profiles = {}
         if opts.profile then active_profile_name = profiles.normalize(opts.profile) end
         local fields = {
             "provider", "model", "reasoning_effort", "max_turns",
@@ -907,6 +940,20 @@ _G.capstan.agent = {
         end
         publish_agent_status()
         return true
+    end,
+    step_reasoning_effort = function(direction)
+        local info = effective_model_info()
+        if not info or not info.profile then return nil, "No active model/profile" end
+        local next_effort, err = models.step_reasoning_effort(
+            models.cached_reasoning_efforts(M, info.provider, info.model),
+            info.reasoning_effort, direction)
+        if not next_effort then return nil, err end
+        if next_effort == (info.reasoning_effort or "default") then return next_effort end
+        local ok, save_err = models.set_profile(M, info.profile, info.provider, info.model, next_effort)
+        interactive_effort_profiles[info.profile] = true
+        publish_agent_status()
+        if not ok then return nil, "Effort changed but could not be saved: " .. tostring(save_err) end
+        return next_effort
     end,
     set_profile = function(name)
         local normalized = profiles.normalize(name)
@@ -1170,7 +1217,7 @@ _G.agent_entry = function(messages)
         update_usage = true,
         permission_scope = interactive_permission_scope(),
     }
-    for field, value in pairs(interactive_run_options) do
+    for field, value in pairs(interactive_options()) do
         opts[field] = value
     end
     M.run(opts, {

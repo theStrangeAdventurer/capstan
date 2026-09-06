@@ -5,6 +5,8 @@
 #define FOCUS_MESSAGES 1
 
 #define APP_KEY_SHIFT_TAB 0541
+#define APP_KEY_SHIFT_UP  0521 /* ncurses KEY_SR */
+#define APP_KEY_SHIFT_DOWN 0520 /* ncurses KEY_SF */
 #define APP_KEY_ESCAPE    27
 #define APP_KEY_CTRL_F    6
 

@@ -42,6 +42,14 @@ return {
   model_reasoning_efforts = {
     openrouter = "default",
   },
+  profile_reasoning_efforts = {
+    plan = {
+      openrouter = {
+        ["anthropic/claude-sonnet-4"] = "medium",
+        ["openai/gpt-4.1"] = "default",
+      },
+    },
+  },
   vcs_by_workspace = {
     ["/repo"] = "git",
   },
@@ -73,6 +81,15 @@ For a reasoning-capable model, a persisted effort selected alongside that
 model takes precedence over config and profile defaults. The literal
 `"default"` intentionally suppresses those overrides so the provider/model
 chooses its own default.
+
+`profile_reasoning_efforts[profile][provider][model]` retains each profile's
+choices even when selecting a different model/provider. `profile_models` still
+stores active routing and an effort snapshot for compatibility. The history is
+authoritative when present; legacy snapshots are read only for their exact tuple
+and copied into history before replacing the active selection. Migration needs no
+startup write. Explicit `default` is stored as a value, not removed. On restore,
+`agent.models` checks capabilities locally and uses `default` for an unsupported
+saved effort. Config defaults and primary-model state retain their existing roles.
 
 Legacy `weak_model` fields in config or loaded state are ignored and are not
 written back when runtime state is saved.

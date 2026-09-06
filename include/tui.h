@@ -36,6 +36,7 @@ void render_all(void);
 int tui_handle_shell_mouse(int y, int x, int activate);
 void tui_paste_clipboard_image(void);
 int tui_handle_input_shortcut(int ch);
+int tui_handle_reasoning_shortcut(int ch);
 int tui_focus_input_at_point(int rows, int cols, int y, int x);
 void tui_pump_blocking(void);
 int tui_handle_paste(int ch);
