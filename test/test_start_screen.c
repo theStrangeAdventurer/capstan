@@ -33,6 +33,46 @@ static MunitResult test_layout_minimal(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_content_geometry(const MunitParameter params[],
+                                         void *data) {
+  (void)params;
+  (void)data;
+  for (int height = 1; height <= 40; height++) {
+    for (int width = 1; width <= 160; width++) {
+      StartScreenContent content = start_screen_content_for_size(height, width);
+      StartScreenLayout layout = start_screen_layout_for_size(height, width);
+      if (layout == START_SCREEN_MINIMAL) {
+        munit_assert_int(content.width, ==, 0);
+        munit_assert_int(content.height, ==, 0);
+        continue;
+      }
+      munit_assert_int(content.width, <=, 56);
+      munit_assert_int(content.width, >=, 44);
+      munit_assert_int(content.x, ==, (width - content.width) / 2);
+      munit_assert_int(content.y, ==, (height - content.height) / 2);
+      munit_assert_int(content.x, >=, 2);
+      munit_assert_int(content.y, >=, 0);
+      munit_assert_int(content.x + content.width, <=, width - 2);
+      munit_assert_int(content.y + content.height, <=, height);
+      munit_assert_int(content.status_y, ==, content.y +
+                       (layout == START_SCREEN_WIDE ? 8 : 3));
+      if (layout == START_SCREEN_WIDE) {
+        munit_assert_int(content.version_y, ==,
+                         content.y + START_SCREEN_WORDMARK_DISPLAY_ROWS + 2);
+        munit_assert_int(content.status_y, ==, content.version_y + 2);
+      } else {
+        munit_assert_int(content.version_y, ==, content.y);
+      }
+      munit_assert_int(content.ready_y, ==, content.status_y + 5);
+      munit_assert_int(content.ready_y + 1, ==,
+                       content.y + content.height - 1);
+      if (layout == START_SCREEN_WIDE)
+        munit_assert_int(content.width, >=, START_SCREEN_WORDMARK_COLUMNS);
+    }
+  }
+  return MUNIT_OK;
+}
+
 static MunitResult test_collapse_home_child(const MunitParameter params[],
                                             void *data) {
   (void)params;
@@ -92,21 +132,57 @@ static MunitResult test_wordmark_shape(const MunitParameter params[],
   (void)data;
   munit_assert_int(start_screen_wordmark_pixel(0, 1), ==, 1);
   munit_assert_int(start_screen_wordmark_pixel(0, 0), ==, 0);
+  munit_assert_int(START_SCREEN_WORDMARK_COLUMNS, ==, 54);
+  munit_assert_int(START_SCREEN_WORDMARK_DISPLAY_ROWS, ==, 4);
+  /* A has two-pixel stems, an open counter, and a solid crossbar. */
   munit_assert_int(start_screen_wordmark_pixel(3, 8), ==, 1);
   munit_assert_int(start_screen_wordmark_pixel(3, 9), ==, 1);
+  munit_assert_int(start_screen_wordmark_pixel(3, 10), ==, 0);
+  munit_assert_int(start_screen_wordmark_pixel(3, 11), ==, 0);
+  munit_assert_int(start_screen_wordmark_pixel(3, 12), ==, 1);
+  munit_assert_int(start_screen_wordmark_pixel(3, 13), ==, 1);
+  munit_assert_int(start_screen_wordmark_pixel(4, 10), ==, 1);
+  munit_assert_int(start_screen_wordmark_pixel(START_SCREEN_WORDMARK_ROWS, 0),
+                   ==, 0);
+  for (int letter = 0; letter < START_SCREEN_WORDMARK_LETTERS - 1; letter++) {
+    int gap = letter * (START_SCREEN_WORDMARK_LETTER_COLUMNS +
+                        START_SCREEN_WORDMARK_LETTER_GAP) +
+              START_SCREEN_WORDMARK_LETTER_COLUMNS;
+    for (int row = 0; row < START_SCREEN_WORDMARK_ROWS; row++) {
+      for (int column = gap; column < gap + START_SCREEN_WORDMARK_LETTER_GAP;
+           column++)
+        munit_assert_int(start_screen_wordmark_pixel(row, column), ==, 0);
+    }
+  }
   munit_assert_int(start_screen_wordmark_pixel(-1, 0), ==, 0);
   munit_assert_int(start_screen_wordmark_pixel(0, START_SCREEN_WORDMARK_COLUMNS),
                    ==, 0);
   return MUNIT_OK;
 }
 
-static MunitResult test_wordmark_grain_is_sparse_and_fixed(
+static MunitResult test_wordmark_half_cells(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
-  munit_assert_int(start_screen_wordmark_grain(0, 11), ==, 1);
-  munit_assert_int(start_screen_wordmark_grain(0, 12), ==, 0);
-  munit_assert_int(start_screen_wordmark_grain(0, 0), ==, 0);
+  munit_assert_int(start_screen_wordmark_cell(0, 0), ==, 2);
+  munit_assert_int(start_screen_wordmark_cell(3, 0), ==, 1);
+  munit_assert_int(start_screen_wordmark_cell(0, 1), ==, 3);
+  munit_assert_int(start_screen_wordmark_cell(1, 2), ==, 0);
+  munit_assert_int(start_screen_wordmark_cell(-1, 0), ==, 0);
+  munit_assert_int(start_screen_wordmark_cell(
+                       START_SCREEN_WORDMARK_DISPLAY_ROWS, 0), ==, 0);
+  munit_assert_int(start_screen_wordmark_cell(0, -1), ==, 0);
+  munit_assert_int(start_screen_wordmark_cell(
+                       0, START_SCREEN_WORDMARK_COLUMNS), ==, 0);
+  for (int row = 0; row < START_SCREEN_WORDMARK_DISPLAY_ROWS; row++) {
+    for (int column = 0; column < START_SCREEN_WORDMARK_COLUMNS; column++) {
+      int cell = start_screen_wordmark_cell(row, column);
+      munit_assert_int(cell & 1, ==,
+                       start_screen_wordmark_pixel(row * 2, column));
+      munit_assert_int((cell >> 1) & 1, ==,
+                       start_screen_wordmark_pixel(row * 2 + 1, column));
+    }
+  }
   return MUNIT_OK;
 }
 
@@ -124,8 +200,19 @@ static MunitResult test_animation_accelerates_then_pauses(
   munit_assert_int(second_step, <, third_step);
   munit_assert_int(start_screen_animation_tick(900), ==,
                    start_screen_animation_tick(1200));
-  munit_assert_int(start_screen_animation_tick(1350), ==,
+  munit_assert_int(start_screen_animation_tick(900), ==,
+                   start_screen_animation_tick(3599));
+  munit_assert_int(start_screen_animation_tick(3600), ==,
                    start_screen_animation_tick(0));
+  munit_assert_int(start_screen_animation_tick(-1), ==,
+                   start_screen_animation_tick(3599));
+  /* The longer pause must leave every pixel at its resting color. */
+  for (int row = 0; row < START_SCREEN_WORDMARK_ROWS; row++) {
+    for (int column = 0; column < START_SCREEN_WORDMARK_COLUMNS; column++)
+      munit_assert_int(start_screen_gradient_level(
+                           row, column, start_screen_animation_tick(3599)),
+                       ==, 1);
+  }
   return MUNIT_OK;
 }
 
@@ -167,8 +254,9 @@ static MunitResult test_build_status_values(const MunitParameter params[],
   munit_assert_string_equal(lines.reasoning_effort, "high");
   munit_assert_string_equal(lines.profile, "plan");
   munit_assert_string_equal(lines.workdir, "~/narnia/tui-agent");
-  munit_assert_string_equal(lines.ready,
-                            "Type message · /models: choose model · Shift+Tab: profiles");
+  munit_assert_string_equal(lines.ready, "Type a message to begin");
+  munit_assert_string_equal(lines.shortcuts,
+                            "/models choose model · Shift+Tab profiles");
   return MUNIT_OK;
 }
 
@@ -194,6 +282,8 @@ static MunitTest tests[] = {
      NULL},
     {"/layout_minimal", test_layout_minimal, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
+    {"/content_geometry", test_content_geometry, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/collapse_home_child", test_collapse_home_child, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/collapse_home_exact", test_collapse_home_exact, NULL, NULL,
@@ -206,8 +296,8 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/wordmark_shape", test_wordmark_shape, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/wordmark_grain_is_sparse_and_fixed",
-     test_wordmark_grain_is_sparse_and_fixed, NULL, NULL,
+    {"/wordmark_half_cells",
+     test_wordmark_half_cells, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/animation_accelerates_then_pauses",
      test_animation_accelerates_then_pauses, NULL, NULL,

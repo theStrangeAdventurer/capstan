@@ -4,12 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *START_SCREEN_WORDMARK[] = {
-    "0111110 0011100 1111110 0111110 1111111 0011100 1100011",
-    "1100000 1100011 1100011 1100000 0011100 1100011 1111011",
-    "1100000 1111111 1111110 0111110 0011100 1111111 1101111",
-    "1100000 1100011 1100000 0000011 0011100 1100011 1100111",
-    "0111110 1100011 1100000 1111110 0011100 1100011 1100011",
+static const char START_SCREEN_WORDMARK[][START_SCREEN_WORDMARK_COLUMNS + 1] = {
+    "011111  011110  111110  011111  111111  011110  110011",
+    "111111  111111  111111  111111  111111  111111  110011",
+    "110000  110011  110011  110000  001100  110011  111011",
+    "110000  110011  111111  111110  001100  110011  111011",
+    "110000  111111  111110  011111  001100  111111  110111",
+    "110000  111111  110000  000011  001100  111111  110111",
+    "111111  110011  110000  111111  001100  110011  110011",
+    "011111  110011  110000  111110  001100  110011  110011",
 };
 
 int start_screen_wordmark_pixel(int row, int column) {
@@ -19,18 +22,17 @@ int start_screen_wordmark_pixel(int row, int column) {
   return START_SCREEN_WORDMARK[row][column] == '1';
 }
 
-int start_screen_wordmark_grain(int row, int column) {
-  if (!start_screen_wordmark_pixel(row, column))
+int start_screen_wordmark_cell(int row, int column) {
+  if (row < 0 || row >= START_SCREEN_WORDMARK_DISPLAY_ROWS)
     return 0;
-  unsigned int hash = (unsigned int)(row + 1) * 37u +
-                      (unsigned int)(column + 3) * 17u;
-  return hash % 11u == 0u;
+  return start_screen_wordmark_pixel(row * 2, column) |
+         (start_screen_wordmark_pixel(row * 2 + 1, column) << 1);
 }
 
 int start_screen_animation_tick(long long elapsed_ms) {
   const int sweep_ms = 900;
-  const int pause_ms = 450;
-  const int travel = START_SCREEN_WORDMARK_COLUMNS + 28;
+  const int pause_ms = 2700;
+  const int travel = START_SCREEN_WORDMARK_COLUMNS + START_SCREEN_WORDMARK_ROWS + 24;
   long long cycle_ms = sweep_ms + pause_ms;
   long long phase = elapsed_ms % cycle_ms;
   if (phase < 0)
@@ -48,7 +50,7 @@ int start_screen_gradient_level(int row, int column, int tick) {
       column >= START_SCREEN_WORDMARK_COLUMNS)
     return 0;
 
-  int cycle = START_SCREEN_WORDMARK_COLUMNS + 28;
+  int cycle = START_SCREEN_WORDMARK_COLUMNS + START_SCREEN_WORDMARK_ROWS + 24;
   int highlight = tick % cycle;
   if (highlight < 0)
     highlight += cycle;
@@ -76,6 +78,27 @@ StartScreenLayout start_screen_layout_for_size(int height, int width) {
   if (height >= 12 && width >= 48)
     return START_SCREEN_COMPACT;
   return START_SCREEN_MINIMAL;
+}
+
+StartScreenContent start_screen_content_for_size(int height, int width) {
+  StartScreenContent content = {0};
+  StartScreenLayout layout = start_screen_layout_for_size(height, width);
+  if (layout == START_SCREEN_MINIMAL)
+    return content;
+
+  content.width = width - 4;
+  if (content.width > 56)
+    content.width = 56;
+  content.height = layout == START_SCREEN_WIDE
+                       ? START_SCREEN_WORDMARK_DISPLAY_ROWS + 11 : 10;
+  content.x = (width - content.width) / 2;
+  content.y = (height - content.height) / 2;
+  content.version_y = layout == START_SCREEN_WIDE
+                          ? content.y + START_SCREEN_WORDMARK_DISPLAY_ROWS + 2
+                          : content.y;
+  content.status_y = content.y + content.height - 7;
+  content.ready_y = content.y + content.height - 2;
+  return content;
 }
 
 void start_screen_collapse_home(const char *path, char *out, size_t out_size) {
@@ -141,6 +164,7 @@ void start_screen_build_status(const StartScreenStatus *status,
   start_screen_truncate(collapsed[0] ? collapsed : ".", out->workdir,
                         sizeof(out->workdir), 32);
 
-  snprintf(out->ready, sizeof(out->ready),
-           "Type message · /models: choose model · Shift+Tab: profiles");
+  snprintf(out->ready, sizeof(out->ready), "Type a message to begin");
+  snprintf(out->shortcuts, sizeof(out->shortcuts),
+           "/models choose model · Shift+Tab profiles");
 }
