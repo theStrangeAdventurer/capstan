@@ -221,7 +221,7 @@ function M.model_path_allowed(path, mode, opts)
             return true
         end
         local requested = M.normalize_path(resolved)
-        if mode == "read" and opts and opts.allow_outside_workspace and
+        if (mode == "read" or mode == "write") and opts and opts.allow_outside_workspace and
             not requested_path_is_within_workspace(requested) then
             return true
         end
@@ -229,6 +229,11 @@ function M.model_path_allowed(path, mode, opts)
     end
 
     if mode == "write" then
+        if opts and opts.allow_outside_workspace and
+            not requested_path_is_within_workspace(resolved) then
+            if M.creation_realpath(resolved) then return true end
+            return false, "external write path cannot be resolved or is a dangling symlink"
+        end
         local parent_real = nearest_existing_parent(resolved)
         if parent_real and M.path_is_within(parent_real, workdir) then
             return true

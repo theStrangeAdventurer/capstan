@@ -24,6 +24,17 @@ workspace root in `state.lua`. Selection precedence is:
 2. `vcs.default` from config;
 3. built-in `git`.
 
+## Tool status
+
+The dispatcher displays the requested operation and scope, for example
+`Inspecting VCS: status · workspace — done` or
+`Inspecting VCS: diff · src/main.c — done`. Paths are relative to the workspace
+root, not the current subdirectory. This display is separate from the canonical
+permission target; authorization and execution remain unchanged. Failures show
+`— error: <reason>` and permission refusals show `— denied`, never `— done`.
+Dispatcher tests cover all three operations, path-specific calls, errors, and
+denials (`make test-http-lua`).
+
 ## Custom adapters
 
 Adapters are configured as argv arrays, never shell command strings. This keeps

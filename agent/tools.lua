@@ -799,7 +799,8 @@ local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
             tostring(ui_result),
         }, "\n"), false
     end
-    return llm_result or ui_result, result_ok ~= false
+    return llm_result or ui_result, result_ok ~= false,
+        tool_name == "file_read" and ui_result or nil
 end
 
 local function tool_permission_name(tool_name, run_ctx)
@@ -873,6 +874,9 @@ local function tool_call_target(tool_name, args)
     if tool_spec and type(tool_spec.permission_target) == "function" then
         local ok, target = pcall(tool_spec.permission_target, args or {})
         if ok and type(target) == "string" and target ~= "" then return target end
+    end
+    if tool_name == "file_read" then
+        return workspace.file_read_paths(args)[1] or ""
     end
     return args.command or args.path or args.url or args.uri or tool_name
 end
@@ -1008,11 +1012,11 @@ local function redacted_tool_arguments(tool_name, raw_arguments)
 end
 
 local function call_plugin_tool_redacted(tool_name, args, run_ctx, permission_ctx)
-    local result, ok = call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
+    local result, ok, summary = call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
     if tool_name == "shell" then
         result = redact_sensitive_text(result)
     end
-    return result, ok
+    return result, ok, summary
 end
 
 local function tool_result_text(result)
@@ -1025,9 +1029,33 @@ local function tool_result_images(result)
     return result.images
 end
 
+-- Display paths are not permission targets. Keep workspace paths short without
+-- losing directory context; external and embedded references stay identifiable.
+local function tool_display_path(path, base)
+    if workspace.embedded_asset_name(path) then return path end
+    local normalized = workspace.normalize_path(path, base)
+    base = workspace.normalize_path(base)
+    if workspace.path_is_within(normalized, base) then
+        if normalized == base then return "." end
+        return normalized:sub(#base:gsub("/+$", "") + 2)
+    end
+    return normalized
+end
+
 local function tool_display_target(tool_name, args, target)
-    if tool_name == "shell" then
-        return "shell"
+    if tool_name == "shell" then return "shell" end
+    if tool_name == "file_read" then
+        local paths = workspace.file_read_paths(args)
+        for i, path in ipairs(paths) do
+            paths[i] = tool_display_path(path, workspace.configured_workdir())
+        end
+        return #paths > 0 and table.concat(paths, ", ") or "(no path)"
+    end
+    if tool_name == "vcs" then
+        local operation = type(args.operation) == "string" and args.operation or "(no operation)"
+        local path = type(args.path) == "string" and args.path ~= "" and
+            tool_display_path(args.path, workspace.configured_workspace_root()) or "workspace"
+        return operation .. " · " .. path
     end
     return target
 end
@@ -1047,6 +1075,7 @@ local function tool_phase(tool_name, display_command)
     if tool_name == "file_edit" or tool_name == "file_write" or
        tool_name == "wiki_ingest" then return "Editing" end
     if tool_name == "fetch" then return "Fetching" end
+    if tool_name == "vcs" then return "Inspecting VCS" end
     if tool_name == "logs" then return "Inspecting logs" end
     if tool_name == "subagents" then return "Delegating" end
     if tool_name == "shell" then
@@ -1203,12 +1232,18 @@ local function should_persist_prompt_decision(tool_name, permission_tool, decisi
         prompt_decision_allows(decision)
 end
 
-local function tool_permission_context(permission_tool, target)
+-- Called only after every target has passed the permission checks.
+local function tool_permission_context(permission_tool, target, tool_name, args)
     if not permission_tool then return nil end
     local ctx = {tool = permission_tool, target = target}
-    if permission_tool == "file_read" and not workspace.embedded_asset_name(target) and
-        not path_is_within_workspace(target) then
-        ctx.allow_outside_workspace = true
+    if permission_tool == "file_read" or permission_tool == "file_write" then
+        local targets = tool_name == "file_read" and workspace.file_read_paths(args) or {target}
+        for _, path in ipairs(targets) do
+            if not workspace.embedded_asset_name(path) and
+                not path_is_within_workspace(normalize_permission_target(permission_tool, path)) then
+                ctx.allow_outside_workspace = true
+            end
+        end
     end
     return ctx
 end
@@ -1479,6 +1514,12 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             if permission_tool == "shell" and permission_scope and permission_scope.workdir_only then
                                 shell_scope_ok, shell_scope_reason = workspace.shell_command_within_workspace(args.command)
                             end
+                            if permission_scope and permission_scope.workdir_only and
+                                (permission_tool == "file_read" or permission_tool == "file_write") and
+                                not path_is_within_workspace(target) then
+                                shell_scope_ok = false
+                                shell_scope_reason = "file path escapes workspace: " .. target
+                            end
                             if not shell_scope_ok then
                                 perm = "deny"
                                 logging.runtime_log("permit", string.format("tool=%s call=%s target=%s decision=deny reason=%s", permission_tool, tool_name, target, tostring(shell_scope_reason)))
@@ -1528,9 +1569,9 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             ::next_target::
                         end
                         if authorized then
-                            local tool_ok
-                            result_content, tool_ok = execute_tool(tool_name, args, run_ctx,
-                                        tool_permission_context(permission_tool, target),
+                            local tool_ok, error_summary
+                            result_content, tool_ok, error_summary = execute_tool(tool_name, args, run_ctx,
+                                        tool_permission_context(permission_tool, target, tool_name, args),
                                         display_command)
                             event_ok = tool_ok == true
                             mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
@@ -1540,7 +1581,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                 if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command), tool_name == "shell" and "shell" or nil) end
                             else
                                 logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(tool_result_text(result_content), 240)))
-                                if show_generic_status then append_status(tool_error_status(result_content, display_command), tool_name == "shell" and "shell" or nil) end
+                                if show_generic_status then append_status(tool_error_status(error_summary or result_content, display_command), tool_name == "shell" and "shell" or nil) end
                             end
                         end
                     end

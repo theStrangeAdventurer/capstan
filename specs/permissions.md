@@ -52,8 +52,9 @@ Model `file_write` and `file_edit` may target the effective configured Wiki even
 outside the workspace, but still require ordinary `file_write` permission for the
 actual destination. `agent.workspace` owns confinement: Wiki writes resolve the
 root and target through existing ancestors, reject escaping/dangling symlinks,
-and fail closed when resolution fails. This exception grants no arbitrary
-external write access and does not alter skill/read exceptions.
+and fail closed when resolution fails. This Wiki exception does not itself grant arbitrary external access.
+Other external destinations are supported after normal target-specific
+`file_write` authorization, without changing the workspace root.
 
 `wiki_read` is permission-free because it is constrained to Capstan's effective
 wiki root, which defaults to internal application state. Reading an external
@@ -186,9 +187,22 @@ calls when `capstan.realpath` is available. Existing targets are checked after
 resolving symlinks. New write targets check the nearest existing parent
 directory. A path that appears inside the workspace but resolves outside it is
 rejected before reading or writing, unless it is a model-initiated read of a
-registered skill file under one of Capstan's skill roots. Model-initiated reads
-of explicit absolute paths outside the workspace are allowed only after the
-normal permission decision allows that external target.
+registered skill file under one of Capstan's skill roots. Explicit external paths for `file_read` (single or batch), `file_write`, and
+`file_edit` are allowed after the normal permission decision allows each target.
+The dispatcher passes authorization to the shared workspace policy only after
+all targets succeed; plugins do not infer consent from model arguments. Missing
+external write targets resolve through existing ancestors and reject dangling
+symlinks or failed resolution. Internal symlink escapes remain rejected even
+when another target in the same batch is an approved external path.
+
+External access does not change the working directory, project instructions,
+or conversation. `Allow target` retains the exact tool/target session grant;
+read and write permissions remain separate. Explicit denies still override
+session grants and YOLO. Workspace-only benchmark scope rejects external file
+paths before prompting, including when a grant or YOLO would otherwise allow
+access. TUI, ACP, headless runs and subagents use the same dispatcher and
+permission scope; no new persistent configuration or grant format is added.
+Logs and tool results retain the actual destination path.
 
 `src/permit.c` owns rule loading, saving, matching, config-rule import, and the
 Lua-facing `permit` table. `permit.check` also returns whether its allow result
@@ -213,6 +227,11 @@ Provider-level tests cover permission target selection for `fetch`, `file_read`,
 and `shell`; sensitive file prompting; streamed execution for `file_edit`;
 permission aliases; malformed tool arguments; and runtime log tests cover
 permission check/prompt logging.
+
+`test/test_external_file_permissions.lua`, run by `make test-http-lua`, covers
+approved external edits, append and nested creation, rejection without I/O,
+separate read/write session grants, mixed batch reads, internal symlink escapes,
+dangling links, explicit denies under YOLO, and benchmark confinement.
 
 Pure permission matching and saved-rule string escaping can be tested through
 `permit_logic.c` without linking ncurses, Lua, or curl.

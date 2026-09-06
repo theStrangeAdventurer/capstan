@@ -4015,6 +4015,102 @@ static MunitResult test_embedded_read_dispatch_preserves_reference(
   return MUNIT_OK;
 }
 
+static MunitResult test_read_and_vcs_status_describes_arguments(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_capstan_workdir(L, "/repo/project/subdir");
+  set_capstan_workspace_root(L, "/repo/project");
+  load_real_file_plugin(L);
+  int rc = luaL_dostring(L,
+      "plugins.vcs = assert(loadfile('plugins/vcs.lua'))()\n"
+      "local dispatcher = require('agent.tools')\n"
+      "local json = require('vendor.rxi.json')\n"
+      "local available = dispatcher.collect({disable_subagents = true})\n"
+      "local output, denied, executed, vcs_error\n"
+      "agent.append_ui = function(text) output = output .. text end\n"
+      "capstan.realpath = function(path) return path end\n"
+      "capstan.embedded_asset = function(path)\n"
+      "  if path == 'missing' then return nil, 'missing embedded asset' end\n"
+      "  return 'embedded content'\n"
+      "end\n"
+      "io.open = function(path)\n"
+      "  executed = executed + 1\n"
+      "  if path:find('missing.md', 1, true) then return nil, 'not found' end\n"
+      "  return {read = function() return '❌ not a tool failure' end, close = function() end}\n"
+      "end\n"
+      "io.popen = function() return nil end\n"
+      "permit.check = function(_, target) return target == denied and 'deny' or 'allow' end\n"
+      "tools = {exec = function()\n"
+      "  executed = executed + 1\n"
+      "  return {exit = vcs_error and 1 or 0, stdout = '', stderr = vcs_error or ''}\n"
+      "end}\n"
+      "local function run(name, args, silent)\n"
+      "  output, executed = '', 0\n"
+      "  local success, result\n"
+      "  dispatcher.handle_tool_calls({}, available, {{id = 'status', name = name,\n"
+      "    arguments = json.encode(args)}}, '', function(msgs) result = msgs[#msgs].content end,\n"
+      "    {silent_tools = silent, callbacks = {on_tool_done = function(_, _, ok) success = ok end}})\n"
+      "  return success, result\n"
+      "end\n"
+      "assert(run('file_read', {path = '/repo/project/subdir/a.md'}))\n"
+      "assert(output:find('Reading: a.md — done', 1, true), output)\n"
+      "assert(run('file_read', {paths = {'a.md', 'two words.md', 'a.md'}, path = 'b.md'}))\n"
+      "assert(executed == 3 and output:find('Reading: a.md, two words.md, b.md — done', 1, true), output)\n"
+      "assert(not output:find('/repo/project/subdir/file_read', 1, true))\n"
+      "assert(run('file_read', {path = '/repo/project-other/a.md'}))\n"
+      "assert(output:find('Reading: /repo/project-other/a.md — done', 1, true), output)\n"
+      "assert(run('file_read', {paths = {'embedded:good', 'a.md'}}))\n"
+      "assert(output:find('Reading: embedded:good, a.md — done', 1, true), output)\n"
+      "local ok, result = run('file_read', {paths = {'a.md', 'missing.md'}})\n"
+      "assert(not ok and result:find('❌ not a tool failure', 1, true))\n"
+      "assert(output:find('— error: ❌ /repo/project/subdir/missing.md', 1, true), output)\n"
+      "assert(not output:find('— done', 1, true))\n"
+      "assert(not run('file_read', {path = 'embedded:missing'}))\n"
+      "assert(output:find('— error:', 1, true) and output:find('missing embedded asset', 1, true), output)\n"
+      "assert(not run('file_read', {paths = {}}))\n"
+      "assert(output:find('Reading: (no path) — error: Usage:', 1, true), output)\n"
+      "denied = '/repo/project/subdir/b.md'\n"
+      "assert(not run('file_read', {paths = {'a.md', 'b.md'}}))\n"
+      "assert(executed == 0 and output:find('Reading: a.md, b.md — denied', 1, true), output)\n"
+      "denied = nil\n"
+      "for _, operation in ipairs({'status', 'diff', 'changes'}) do\n"
+      "  assert(run('vcs', {operation = operation}))\n"
+      "  assert(output:find('Inspecting VCS: ' .. operation .. ' · workspace — done', 1, true), output)\n"
+      "end\n"
+      "assert(run('vcs', {operation = 'diff', path = '/repo/project/src/main.c'}))\n"
+      "assert(output:find('Inspecting VCS: diff · src/main.c — done', 1, true), output)\n"
+      "assert(run('vcs', {operation = 'changes', path = 'src/main.c'}))\n"
+      "assert(output:find('Inspecting VCS: changes · src/main.c — done', 1, true), output)\n"
+      "vcs_error = 'not a repository'\n"
+      "assert(not run('vcs', {operation = 'status'}))\n"
+      "assert(output:find('workspace — error: VCS error:', 1, true), output)\n"
+      "assert(output:find('not a repository', 1, true) and not output:find('— done', 1, true))\n"
+      "denied = '/repo/project'\n"
+      "assert(not run('vcs', {operation = 'status'}))\n"
+      "assert(executed == 0 and output:find('workspace — denied', 1, true), output)\n"
+      "assert(run('file_read', {path = 'a.md'}, true) and output == '')\n");
+  if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_external_file_permissions(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int rc = luaL_dofile(L, "test/test_external_file_permissions.lua");
+  if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_file_read_batch_checks_each_target(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -7446,6 +7542,8 @@ static MunitTest tests[] = {
     {"/provider_models_set_for_persists_active_provider",
      test_provider_models_set_for_persists_active_provider, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
+    {"/external_file_permissions", test_external_file_permissions, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/provider_models_set_publishes_effective_effort",
      test_provider_models_set_publishes_effective_effort, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
@@ -7539,6 +7637,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_read_permission_target_uses_path",
      test_file_read_permission_target_uses_path, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/read_and_vcs_status_describes_arguments",
+     test_read_and_vcs_status_describes_arguments, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/file_read_batch_checks_each_target",
      test_file_read_batch_checks_each_target, NULL, NULL,

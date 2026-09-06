@@ -59,7 +59,10 @@ function plugin.handler(ctx)
 	end
 
 	if tool_args then
-		local allowed, reason = workspace.model_path_allowed(path, "write", { allow_wiki_write = true })
+		local allowed, reason = workspace.model_path_allowed(path, "write", {
+			allow_wiki_write = true,
+			allow_outside_workspace = ctx.permission and ctx.permission.allow_outside_workspace,
+		})
 		if not allowed then
 			return ctx:replace("Cannot write " .. workspace.resolve_path(path) .. ": " .. reason)
 		end

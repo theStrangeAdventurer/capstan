@@ -69,7 +69,7 @@ end
 function plugin.handler(ctx)
 	local filenames, has_batch = requested_filenames(ctx)
 	if #filenames == 0 then
-		return "Usage: /file <filename...>"
+		return "Usage: /file <filename...>", nil, false
 	end
 
 	local function resolve_filename(filename)
@@ -117,7 +117,7 @@ function plugin.handler(ctx)
 				goto continue
 			end
 			local allowed, reason = workspace.model_path_allowed(filename, "read", {
-				allow_outside_workspace = not has_batch and ctx.permission and ctx.permission.allow_outside_workspace
+				allow_outside_workspace = ctx.permission and ctx.permission.allow_outside_workspace
 			})
 			if not allowed then
 				local resolved = workspace.resolve_path(filename)
@@ -190,12 +190,21 @@ function plugin.handler(ctx)
 	if #result_images > 0 then
 		llm_value = {text = llm_value, images = result_images}
 	end
+	-- Only reader-generated summaries determine failure, never file contents.
+	-- Keep all batch results for the model, but show the first actual error in UI.
+	if ctx.tool_args then
+		for _, part in ipairs(ui_parts) do
+			if part:sub(1, #"❌ ") == "❌ " then
+				return part, llm_value, false
+			end
+		end
+	end
 	return ctx:replace(ui_value, llm_value)
 end
 
 plugin.tool = {
 	name = "file_read",
-	description = "Read a local file, list a local directory, or read an embedded runtime asset from memory. For a Skill file starting with embedded:, pass the exact reference as path (e.g. embedded:skills/self-improvement/SKILL.md); do not resolve it on disk or search for a copy. Use path for one file; use paths to read several non-sensitive workspace files in one call. Use this for local file inspection instead of shell commands like cat, sed, or ls.",
+	description = "Read a local file, list a local directory, or read an embedded runtime asset from memory. For a Skill file starting with embedded:, pass the exact reference as path (e.g. embedded:skills/self-improvement/SKILL.md); do not resolve it on disk or search for a copy. Use path for one file; use paths to read several non-sensitive files in one call. External paths require permission. Use this for local file inspection instead of shell commands like cat, sed, or ls.",
 	parameters = {
 		type = "object",
 		properties = {
@@ -203,7 +212,7 @@ plugin.tool = {
 			paths = {
 				type = "array",
 				items = { type = "string" },
-				description = "Several non-sensitive paths inside the workspace to read together. Either path or paths must be provided."
+				description = "Several non-sensitive paths to read together. External paths require permission. Either path or paths must be provided."
 			}
 		},
 		minProperties = 1,

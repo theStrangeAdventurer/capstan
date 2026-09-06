@@ -30,7 +30,13 @@ working directory invalidates the inferred workspace root so it is recomputed.
   working directory, then their real paths are checked against the workspace
   root. `file_write` and `file_edit` additionally accept destinations inside the
   effective configured Wiki with ordinary write permissions and realpath confinement
-  to the Wiki root. This does not broaden shell or arbitrary external file access.
+  to the Wiki root. Explicit external file paths (including batch reads) are
+  also accepted after target-specific read/write permission succeeds. Workspace
+  is the default access boundary, not an unconditional prohibition: the user
+  can approve an external config edit in the same conversation. Internal
+  symlink escapes remain blocked; external creation rejects dangling links.
+  Benchmark workspace-only restrictions and explicit denies remain enforced.
+  Shell policy is unchanged.
 - Shell children `chdir(capstan.workdir)` before executing `/bin/sh -c`.
 - Shell permission rules use the workspace root as their stable target.
 - `--benchmark` rejects statically visible shell path arguments outside the

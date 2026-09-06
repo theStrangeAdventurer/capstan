@@ -20,9 +20,9 @@ both known fields is the compatibility trade-off.
   reads anything. A permission denial rejects the entire call, with no partial
   reads. Target/session grants retain the same meaning as for a single read.
   A batch is never replaced by a singular Wiki read.
-- Batch reads deliberately reject sensitive paths and paths outside the
-  workspace. Use the singular `path` form for those paths so the existing
-  target-specific permission prompt remains in force.
+- Batch reads deliberately reject sensitive paths; use singular `path` for
+  those files. External paths are supported in either form, with a separate
+  permission decision for every disk target before any reads.
 
 - Missing paths return `Usage: /file <filename...>`.
 - Absolute paths are used as provided.
@@ -57,6 +57,26 @@ both known fields is the compatibility trade-off.
   become structured user-message attachments and persist with the session.
 - Other binary files return a short size description instead of raw bytes, so
   invalid UTF-8 cannot corrupt the next provider request.
+
+## Tool status
+
+The dispatcher owns activity labels separately from permission targets. A read
+shows the actual requested paths in execution order, de-duplicated using the
+same helper as the reader and permission checks. Paths inside the current
+working directory are shown relatively; external paths remain absolute and
+`embedded:` references remain literal. A batch never displays a fabricated
+`<workdir>/file_read` path.
+
+The status ends with `— done`, `— denied`, or `— error: <reason>`. Missing
+arguments and reader failures (including partial batch failures) are failed
+tool calls, not successful calls containing error text. The first reader error
+is used for the short UI reason, while all batch results remain in model
+context. File contents cannot determine success or failure. Manual `/file`
+output is unchanged. Silent tool runs still suppress these UI messages.
+
+Dispatcher tests cover single/batch paths, external and embedded references,
+empty arguments, denial before any reads, partial failures, error-like file
+contents, and silent execution (`make test-http-lua`).
 
 ## Finder Popup
 
