@@ -1,6 +1,7 @@
 #include "visual.h"
 #include "linemap.h"
 #include "scroll.h"
+#include "text_layout.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -420,7 +421,19 @@ static int byte_offset_for_col(const char *str, int col) {
     return i;
 }
 
+int visual_column_at_cell(int line, int cell) {
+    const LineInfo *li = linemap_get(line);
+    if (!li || li->role == LINE_PADDING || !g_texts || li->msg_index >= (size_t)g_texts_count)
+        return 0;
+    return text_cell_to_char(g_texts[li->msg_index] + li->byte_start,
+                            (size_t)(li->byte_end - li->byte_start), cell);
+}
+
 void visual_yank(const char **msgs_texts, int msgs_count) {
+    if (!msgs_texts) {
+        msgs_texts = g_texts;
+        msgs_count = g_texts_count;
+    }
     int sl, sc, el, ec;
     visual_selection_range(&sl, &sc, &el, &ec);
 

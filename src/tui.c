@@ -8,6 +8,8 @@
 #include "http.h"
 #include "input.h"
 #include "linemap.h"
+#include "markdown.h"
+#include "text_layout.h"
 #include "mode.h"
 #include "permit_prompt.h"
 #include "plugins.h"
@@ -120,26 +122,6 @@ void init_tui(void) {
     }
   }
   curs_set(1);
-}
-
-static int count_message_lines(const char *text, int width) {
-  if (!text || !*text)
-    return 1;
-  int lines = 1;
-  int col = 0;
-  for (const char *p = text; *p; p++) {
-    if (*p == '\n') {
-      lines++;
-      col = 0;
-    } else if ((*p & 0xC0) != 0x80) {
-      col++;
-      if (col > width) {
-        lines++;
-        col = 1;
-      }
-    }
-  }
-  return lines;
 }
 
 static int spinner_tick = 0;
@@ -462,6 +444,67 @@ static void render_start_screen(WINDOW *win, int height, int width) {
   }
 }
 
+typedef struct {
+  MarkdownView markdown;
+  const char *text;
+} MessageView;
+static MessageView *g_views;
+static size_t g_view_count;
+static int g_view_width;
+static unsigned long g_view_revision;
+static int g_views_valid;
+
+typedef struct {
+  const char *text;
+  const ShellOutput *shell;
+  int tool, diff;
+} LiteralContext;
+
+static int literal_message_line(size_t start, size_t end, void *data) {
+  LiteralContext *ctx = data;
+  const char *line = ctx->text + start;
+  int len = (int)(end - start);
+  if (tool_status_starts_line(line, len)) ctx->tool = 1;
+  int next_diff = update_diff_state(ctx->diff, line, len);
+  int raw = ctx->tool || ctx->diff || next_diff ||
+            shell_output_contains(ctx->shell, start, end);
+  if (tool_status_ends_line(line, len)) ctx->tool = 0;
+  ctx->diff = next_diff;
+  return raw;
+}
+
+static int build_message_views(Messages *messages, int width) {
+  unsigned long revision = agent_messages_revision();
+  if (g_views_valid && revision == g_view_revision && width == g_view_width &&
+      messages->size == g_view_count) return 1;
+  MessageView *views = calloc(messages->size ? messages->size : 1, sizeof(*views));
+  if (!views) return 0;
+  for (size_t i = 0; i < messages->size; i++) {
+    Message *msg = messages->items[i];
+    const char *text = shell_output_build(&msg->shell_output, msg->text);
+    if (!text) text = "";
+    LiteralContext context = {.text = text, .shell = &msg->shell_output};
+    if (msg->role == MSG_AGENT &&
+        markdown_build(&views[i].markdown, text, width, literal_message_line, &context))
+      views[i].text = views[i].markdown.text;
+    else
+      views[i].text = text; /* Preserve raw output on allocation/parser failure. */
+  }
+  for (size_t i = 0; i < g_view_count; i++) markdown_free(&g_views[i].markdown);
+  free(g_views);
+  g_views = views;
+  g_view_count = messages->size;
+  g_view_width = width;
+  g_view_revision = revision;
+  g_views_valid = 1;
+  return 1;
+}
+
+static size_t message_source(size_t message, size_t offset) {
+  const MarkdownView *view = &g_views[message].markdown;
+  return view->text ? (offset < view->length ? view->source[offset] : MARKDOWN_NO_SOURCE) : offset;
+}
+
 static int g_shell_top = 0, g_shell_height = 0, g_shell_width = 0;
 static int g_shell_anchor_top = -1;
 static unsigned long g_shell_revision = 0;
@@ -480,13 +523,19 @@ int tui_handle_shell_mouse(int y, int x, int activate) {
   ShellOutput *output = &message->shell_output;
   if (!output->view) return 0;
   int col = x - MARGIN - MSG_PAD_H;
-  int bytes = count_visible_chars_to(output->view + line->byte_start, col);
+  const char *text = g_views[line->msg_index].text;
+  int chars = text_cell_to_char(text + line->byte_start,
+                               (size_t)(line->byte_end - line->byte_start), col);
+  int bytes = count_visible_chars_to(text + line->byte_start, chars);
   size_t offset = (size_t)line->byte_start + (size_t)bytes;
   if (offset >= (size_t)line->byte_end) return 0;
+  offset = message_source(line->msg_index, offset);
+  if (offset == MARKDOWN_NO_SOURCE) return 0;
   int block = shell_output_control(output, offset);
   if (block < 0) return 0;
   if (activate) {
     output->blocks[block].expanded = !output->blocks[block].expanded;
+    g_views_valid = 0;
     g_shell_anchor_top = g_shell_top;
     visual_exit();
     render_all();
@@ -521,15 +570,28 @@ void render_all(void) {
 
   Messages *msgs = get_messages();
 
-  int *line_counts = malloc(msgs->size * sizeof(int));
-  int total_lines = 0;
-
+  size_t count = msgs->size ? msgs->size : 1;
+  int *line_counts = calloc(count, sizeof(int));
+  const char **msgs_texts = malloc(count * sizeof(const char *));
+  int *msgs_roles = malloc(count * sizeof(int));
+  if (!line_counts || !msgs_texts || !msgs_roles || !build_message_views(msgs, text_w)) {
+    free(line_counts);
+    free(msgs_texts);
+    free(msgs_roles);
+    delwin(msg_win);
+    return;
+  }
   for (size_t i = 0; i < msgs->size; i++) {
-    Message *message = msgs->items[i];
-    const char *text = shell_output_build(&message->shell_output, message->text);
-    int l = count_message_lines(text, text_w);
-    line_counts[i] = l;
-    total_lines += l + 2;
+    msgs_texts[i] = g_views[i].text;
+    msgs_roles[i] = msgs->items[i]->role;
+  }
+  linemap_build(NULL, msgs_roles, (int)msgs->size, msgs_texts, text_w);
+  visual_set_texts(msgs_texts, (int)msgs->size);
+  free(msgs_roles);
+  int total_lines = linemap_count();
+  for (int line = 0; line < total_lines; line++) {
+    const LineInfo *info = linemap_get(line);
+    if (info->role != LINE_PADDING) line_counts[info->msg_index]++;
   }
   scroll_update_content(total_lines, msg_h);
   if (g_shell_anchor_top >= 0) {
@@ -537,17 +599,6 @@ void render_all(void) {
     g_shell_anchor_top = -1;
   }
   int scroll_offset = scroll_get();
-
-  const char **msgs_texts = malloc(msgs->size * sizeof(const char *));
-  int *msgs_roles = malloc(msgs->size * sizeof(int));
-  for (size_t i = 0; i < msgs->size; i++) {
-    msgs_texts[i] = msgs->items[i]->shell_output.view
-                        ? msgs->items[i]->shell_output.view : msgs->items[i]->text;
-    msgs_roles[i] = msgs->items[i]->role;
-  }
-  linemap_build(NULL, msgs_roles, (int)msgs->size, msgs_texts, text_w);
-  visual_set_texts(msgs_texts, (int)msgs->size);
-  free(msgs_roles);
 
   if (visual_cursor_visible()) {
     int vc_line, vc_col;
@@ -623,16 +674,7 @@ void render_all(void) {
     const char *logical_line_start = p;
     int in_tool_status_block = 0;
     for (int l = 0; l < line_counts[i]; l++) {
-      const char *line_end = p;
-      int col = 0;
-      while (*line_end && *line_end != '\n') {
-        int is_char = (*line_end & 0xC0) != 0x80;
-        if (is_char && col >= text_w)
-          break;
-        line_end++;
-        if (is_char)
-          col++;
-      }
+      const char *line_end = p + text_line_length(p, text_w);
 
       int current_diff_state = diff_state;
       int next_diff_state = diff_state;
@@ -650,8 +692,10 @@ void render_all(void) {
       }
 
       if (global_line >= top_line && win_row < msg_h) {
-        int is_shell_output = shell_output_contains(&msg->shell_output,
-            (size_t)(p - display_text), (size_t)(line_end - display_text));
+        size_t source_start = message_source(i, (size_t)(p - display_text));
+        size_t source_last = line_end > p ? message_source(i, (size_t)(line_end - display_text - 1)) : source_start;
+        int is_shell_output = source_start != MARKDOWN_NO_SOURCE && source_last != MARKDOWN_NO_SOURCE &&
+            shell_output_contains(&msg->shell_output, source_start, source_last + 1);
         int is_tool_status = !is_user && in_tool_status_block && !is_shell_output;
         int diff_pair =
             !is_shell_output && !is_user &&
@@ -674,14 +718,31 @@ void render_all(void) {
           mvwhline(msg_win, win_row, 0, ' ', inner_w);
         if (is_shell_output)
           wattrset(msg_win, dim_gray_attr());
-        mvwaddnstr(msg_win, win_row, MSG_PAD_H, p, line_end - p);
+        wmove(msg_win, win_row, MSG_PAD_H);
+        const MarkdownView *md = &g_views[i].markdown;
+        int base_attrs = getattrs(msg_win);
+        for (const char *run = p; run < line_end;) {
+          size_t offset = (size_t)(run - display_text);
+          int style = md->text ? md->styles[offset] : 0;
+          const char *end = run + 1;
+          while (end < line_end && (!md->text || md->styles[end - display_text] == style)) end++;
+          int attrs = base_attrs;
+          if (!is_shell_output && !is_tool_status) {
+            if (style & MARKDOWN_BOLD) attrs = (attrs & ~A_DIM) | A_BOLD;
+            if (style & MARKDOWN_ITALIC) attrs |= A_ITALIC;
+          }
+          wattrset(msg_win, attrs);
+          waddnstr(msg_win, run, (int)(end - run));
+          run = end;
+        }
+        wattrset(msg_win, base_attrs);
         if (is_shell_output) {
           /* Style only tagged controls, including markers split by wrapping. */
           for (const char *c = p; c < line_end; c++) {
-            if (shell_output_control(&msg->shell_output,
-                                     (size_t)(c - display_text)) < 0)
+            size_t source = message_source(i, (size_t)(c - display_text));
+            if (source == MARKDOWN_NO_SOURCE || shell_output_control(&msg->shell_output, source) < 0)
               continue;
-            int offset = count_visible_chars(p, (int)(c - p));
+            int offset = text_columns(p, (size_t)(c - p));
             mvwchgat(msg_win, win_row, MSG_PAD_H + offset, 1,
                      A_BOLD | (g_dim_color_pair ? 0 : A_DIM),
                      g_dim_color_pair, NULL);
@@ -712,8 +773,10 @@ void render_all(void) {
           if (h_end > line_char_count) h_end = line_char_count;
 
           if (h_end > h_start) {
-            mvwchgat(msg_win, win_row, h_start + MSG_PAD_H,
-                     h_end - h_start, A_REVERSE, is_user ? 5 : 0, NULL);
+            int start_cell = text_char_to_cell(p, (size_t)(line_end - p), h_start);
+            int end_cell = text_char_to_cell(p, (size_t)(line_end - p), h_end);
+            mvwchgat(msg_win, win_row, start_cell + MSG_PAD_H,
+                     end_cell - start_cell, A_REVERSE, is_user ? 5 : 0, NULL);
           }
         }
 
@@ -759,9 +822,13 @@ void render_all(void) {
     visual_get_cursor(&vc_line, &vc_col);
     int vis_row = vc_line - top_line;
     if (vis_row >= 0 && vis_row < msg_h) {
-      wattron(msg_win, A_REVERSE);
-      mvwaddch(msg_win, vis_row, vc_col + MSG_PAD_H, ' ');
-      wattroff(msg_win, A_REVERSE);
+      const LineInfo *line = linemap_get(vc_line);
+      if (line && line->role != LINE_PADDING) {
+        const char *text = msgs_texts[line->msg_index] + line->byte_start;
+        int cell = text_char_to_cell(text, (size_t)(line->byte_end - line->byte_start), vc_col);
+        if (cell < text_w) mvwchgat(msg_win, vis_row, cell + MSG_PAD_H, 1,
+                                  A_REVERSE, line->role == MSG_USER ? 5 : 0, NULL);
+      }
     }
   }
 

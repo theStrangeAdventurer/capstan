@@ -11,6 +11,7 @@ extern MunitSuite input_suite;
 extern MunitSuite input_history_suite;
 extern MunitSuite jsonl_suite;
 extern MunitSuite linemap_suite;
+extern MunitSuite markdown_suite;
 extern MunitSuite mode_suite;
 extern MunitSuite permit_logic_suite;
 extern MunitSuite permit_prompt_suite;
@@ -45,6 +46,7 @@ int main(int argc, char *argv[]) {
     input_history_suite,
     jsonl_suite,
     linemap_suite,
+    markdown_suite,
     mode_suite,
     permit_logic_suite,
     permit_prompt_suite,

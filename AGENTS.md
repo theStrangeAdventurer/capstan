@@ -307,6 +307,7 @@ Feature specs:
 - [Start screen](specs/start-screen.md)
 - [Subagents](specs/subagents.md)
 - [Terminal runtime](specs/terminal-runtime.md)
+- [Markdown rendering](specs/markdown-rendering.md)
 - [Workspace directory](specs/workspace-directory.md)
 - [VCS tool](specs/vcs-tool.md)
 - [Wiki](specs/wiki.md)

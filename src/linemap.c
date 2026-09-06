@@ -1,4 +1,5 @@
 #include "linemap.h"
+#include "text_layout.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -46,17 +47,7 @@ void linemap_build(void **msgs_data, int *msgs_roles, int msgs_count,
             const char *p = text;
             while (1) {
                 const char *line_start = p;
-                int col = 0;
-                const char *line_end = p;
-
-                while (*line_end && *line_end != '\n') {
-                    int is_char = (*line_end & 0xC0) != 0x80;
-                    if (is_char && col >= width)
-                        break;
-                    line_end++;
-                    if (is_char)
-                        col++;
-                }
+                const char *line_end = p + text_line_length(p, width);
 
                 int byte_start = (int)(line_start - text);
                 int byte_end = (int)(line_end - text);

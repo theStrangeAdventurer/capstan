@@ -18,7 +18,9 @@ void visual_move_line_end(void);
 void visual_move_word_forward(void);
 void visual_move_word_backward(void);
 void visual_set_texts(const char **texts, int count);
+/* NULL uses the current display projection, shared with navigation. */
 void visual_yank(const char **msgs_texts, int msgs_count);
+int visual_column_at_cell(int line, int cell);
 void visual_get_cursor(int *line, int *col);
 void visual_set_cursor_line(int line);
 /* Positive lines scroll toward older messages; keep cursor inside viewport. */

@@ -205,7 +205,7 @@ static int mouse_to_visual_position(const MEVENT *event, int *out_line,
   if (out_line)
     *out_line = line;
   if (out_col)
-    *out_col = col;
+    *out_col = visual_column_at_cell(line, col);
   return 1;
 }
 
@@ -225,18 +225,7 @@ static void toggle_focus(void) {
 }
 
 static void copy_active_selection(void) {
-  Messages *msgs = get_messages();
-  if (!msgs || msgs->size == 0)
-    return;
-
-  const char **texts = malloc(msgs->size * sizeof(const char *));
-  if (!texts)
-    return;
-  for (size_t i = 0; i < msgs->size; i++)
-    texts[i] = msgs->items[i]->shell_output.view
-                   ? msgs->items[i]->shell_output.view : msgs->items[i]->text;
-  visual_yank(texts, (int)msgs->size);
-  free(texts);
+  visual_yank(NULL, 0);
 }
 
 static void flash_copy_active_selection(void) {
