@@ -1,6 +1,7 @@
 #ifndef SESSION_H
 #define SESSION_H
 
+#include "shell_output.h"
 #include <stddef.h>
 #include <time.h>
 
@@ -23,6 +24,7 @@ typedef struct {
   char *raw_text;
   SessionImage *images;
   size_t image_count;
+  ShellOutput shell_output;
 } SessionMessage;
 
 typedef struct {

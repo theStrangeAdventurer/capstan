@@ -167,7 +167,7 @@ static MunitResult test_failed_active_write_keeps_current_session(
            session_manager_active_title());
 
   SessionMessage target_messages[] = {
-      {SESSION_ROLE_USER, "target message", "target message", NULL, 0},
+      {SESSION_ROLE_USER, "target message", "target message", NULL, 0, {0}},
   };
   Session target = {0};
   snprintf(target.id, sizeof(target.id), "target-session");
@@ -236,6 +236,15 @@ static MunitResult test_selected_session_create_and_resume(
   agent_enable_shell_output(1);
   message_tag_shell_output(get_messages()->items[0], 0);
   munit_assert_size(get_messages()->items[0]->shell_output.count, ==, 1);
+  char output[1024] = "⚙ shell\n\n[exit 0]\n";
+  for (int i = 0; i < 25; i++) strcat(output, "строка\n");
+  char *shell_text = my_strdup(output);
+  add_message(shell_text, my_strdup("model context"), MSG_AGENT);
+  Message *shell_message = get_messages()->items[1];
+  message_tag_shell_output(shell_message, strlen("⚙ shell\n\n"));
+  shell_message->shell_output.blocks[0].expanded = 1;
+  munit_assert_not_null(strstr(shell_output_build(&shell_message->shell_output,
+                                                 shell_message->text), "[-]"));
   munit_assert_true(session_manager_save());
   session_manager_shutdown();
   clear_messages();
@@ -244,9 +253,23 @@ static MunitResult test_selected_session_create_and_resume(
       "/repo/selected-session", "custom key"));
   munit_assert_string_equal(session_manager_active_id(), "custom key");
   Messages *messages = get_messages();
-  munit_assert_size(messages->size, ==, 1);
+  munit_assert_size(messages->size, ==, 2);
   munit_assert_string_equal(messages->items[0]->text, "persisted message");
-  munit_assert_size(messages->items[0]->shell_output.count, ==, 0);
+  munit_assert_size(messages->items[0]->shell_output.count, ==, 1);
+  shell_message = messages->items[1];
+  munit_assert_string_equal(shell_message->text, output);
+  munit_assert_string_equal(shell_message->raw_text, "model context");
+  ShellOutput *restored = &shell_message->shell_output;
+  munit_assert_size(restored->count, ==, 1);
+  munit_assert_false(restored->blocks[0].expanded);
+  const char *view = shell_output_build(restored, shell_message->text);
+  munit_assert_not_null(strstr(view, "[+] 25 lines"));
+  munit_assert_null(strstr(view, "строка"));
+  munit_assert_int(shell_output_control(restored, restored->blocks[0].control_start), ==, 0);
+  munit_assert_true(shell_output_contains(restored, restored->blocks[0].view_start,
+                                        restored->blocks[0].view_end));
+  restored->blocks[0].expanded = 1;
+  munit_assert_not_null(strstr(shell_output_build(restored, shell_message->text), "строка"));
   agent_enable_shell_output(0);
   session_manager_shutdown();
   clear_messages();

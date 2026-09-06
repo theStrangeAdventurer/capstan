@@ -503,6 +503,12 @@ int session_save(const Session *session) {
                  text, raw) >= 0;
     free(text);
     free(raw);
+    for (size_t block_idx = 0; ok && block_idx < message->shell_output.count;
+         block_idx++) {
+      const ShellOutputBlock *block = &message->shell_output.blocks[block_idx];
+      ok = fprintf(f, "{\"type\":\"shell_output\",\"start\":%zu,\"end\":%zu}\n",
+                   block->start, block->end) >= 0;
+    }
     for (size_t image_idx = 0; ok && image_idx < message->image_count;
          image_idx++) {
       const SessionImage *image = &message->images[image_idx];
@@ -606,6 +612,7 @@ void session_free(Session *session) {
       free(session->messages[i].images[image_idx].data);
     }
     free(session->messages[i].images);
+    shell_output_free(&session->messages[i].shell_output);
   }
   free(session->messages);
   memset(session, 0, sizeof(*session));
@@ -700,6 +707,19 @@ int session_load(const char *id, Session *session) {
       break;
     }
     char *type = json_field_string(line, "type");
+    if (type && strcmp(type, "shell_output") == 0) {
+      long long start = json_field_integer(line, "start", -1);
+      long long end = json_field_integer(line, "end", -1);
+      SessionMessage *message = session->message_count > 0
+          ? &session->messages[session->message_count - 1] : NULL;
+      ok = image_complete && message && start >= 0 && end > start &&
+           (unsigned long long)end <= strlen(message->text) &&
+           shell_output_add(&message->shell_output, message->text,
+                            (size_t)start, (size_t)end);
+      free(type);
+      free(line);
+      continue;
+    }
     if (type && strcmp(type, "image") == 0) {
       long long image_index = json_field_integer(line, "index", -1);
       long long final_chunk = json_field_integer(line, "final", -1);

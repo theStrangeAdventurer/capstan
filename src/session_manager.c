@@ -47,6 +47,7 @@ static int snapshot_messages(void) {
     SessionMessage *target = &g_active.messages[g_active.message_count++];
     target->role = source->role == MSG_USER ? SESSION_ROLE_USER
                                             : SESSION_ROLE_ASSISTANT;
+    target->shell_output = source->shell_output; /* Borrowed for serialization. */
     target->text = source->text;
     target->raw_text = source->raw_text ? source->raw_text : source->text;
     if (source->image_count > 0) {
@@ -110,6 +111,12 @@ static void install_loaded(Session *loaded) {
     Message *installed = messages && messages->size > previous_size
                              ? messages->items[messages->size - 1]
                              : NULL;
+    if (installed) {
+      installed->shell_output = source->shell_output;
+      source->shell_output = (ShellOutput){0};
+    } else {
+      shell_output_free(&source->shell_output);
+    }
     for (size_t image_idx = 0; installed && image_idx < source->image_count;
          image_idx++)
       message_add_image(installed, source->images[image_idx].mime_type,

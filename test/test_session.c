@@ -50,9 +50,9 @@ static MunitResult test_round_trip(const MunitParameter params[], void *data) {
   SessionImage images[] = {{"image/png", "YWJj"}};
   SessionMessage messages[] = {
       {SESSION_ROLE_USER, "привет\n\"мир\"", "raw\\user\ncontext", images,
-       1},
-      {SESSION_ROLE_ASSISTANT, "ответ", "ответ", NULL, 0},
-      {SESSION_ROLE_ASSISTANT, "", "", NULL, 0},
+       1, {0}},
+      {SESSION_ROLE_ASSISTANT, "ответ", "ответ", NULL, 0, {0}},
+      {SESSION_ROLE_ASSISTANT, "", "", NULL, 0, {0}},
   };
   session.messages = messages;
   session.message_count = 3;
@@ -160,7 +160,7 @@ static MunitResult test_oversized_line_fails_closed(
   Session session;
   munit_assert_true(session_create(&session));
   SessionMessage messages[] = {
-      {SESSION_ROLE_USER, "valid prefix", "valid prefix", NULL, 0},
+      {SESSION_ROLE_USER, "valid prefix", "valid prefix", NULL, 0, {0}},
   };
   session.messages = messages;
   session.message_count = 1;
@@ -199,7 +199,7 @@ static MunitResult test_incomplete_image_chunk_fails_closed(
   Session session;
   munit_assert_true(session_create(&session));
   SessionMessage messages[] = {
-      {SESSION_ROLE_USER, "image", "image", NULL, 0},
+      {SESSION_ROLE_USER, "image", "image", NULL, 0, {0}},
   };
   session.messages = messages;
   session.message_count = 1;
@@ -383,7 +383,42 @@ static MunitResult test_load_or_create_named(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_shell_ranges(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  munit_assert_true(session_store_init("/repo/shell-ranges"));
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/ranges.jsonl", session_store_dir());
+  const char *ranges[] = {
+      "{\"type\":\"shell_output\",\"start\":0,\"end\":5}",
+      "{\"type\":\"shell_output\",\"start\":-1,\"end\":5}",
+      "{\"type\":\"shell_output\",\"start\":0,\"end\":6}",
+      "{\"type\":\"shell_output\",\"start\":0.5,\"end\":5}",
+      "{\"type\":\"shell_output\",\"start\":5,\"end\":5}",
+      ("{\"type\":\"shell_output\",\"start\":0,\"end\":5}\n"
+       "{\"type\":\"shell_output\",\"start\":1,\"end\":5}"),
+  };
+  for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
+    FILE *f = fopen(path, "wb");
+    munit_assert_not_null(f);
+    fputs("{\"version\":1,\"id\":\"ranges\",\"title\":\"Ranges\"}\n"
+          "{\"role\":\"assistant\",\"text\":\"hello\",\"raw_text\":\"raw\"}\n", f);
+    fputs(ranges[i], f);
+    munit_assert_int(fclose(f), ==, 0);
+    Session loaded;
+    munit_assert_int(session_load("ranges", &loaded), ==, i == 0);
+    if (i == 0) {
+      munit_assert_size(loaded.messages[0].shell_output.count, ==, 1);
+      munit_assert_true(session_save(&loaded));
+    } else {
+      munit_assert_null(loaded.messages);
+    }
+    session_free(&loaded);
+  }
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/shell_ranges", test_shell_ranges, setup, teardown, MUNIT_TEST_OPTION_NONE, NULL},
     {"/round_trip", test_round_trip, setup, teardown, MUNIT_TEST_OPTION_NONE,
      NULL},
     {"/workspace_and_active", test_workspace_and_active, setup, teardown,

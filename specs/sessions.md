@@ -59,6 +59,16 @@ The first JSONL row contains versioned metadata. Later rows contain `role`,
 model context distinct. Files are replaced atomically through a temporary file
 and `rename()`.
 
+Explicit shell-output ranges are stored as `type: "shell_output"` rows following
+ their message, with zero-based byte offsets `start` (inclusive) and `end`
+(exclusive) into `text`. Loading validates ordered, non-overlapping, non-empty
+ranges within the message and rebuilds display metadata using `shell_output_add`.
+Long outputs reopen collapsed with clickable `[+]` controls and shell styling;
+expansion state and projected display text are never saved. Legacy messages
+without ranges stay readable as plain text; shell-looking text is not guessed.
+Malformed range rows fail closed. Tests cover range validation and a session
+manager round trip from expanded output to a collapsed, clickable restored block.
+
 Session directories use Unix mode `0700`: only the owner can list, modify, or
 enter them. Session and `active` files use `0600`: only the owner can read or
 write them.

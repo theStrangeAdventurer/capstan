@@ -96,8 +96,10 @@ text untagged and complete. No first-newline heuristic is used: multiline
 commands and heredocs containing `[exit ...]` cannot hide the actual status.
 The model dispatcher ignores this metadata; its live range already excludes
 command text. Ordinary messages,
-other tools and restored sessions are never inferred to be shell results from
-text. Range metadata is not persisted or sent to models, logs, CLI or ACP.
+other tools and legacy sessions are never inferred to be shell results from
+text. Explicit byte ranges are persisted in sessions and restored with long
+outputs collapsed by default; display caches and expansion state are transient.
+Range metadata is not sent to models, logs, CLI or ACP.
 
 The TUI renders results and status lines immediately, with no reveal timing,
 highlight or animation-driven redraws. `make test-http-lua` covers live range
