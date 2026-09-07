@@ -7,6 +7,7 @@
 
 #define SESSION_ID_SIZE 64
 #define SESSION_TITLE_SIZE 96
+#define SESSION_TASKS_MAX_BYTES (128 * 1024)
 
 typedef enum {
   SESSION_ROLE_USER,
@@ -35,6 +36,9 @@ typedef struct {
   time_t updated_at;
   SessionMessage *messages;
   size_t message_count;
+  char *tasks_json; /* Owned opaque JSON; NULL means no task plan. */
+  int tasks_view; /* 0: config default, 1: collapsed, 2: expanded. */
+  int tasks_scroll; /* Session-local wrapped row offset (not persisted). */
 } Session;
 
 typedef struct {

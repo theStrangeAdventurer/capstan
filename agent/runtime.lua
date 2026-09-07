@@ -9,6 +9,7 @@ local utf8_sanitize = require("agent.utf8")
 local stream = require("agent.stream")
 local tokens = require("agent.tokens")
 local tools_runtime = require("agent.tools")
+local tasks_runtime = require("agent.tasks")
 local ui = require("agent.ui")
 local workspace = require("agent.workspace")
 
@@ -455,6 +456,7 @@ function M.run(opts, callbacks)
     if opts.update_usage ~= false then
         agent.set_usage(0, 0, 0, active.context_limit or 0)
     end
+    local task_message
     local msgs = build_messages(opts.messages or {}, profile)
     local messages_ctx = hooks.run("before_messages", {
         runtime = M,
@@ -791,6 +793,7 @@ function M.run(opts, callbacks)
             end
         end
 
+        task_message = tasks_runtime.refresh(current_msgs, task_message, opts.depth)
         local prompt_estimate = tokens.estimate_messages_tokens(current_msgs, tools)
         if opts.update_usage ~= false then
             agent.set_usage(

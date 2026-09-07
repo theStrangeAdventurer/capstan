@@ -10,6 +10,13 @@ int session_manager_init_selected(const char *workspace_root,
 int session_manager_new(void);
 int session_manager_switch(const char *id);
 int session_manager_save(void);
+/* Borrow the CLI-owned session until detached with NULL. */
+void session_manager_tasks_session(Session *session);
+const char *session_manager_tasks(void);
+int *session_manager_tasks_scroll(void);
+int session_manager_tasks_view(void);
+int session_manager_set_tasks_view(int expanded);
+int session_manager_set_tasks(const char *json);
 void session_manager_tick(void);
 int session_manager_list(SessionInfo **items, size_t *count);
 const char *session_manager_active_id(void);

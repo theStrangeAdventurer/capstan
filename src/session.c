@@ -367,6 +367,7 @@ static char *json_field_string(const char *line, const char *field) {
       decoded = value <= 0x7f ? (char)value : '?';
       p += 4;
     }
+    if (decoded == '\0' && strcmp(field, "tasks_json") == 0) goto fail;
     if (!append_char(&out, &len, &cap, decoded)) goto fail;
     p++;
   }
@@ -463,7 +464,9 @@ int session_create_named(Session *session, const char *id) {
 }
 
 int session_save(const Session *session) {
-  if (!session || !session_id_valid(session->id))
+  if (!session || !session_id_valid(session->id) ||
+      (session->tasks_json &&
+       strlen(session->tasks_json) > SESSION_TASKS_MAX_BYTES))
     return 0;
   char path[PATH_MAX], temp[PATH_MAX];
   if (!session_path(session->id, path, sizeof(path)))
@@ -482,12 +485,15 @@ int session_save(const Session *session) {
   }
   char *id = json_escape(session->id);
   char *title = json_escape(session->title);
-  int ok = id && title &&
+  char *tasks = session->tasks_json ? json_escape(session->tasks_json) : NULL;
+  int ok = id && title && (!session->tasks_json || tasks) &&
            fprintf(f, "{\"version\":%d,\"id\":%s,\"title\":%s,"
-                      "\"title_generated\":%d,\"created_at\":%lld,\"updated_at\":%lld}\n",
+                      "\"title_generated\":%d,\"created_at\":%lld,\"updated_at\":%lld,\"tasks_view\":%d%s%s}\n",
                    SESSION_VERSION, id, title, session->title_generated,
                    (long long)session->created_at,
-                   (long long)session->updated_at) >= 0;
+                   (long long)session->updated_at, session->tasks_view,
+                   tasks ? ",\"tasks_json\":" : "", tasks ? tasks : "") >= 0;
+  free(tasks);
   free(id);
   free(title);
   for (size_t i = 0; ok && i < session->message_count; i++) {
@@ -544,8 +550,8 @@ int session_save(const Session *session) {
       free(mime);
     }
   }
-  if (ok && fflush(f) == 0)
-    ok = fsync(fd) == 0;
+  if (ok)
+    ok = fflush(f) == 0 && fsync(fd) == 0;
   if (fclose(f) != 0)
     ok = 0;
   if (ok)
@@ -615,6 +621,7 @@ void session_free(Session *session) {
     shell_output_free(&session->messages[i].shell_output);
   }
   free(session->messages);
+  free(session->tasks_json);
   memset(session, 0, sizeof(*session));
 }
 
@@ -684,6 +691,14 @@ int session_load(const char *id, Session *session) {
         (int)json_field_integer(line, "title_generated", 0);
     session->created_at = (time_t)json_field_integer(line, "created_at", 0);
     session->updated_at = (time_t)json_field_integer(line, "updated_at", 0);
+  }
+  long long tasks_view = json_field_integer(line, "tasks_view", 0);
+  session->tasks_view = tasks_view == 1 || tasks_view == 2 ? (int)tasks_view : 0;
+  if (ok && session_json_field(line, "tasks_json")) {
+    session->tasks_json = json_field_string(line, "tasks_json");
+    if (!session->tasks_json ||
+        strlen(session->tasks_json) > SESSION_TASKS_MAX_BYTES)
+      ok = 0;
   }
   free(stored_id);
   free(title);

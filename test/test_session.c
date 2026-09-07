@@ -417,7 +417,60 @@ static MunitResult test_shell_ranges(const MunitParameter params[], void *data) 
   return MUNIT_OK;
 }
 
+static MunitResult test_tasks_persistence(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  munit_assert_true(session_store_init("/repo/tasks"));
+  Session session, loaded;
+  munit_assert_true(session_create(&session));
+  /* An omitted optional header is the legacy empty state. */
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_null(loaded.tasks_json);
+  munit_assert_int(loaded.tasks_view, ==, 0);
+  session_free(&loaded);
+  for (int view = 0; view <= 3; view++) {
+    session.tasks_view = view;
+    session.tasks_scroll = 17;
+    munit_assert_true(session_save(&session));
+    munit_assert_true(session_load(session.id, &loaded));
+    munit_assert_int(loaded.tasks_view, ==, view == 3 ? 0 : view);
+    munit_assert_int(loaded.tasks_scroll, ==, 0);
+    session_free(&loaded);
+  }
+  const char *plan = "[{\"title\":\"готово\\next\",\"done\":false}]\n\t\001";
+  session.tasks_json = malloc(strlen(plan) + 1);
+  munit_assert_not_null(session.tasks_json);
+  strcpy(session.tasks_json, plan);
+  munit_assert_true(session_save(&session));
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_string_equal(loaded.tasks_json, plan);
+  session_free(&loaded);
+  munit_assert_null(loaded.tasks_json);
+  free(session.tasks_json);
+  session.tasks_json = malloc(SESSION_TASKS_MAX_BYTES + 2);
+  munit_assert_not_null(session.tasks_json);
+  memset(session.tasks_json, 'x', SESSION_TASKS_MAX_BYTES + 1);
+  session.tasks_json[SESSION_TASKS_MAX_BYTES + 1] = '\0';
+  munit_assert_false(session_save(&session));
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_string_equal(loaded.tasks_json, plan);
+  session_free(&loaded);
+  session.tasks_json[SESSION_TASKS_MAX_BYTES] = '\0';
+  munit_assert_true(session_save(&session));
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_size(strlen(loaded.tasks_json), ==, SESSION_TASKS_MAX_BYTES);
+  session_free(&loaded);
+  session.tasks_json[0] = '\0';
+  munit_assert_true(session_save(&session));
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_string_equal(loaded.tasks_json, "");
+  session_free(&loaded);
+  session_free(&session);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/tasks_persistence", test_tasks_persistence, setup, teardown,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_ranges", test_shell_ranges, setup, teardown, MUNIT_TEST_OPTION_NONE, NULL},
     {"/round_trip", test_round_trip, setup, teardown, MUNIT_TEST_OPTION_NONE,
      NULL},

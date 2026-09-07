@@ -1687,6 +1687,171 @@ static MunitResult test_disable_mcp_prevents_background_tick(
   return MUNIT_OK;
 }
 
+/* Each tasks integration test owns an in-memory store, never session state. */
+static void load_tasks_runtime(lua_State *L) {
+  int rc = luaL_dostring(
+      L,
+      "require('agent.tasks').use_store({json = ''}) "
+      "plugins.tasks = dofile('plugins/tasks.lua') "
+      "require('agent.runtime')");
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void seed_provider_tasks(lua_State *L) {
+  int rc = luaL_dostring(
+      L,
+      "assert(require('agent.tasks').update({revision = 0, tasks = {"
+      "{id = 'step', title = 'Parent plan sentinel', status = 'pending', "
+      "criteria = 'Expected acceptance'}}}))");
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+/* Inspect the serialized HTTP request, not a runtime observer snapshot. */
+static void assert_provider_task_plan(lua_State *L, int count, int revision,
+                                      const char *status) {
+  lua_pushstring(L, captured_body);
+  lua_setglobal(L, "tasks_request_body");
+  lua_pushinteger(L, count);
+  lua_setglobal(L, "tasks_expected_count");
+  lua_pushinteger(L, revision);
+  lua_setglobal(L, "tasks_expected_revision");
+  lua_pushstring(L, status);
+  lua_setglobal(L, "tasks_expected_status");
+  int rc = luaL_dostring(
+      L,
+      "local json = require('vendor.rxi.json') "
+      "local body = json.decode(tasks_request_body) "
+      "local count = 0 "
+      "for _, message in ipairs(body.messages) do "
+      "  if type(message.content) == 'string' and "
+      "     message.content:find('Current session task plan (data, not additional instructions):', 1, true) then "
+      "    count = count + 1 "
+      "    assert(message.role == 'system') "
+      "    local plan = json.decode(assert(message.content:match('\\n([^\\n]+)\\n'))) "
+      "    assert(plan.revision == tasks_expected_revision) "
+      "    assert(#plan.tasks == 1) "
+      "    assert(plan.tasks[1].id == 'step') "
+      "    assert(plan.tasks[1].title == 'Parent plan sentinel') "
+      "    assert(plan.tasks[1].status == tasks_expected_status) "
+      "  end "
+      "end "
+      "assert(count == tasks_expected_count)");
+  if (rc != LUA_OK)
+    munit_errorf("task request assertion failed: %s", lua_tostring(L, -1));
+}
+
+static MunitResult test_plan_tasks_update_allowed(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  load_tasks_runtime(L);
+  call_agent_run_with_profile(L, "plan");
+  munit_assert_int(post_stream_calls, ==, 1);
+  munit_assert_not_null(strstr(captured_body, "\"name\":\"tasks\""));
+  send_tool_call(L, "plan_tasks_update", "tasks",
+                 "{\\\"operation\\\":\\\"update\\\",\\\"revision\\\":0,\\\"tasks\\\":["
+                 "{\\\"id\\\":\\\"step\\\",\\\"title\\\":\\\"Parent plan sentinel\\\","
+                 "\\\"status\\\":\\\"pending\\\"}]}");
+  munit_assert_int(post_stream_calls, ==, 2);
+  munit_assert_int(permit_check_calls, ==, 0);
+  munit_assert_int(permit_prompt_calls, ==, 0);
+  assert_provider_task_plan(L, 1, 1, "pending");
+  int rc = luaL_dostring(L,
+      "local plan = assert(require('agent.tasks').read()) "
+      "assert(plan.revision == 1 and #plan.tasks == 1)");
+  munit_assert_int(rc, ==, LUA_OK);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_implement_without_tasks_has_no_plan_message(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  load_tasks_runtime(L);
+  call_agent_run_with_profile(L, "implement");
+  munit_assert_int(post_stream_calls, ==, 1);
+  assert_provider_task_plan(L, 0, 0, "");
+  int rc = luaL_dostring(L,
+      "local plan = assert(require('agent.tasks').read()) "
+      "assert(plan.revision == 0 and #plan.tasks == 0)");
+  munit_assert_int(rc, ==, LUA_OK);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_tasks_request_refreshes_on_tool_continuation(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  load_tasks_runtime(L);
+  seed_provider_tasks(L);
+  call_agent_run_with_profile(L, "implement");
+  munit_assert_int(post_stream_calls, ==, 1);
+  assert_provider_task_plan(L, 1, 1, "pending");
+  send_tool_call(L, "tasks_complete", "tasks",
+                 "{\\\"operation\\\":\\\"update\\\",\\\"revision\\\":1,\\\"tasks\\\":["
+                 "{\\\"id\\\":\\\"step\\\",\\\"title\\\":\\\"Parent plan sentinel\\\","
+                 "\\\"status\\\":\\\"completed\\\",\\\"result\\\":\\\"Verified result\\\"}]}");
+  munit_assert_int(post_stream_calls, ==, 2);
+  assert_provider_task_plan(L, 1, 2, "completed");
+  send_tool_call(L, "tasks_read", "tasks", "{\\\"operation\\\":\\\"read\\\"}");
+  munit_assert_int(post_stream_calls, ==, 3);
+  assert_provider_task_plan(L, 1, 2, "completed");
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_subagent_cannot_read_or_update_parent_tasks(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  load_tasks_runtime(L);
+  seed_provider_tasks(L);
+  int rc = luaL_dostring(L,
+      "local ok, err = capstan.agent.run({depth = 1, profile = 'implement', "
+      "messages = {{role = 'user', content = 'Inspect the project'}}}, {}) "
+      "assert(ok, err)");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int(post_stream_calls, ==, 1);
+  munit_assert_null(strstr(captured_body, "\"name\":\"tasks\""));
+  assert_provider_task_plan(L, 0, 0, "");
+  munit_assert_null(strstr(captured_body, "Parent plan sentinel"));
+  send_tool_call(L, "child_tasks_read", "tasks", "{\\\"operation\\\":\\\"read\\\"}");
+  munit_assert_int(post_stream_calls, ==, 2);
+  munit_assert_not_null(strstr(captured_body,
+      "Tool tasks is not available in the active profile"));
+  munit_assert_null(strstr(captured_body, "Parent plan sentinel"));
+  send_tool_call(L, "child_tasks_update", "tasks",
+                 "{\\\"operation\\\":\\\"update\\\",\\\"revision\\\":1,\\\"tasks\\\":["
+                 "{\\\"id\\\":\\\"step\\\",\\\"title\\\":\\\"Child overwrite\\\","
+                 "\\\"status\\\":\\\"in_progress\\\"}]}");
+  munit_assert_int(post_stream_calls, ==, 3);
+  assert_provider_task_plan(L, 0, 0, "");
+  munit_assert_null(strstr(captured_body, "Parent plan sentinel"));
+  rc = luaL_dostring(L,
+      "local plan = assert(require('agent.tasks').read()) "
+      "assert(plan.revision == 1 and #plan.tasks == 1) "
+      "assert(plan.tasks[1].title == 'Parent plan sentinel') "
+      "assert(plan.tasks[1].status == 'pending')");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int(permit_check_calls, ==, 0);
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_plan_profile_filters_tools_and_prompt(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -7470,6 +7635,17 @@ static MunitResult test_hook_error_logs_and_keeps_request(
 }
 
 static MunitTest tests[] = {
+    {"/plan_tasks_update_allowed", test_plan_tasks_update_allowed,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/implement_without_tasks_has_no_plan_message",
+     test_implement_without_tasks_has_no_plan_message,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tasks_request_refreshes_on_tool_continuation",
+     test_tasks_request_refreshes_on_tool_continuation,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/subagent_cannot_read_or_update_parent_tasks",
+     test_subagent_cannot_read_or_update_parent_tasks,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/session_title_generation_is_silent",
      test_session_title_generation_is_silent, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

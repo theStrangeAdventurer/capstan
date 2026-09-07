@@ -84,3 +84,18 @@ int tui_layout_point_in_input(int rows, int cols, int y, int x) {
          y < input_y + INPUT_WIN_HEIGHT && x >= MARGIN &&
          x < MARGIN + input_w;
 }
+
+int tui_layout_tasks_height(int available, int lines, int expanded) {
+  if (!expanded || lines < 1 || available < 3) return 0;
+  int height = available / 2;
+  if (height < 2) height = 2;
+  if (height > 9) height = 9;
+  if (height > lines + 1) height = lines + 1;
+  return height;
+}
+
+int tui_layout_tasks_scroll(int offset, int delta, int lines, int visible) {
+  int max = lines > visible ? lines - visible : 0;
+  long long next = (long long)offset + delta;
+  return next < 0 ? 0 : next > max ? max : (int)next;
+}

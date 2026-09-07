@@ -90,6 +90,7 @@ function M.collect(opts)
         for _, p in pairs(_G.plugins) do
             if workspace.wiki_enabled() or tostring(p.id or "") ~= "wiki" then
                 for _, tool in ipairs(plugin_tool_specs(p)) do
+                    if not (opts.disable_subagents and tool.name == "tasks") then
                     table.insert(tools, {
                         type = "function",
                         ["function"] = {
@@ -98,6 +99,7 @@ function M.collect(opts)
                             parameters = tool.parameters,
                         }
                     })
+                    end
                 end
             end
         end
@@ -743,6 +745,9 @@ end
 
 -- Dispatches a single tool call to its plugin handler (or subagents builtin or MCP server).
 local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
+    if tool_name == "tasks" and (tonumber(run_ctx and run_ctx.depth) or 0) > 0 then
+        return "Parent task plans are not accessible to subagents", false
+    end
     if tool_name == "subagents" then
         return run_subagents(args, run_ctx)
     end

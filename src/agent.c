@@ -50,6 +50,24 @@ static int l_agent_finish_run(lua_State *L) {
   return 0;
 }
 
+static int l_agent_tasks_get(lua_State *L) {
+  lua_pushstring(L, session_manager_tasks());
+  return 1;
+}
+
+static int l_agent_tasks_set(lua_State *L) {
+  size_t len = 0;
+  if (lua_type(L, 1) != LUA_TSTRING) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  const char *json = lua_tolstring(L, 1, &len);
+  lua_pushboolean(L, len <= SESSION_TASKS_MAX_BYTES &&
+                     !memchr(json, '\0', len) &&
+                     session_manager_set_tasks(json));
+  return 1;
+}
+
 static int l_agent_session_id(lua_State *L) {
   const char *id = session_manager_active_id();
   if (!id || !id[0])
@@ -386,6 +404,10 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "set_thinking");
   lua_pushcfunction(L, l_agent_finish_run);
   lua_setfield(L, -2, "finish_run");
+  lua_pushcfunction(L, l_agent_tasks_get);
+  lua_setfield(L, -2, "tasks_get");
+  lua_pushcfunction(L, l_agent_tasks_set);
+  lua_setfield(L, -2, "tasks_set");
   lua_pushcfunction(L, l_agent_session_id);
   lua_setfield(L, -2, "session_id");
   lua_pushcfunction(L, l_agent_session_title_context);

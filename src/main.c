@@ -145,7 +145,7 @@ static int message_pane_geometry(int *out_y, int *out_x, int *out_h,
   int queue_h = (!popup_is_active() && !popup_is_message_active())
                     ? dispatch_queue_visible_size()
                     : 0;
-  int msg_h = rows - INPUT_WIN_HEIGHT - 2 * MARGIN - badge_h - queue_h;
+  int msg_h = rows - INPUT_WIN_HEIGHT - 2 * MARGIN - badge_h - queue_h - tui_tasks_height();
   int inner_w = cols - 2 * MARGIN;
   if (msg_h < 1 || inner_w < 1)
     return 0;
@@ -266,6 +266,10 @@ static int stop_active_stream(void) {
 }
 
 static void handle_mouse_event(MEVENT *event) {
+  if (tui_handle_tasks_mouse(event->y, event->x, event->bstate)) {
+    g_mouse_selecting_messages = 0;
+    return;
+  }
   if ((event->bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) &&
       tui_handle_shell_mouse(event->y, event->x,
           (event->bstate & (BUTTON1_CLICKED | BUTTON1_RELEASED)) != 0)) {
@@ -1030,6 +1034,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   if (!opts->benchmark &&
       app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
     load_plugins_from(global_plugins);
+  session_manager_tasks_session(&headless_session);
   if (headless_session.id[0])
     log_event("session", "headless session started");
 
@@ -1102,6 +1107,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
     (void)finish_headless_trace(opts, "start");
     report_headless_error(opts);
     plugins_cleanup();
+    session_manager_tasks_session(NULL);
     session_free(&headless_session);
     free(owned_prompt);
     return 1;
@@ -1120,6 +1126,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
     (void)finish_headless_trace(opts, "dispatch");
     report_headless_error(opts);
     plugins_cleanup();
+    session_manager_tasks_session(NULL);
     session_free(&headless_session);
     free(owned_prompt);
     return 1;
@@ -1165,6 +1172,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   int rc = g_headless_run.ok ? 0 : 1;
   free(g_headless_run.text);
   g_headless_run = (HeadlessRun){0};
+  session_manager_tasks_session(NULL);
   session_free(&headless_session);
   plugins_cleanup();
   free(owned_prompt);
@@ -1486,6 +1494,10 @@ int main(int argc, char *argv[]) {
   define_key("\033[200~", TUI_KEY_PASTE_BEGIN);
   define_key("\033[1;2A", APP_KEY_SHIFT_UP);
   define_key("\033[1;2B", APP_KEY_SHIFT_DOWN);
+  define_key("\033[1;6A", TUI_KEY_TASKS_COLLAPSE);
+  define_key("\033[1;6B", TUI_KEY_TASKS_EXPAND);
+  define_key("\033[5;6~", TUI_KEY_TASKS_PREV);
+  define_key("\033[6;6~", TUI_KEY_TASKS_NEXT);
   terminal_reset_mouse_modes();
   mousemask(ALL_MOUSE_EVENTS, NULL);
   terminal_enable_bracketed_paste();
@@ -1595,7 +1607,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    if (tui_handle_reasoning_shortcut(ch)) {
+    if (tui_handle_tasks_key(ch) || tui_handle_reasoning_shortcut(ch)) {
       render_all();
       continue;
     }

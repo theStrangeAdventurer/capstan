@@ -29,6 +29,9 @@ return {
   workspace = {
     markers = { ".git" },
   },
+  tasks = {
+    expanded_by_default = true,
+  },
   vcs = {
     default = "git",
     adapters = {},
@@ -98,6 +101,9 @@ return {
   infer the nearest workspace root.
 - `vcs.default` selects the default adapter; `vcs.adapters` declares additional
   read-only argv-based adapters. See [VCS tool](vcs-tool.md).
+- `tasks.expanded_by_default` defaults to `true`; set `false` to initially show
+  only the task summary. Manual expand/collapse choices persist per session and
+  override this default, without changing model context. See [Tasks](tasks.md).
 - `permissions` entries define editable permission defaults. Runtime prompt
   choices are persisted separately in state and load after config permissions.
 - `capabilities` contains explicit feature gates. Missing `subagents` is treated

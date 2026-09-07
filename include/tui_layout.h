@@ -12,6 +12,9 @@ typedef struct {
 void tui_layout_workspace_footer(int width, const char *workdir,
                                  const char *home, const WorkspaceStatus *status,
                                  TuiWorkspaceFooter *footer);
+/* Bounded task viewport, including its chevron row; always leaves chat space. */
+int tui_layout_tasks_height(int available, int lines, int expanded);
+int tui_layout_tasks_scroll(int offset, int delta, int lines, int visible);
 int tui_layout_point_in_input(int rows, int cols, int y, int x);
 
 #endif

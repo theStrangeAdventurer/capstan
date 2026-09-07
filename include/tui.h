@@ -5,6 +5,10 @@
 struct MessageImage;
 
 #define TUI_KEY_PASTE_BEGIN 0x2000
+#define TUI_KEY_TASKS_COLLAPSE 0x2001
+#define TUI_KEY_TASKS_EXPAND   0x2002
+#define TUI_KEY_TASKS_PREV     0x2003
+#define TUI_KEY_TASKS_NEXT     0x2004
 #define TUI_KEY_CTRL_U     0x15
 #define TUI_KEY_CTRL_V     0x16
 #define TUI_KEY_CTRL_W     0x17
@@ -33,6 +37,9 @@ extern BufferedPluginResults g_buffered_results;
 
 void init_tui(void);
 void render_all(void);
+int tui_tasks_height(void);
+int tui_handle_tasks_key(int ch);
+int tui_handle_tasks_mouse(int y, int x, unsigned long buttons);
 int tui_handle_shell_mouse(int y, int x, int activate);
 void tui_paste_clipboard_image(void);
 int tui_handle_input_shortcut(int ch);

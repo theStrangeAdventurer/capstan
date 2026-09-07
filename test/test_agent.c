@@ -7,6 +7,7 @@
 #include <lauxlib.h>
 #include <limits.h>
 #include <lua.h>
+#include <lualib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -157,6 +158,27 @@ static MunitResult test_failed_active_write_keeps_current_session(
   snprintf(current_id, sizeof(current_id), "%s",
            session_manager_active_id());
   munit_assert_string_equal(log_session_id(), current_id);
+  munit_assert_true(session_manager_set_tasks("[{\"title\":\"current\"}]"));
+  Session tasks_disk;
+  munit_assert_true(session_load(current_id, &tasks_disk));
+  munit_assert_string_equal(tasks_disk.tasks_json, session_manager_tasks());
+  session_free(&tasks_disk);
+
+  /* A directory at the temporary filename forces failure even as root. */
+  char blocked[PATH_MAX];
+  snprintf(blocked, sizeof(blocked), "%s/%s.jsonl.tmp.%ld",
+           session_store_dir(), current_id, (long)getpid());
+  munit_assert_true(session_manager_set_tasks_view(0));
+  munit_assert_int(session_manager_tasks_view(), ==, 1);
+  munit_assert_int(mkdir(blocked, 0700), ==, 0);
+  munit_assert_false(session_manager_set_tasks_view(1));
+  munit_assert_int(session_manager_tasks_view(), ==, 1);
+  munit_assert_false(session_manager_set_tasks("[]"));
+  munit_assert_string_equal(session_manager_tasks(), "[{\"title\":\"current\"}]");
+  munit_assert_true(session_load(current_id, &tasks_disk));
+  munit_assert_string_equal(tasks_disk.tasks_json, session_manager_tasks());
+  session_free(&tasks_disk);
+  munit_assert_int(rmdir(blocked), ==, 0);
 
   char *current_text = my_strdup("current message");
   munit_assert_not_null(current_text);
@@ -178,6 +200,22 @@ static MunitResult test_failed_active_write_keeps_current_session(
   target.message_count = 1;
   munit_assert_true(session_save(&target));
 
+  /* CLI-owned sessions use the same immediate, transactional task adapter. */
+  session_manager_tasks_session(&target);
+  munit_assert_true(session_manager_set_tasks("[]"));
+  Session cli_disk;
+  munit_assert_true(session_load(target.id, &cli_disk));
+  munit_assert_string_equal(cli_disk.tasks_json, "[]");
+  session_free(&cli_disk);
+  munit_assert_int(chmod(session_store_dir(), 0500), ==, 0);
+  munit_assert_false(session_manager_set_tasks("[1]"));
+  munit_assert_string_equal(target.tasks_json, "[]");
+  munit_assert_int(chmod(session_store_dir(), 0700), ==, 0);
+  session_manager_tasks_session(NULL);
+  free(target.tasks_json);
+  target.tasks_json = NULL;
+  munit_assert_true(session_save(&target));
+
   munit_assert_int(chmod(session_store_dir(), 0500), ==, 0);
   munit_assert_false(
       session_manager_set_generated_title(current_id, "Generated title"));
@@ -195,6 +233,25 @@ static MunitResult test_failed_active_write_keeps_current_session(
   munit_assert_int(chmod(session_store_dir(), 0700), ==, 0);
   munit_assert_true(session_manager_switch(target.id));
   munit_assert_string_equal(log_session_id(), target.id);
+  munit_assert_string_equal(session_manager_tasks(), "");
+  munit_assert_int(session_manager_tasks_view(), ==, 0);
+  munit_assert_true(session_manager_set_tasks_view(1));
+  munit_assert_true(session_manager_set_tasks("[]"));
+  munit_assert_true(session_manager_switch(current_id));
+  munit_assert_int(session_manager_tasks_view(), ==, 1);
+  munit_assert_string_equal(session_manager_tasks(), "[{\"title\":\"current\"}]");
+  clear_messages();
+  munit_assert_true(session_manager_save());
+  munit_assert_string_equal(session_manager_tasks(), "[{\"title\":\"current\"}]");
+  munit_assert_true(session_manager_switch(target.id));
+  munit_assert_string_equal(session_manager_tasks(), "[]");
+  munit_assert_true(session_manager_switch(current_id));
+  munit_assert_size(get_messages()->size, ==, 0);
+  munit_assert_string_equal(session_manager_tasks(), "[{\"title\":\"current\"}]");
+  munit_assert_true(session_manager_set_tasks(""));
+  munit_assert_true(session_load(current_id, &tasks_disk));
+  munit_assert_true(!tasks_disk.tasks_json || !tasks_disk.tasks_json[0]);
+  session_free(&tasks_disk);
   session_manager_shutdown();
   clear_messages();
   if (saved_xdg) {
@@ -335,7 +392,62 @@ static MunitResult test_shell_output_metadata(const MunitParameter params[],
   return MUNIT_OK;
 }
 
+static MunitResult test_tasks_binding(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  session_manager_shutdown();
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  agent_init(L);
+  munit_assert_int(luaL_dostring(L, "return agent.tasks_get()"), ==, LUA_OK);
+  munit_assert_string_equal(lua_tostring(L, -1), "");
+  lua_settop(L, 0);
+  munit_assert_int(luaL_dostring(L, "return agent.tasks_set('[]')"), ==, LUA_OK);
+  munit_assert_true(lua_toboolean(L, -1));
+  clear_messages();
+  munit_assert_string_equal(session_manager_tasks(), "[]");
+  char *large = malloc(SESSION_TASKS_MAX_BYTES + 1);
+  munit_assert_not_null(large);
+  memset(large, 'x', SESSION_TASKS_MAX_BYTES + 1);
+  for (int i = 0; i < 4; i++) {
+    lua_settop(L, 0);
+    lua_getglobal(L, "agent");
+    lua_getfield(L, -1, "tasks_set");
+    if (i == 0) lua_pushlstring(L, "a\0b", 3);
+    else if (i == 1) lua_pushlstring(L, large, SESSION_TASKS_MAX_BYTES + 1);
+    else if (i == 2) lua_pushinteger(L, 42);
+    else lua_pushlstring(L, large, SESSION_TASKS_MAX_BYTES);
+    munit_assert_int(lua_pcall(L, 1, 1, 0), ==, LUA_OK);
+    munit_assert_int(lua_toboolean(L, -1), ==, i == 3);
+    if (i < 3) munit_assert_string_equal(session_manager_tasks(), "[]");
+  }
+  free(large);
+  munit_assert_size(strlen(session_manager_tasks()), ==, SESSION_TASKS_MAX_BYTES);
+  lua_settop(L, 0);
+  munit_assert_int(luaL_dostring(L, "return agent.tasks_set('')"), ==, LUA_OK);
+  munit_assert_true(lua_toboolean(L, -1));
+  munit_assert_string_equal(session_manager_tasks(), "");
+  lua_close(L);
+  session_manager_shutdown();
+  return MUNIT_OK;
+}
+
+static MunitResult test_tasks_policy(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  luaL_openlibs(L);
+  agent_init(L);
+  int rc = luaL_dofile(L, "test/test_tasks.lua");
+  if (rc != LUA_OK) munit_log(MUNIT_LOG_ERROR, lua_tostring(L, -1));
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/tasks_policy", test_tasks_policy, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/tasks_binding", test_tasks_binding, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_output_metadata", test_shell_output_metadata, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/append_agent_without_agent_message",

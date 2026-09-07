@@ -2,6 +2,7 @@ local json = require("vendor.rxi.json")
 local images = require("agent.images")
 local mcp_client = require("agent.mcp")
 local profiles = require("agent.profiles")
+local tasks = require("agent.tasks")
 
 local sessions = {}
 local next_session = 1
@@ -368,6 +369,7 @@ local function start_prompt(id, params)
         return
     end
 
+    tasks.use_store(session.tasks)
     local command = not has_image and parse_command(text) or nil
     if command and command.error then
         rpc_error(id, -32000, command.error)
@@ -437,6 +439,18 @@ local function start_prompt(id, params)
         end,
         on_tool_done = function(tool_call, tool_result, tool_ok)
             if active ~= run or run.finished then return end
+            if tool_call.name == 'tasks' and tool_ok then
+                local plan = tasks.read()
+                local entries = {}
+                for _, task in ipairs(plan and plan.tasks or {}) do
+                    table.insert(entries, {content = task.title ..
+                        (task.result ~= '' and (' — ' .. task.result) or ''),
+                        priority = 'medium', status =
+                            task.status == 'completed' and 'completed' or
+                            task.status == 'in_progress' and 'in_progress' or 'pending'})
+                end
+                notify(session.id, {sessionUpdate = 'plan', entries = array(entries)})
+            end
             local text = tostring(tool_result or "")
             notify(session.id, {
                 sessionUpdate = "tool_call_update",
@@ -536,6 +550,7 @@ handlers["session/new"] = function(id, params)
         id = session_id,
         cwd = cwd,
         messages = {},
+        tasks = {json = ''},
         permission_scope = {allowed_tools = {}, allowed_targets = {}, full_control = false},
     }
     apply_profile_defaults(session, profile)

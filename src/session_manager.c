@@ -96,6 +96,67 @@ int session_manager_save(void) {
   return ok;
 }
 
+static Session *g_tasks_session = NULL;
+
+void session_manager_tasks_session(Session *session) {
+  g_tasks_session = session;
+}
+
+int *session_manager_tasks_scroll(void) {
+  return &(g_tasks_session ? g_tasks_session : &g_active)->tasks_scroll;
+}
+
+int session_manager_tasks_view(void) {
+  return (g_tasks_session ? g_tasks_session : &g_active)->tasks_view;
+}
+
+int session_manager_set_tasks_view(int expanded) {
+  Session *session = g_tasks_session ? g_tasks_session : &g_active;
+  int previous = session->tasks_view;
+  char previous_title[SESSION_TITLE_SIZE];
+  memcpy(previous_title, session->title, sizeof(previous_title));
+  time_t previous_updated_at = session->updated_at;
+  session->tasks_view = expanded ? 2 : 1;
+  int ok = g_tasks_session ? (!session->id[0] || session_save(session)) :
+                            (!g_initialized || session_manager_save());
+  if (!ok) {
+    session->tasks_view = previous;
+    memcpy(session->title, previous_title, sizeof(session->title));
+    session->updated_at = previous_updated_at;
+  }
+  return ok;
+}
+
+const char *session_manager_tasks(void) {
+  const Session *session = g_tasks_session ? g_tasks_session : &g_active;
+  return session->tasks_json ? session->tasks_json : "";
+}
+
+int session_manager_set_tasks(const char *json) {
+  if (!json || strlen(json) > SESSION_TASKS_MAX_BYTES)
+    return 0;
+  char *next = json[0] ? my_strdup(json) : NULL;
+  if (json[0] && !next)
+    return 0;
+  Session *session = g_tasks_session ? g_tasks_session : &g_active;
+  char *previous = session->tasks_json;
+  char previous_title[SESSION_TITLE_SIZE];
+  memcpy(previous_title, session->title, sizeof(previous_title));
+  time_t previous_updated_at = session->updated_at;
+  session->tasks_json = next;
+  int ok = g_tasks_session ? (!session->id[0] || session_save(session)) :
+                            (!g_initialized || session_manager_save());
+  if (!ok) {
+    session->tasks_json = previous;
+    memcpy(session->title, previous_title, sizeof(session->title));
+    session->updated_at = previous_updated_at;
+    free(next);
+    return 0;
+  }
+  free(previous);
+  return 1;
+}
+
 static void install_loaded(Session *loaded) {
   clear_messages();
   for (size_t i = 0; i < loaded->message_count; i++) {
@@ -133,6 +194,7 @@ static void install_loaded(Session *loaded) {
   g_active = *loaded;
   loaded->messages = NULL;
   loaded->message_count = 0;
+  loaded->tasks_json = NULL;
   release_snapshot();
   g_saved_revision = agent_messages_revision();
   g_dirty_since_ms = 0;

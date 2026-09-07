@@ -301,6 +301,7 @@ Feature specs:
 - [Runtime logs](specs/runtime-logs.md)
 - [Runtime state](specs/runtime-state.md)
 - [Sessions](specs/sessions.md)
+- [Task plans](specs/tasks.md)
 - [Shell plugin](specs/shell-plugin.md)
 - [Skills](specs/skills.md)
 - [Self improvement](specs/self-improvement.md)

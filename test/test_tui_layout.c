@@ -54,7 +54,29 @@ static MunitResult test_workspace_footer(const MunitParameter params[], void *da
   return MUNIT_OK;
 }
 
+static MunitResult test_tasks_viewport(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  munit_assert_int(tui_layout_tasks_height(24, 10, 0), ==, 0);
+  munit_assert_int(tui_layout_tasks_height(24, 0, 1), ==, 0);
+  munit_assert_int(tui_layout_tasks_height(2, 10, 1), ==, 0);
+  munit_assert_int(tui_layout_tasks_height(3, 10, 1), ==, 2);
+  munit_assert_int(tui_layout_tasks_height(24, 1, 1), ==, 2);
+  munit_assert_int(tui_layout_tasks_height(24, 100, 1), ==, 9);
+  for (int available = 3; available < 100; available++) {
+    int height = tui_layout_tasks_height(available, 100, 1);
+    munit_assert_int(height, <, available);
+    munit_assert_int(height, <=, 9);
+  }
+  munit_assert_int(tui_layout_tasks_scroll(0, -3, 20, 8), ==, 0);
+  munit_assert_int(tui_layout_tasks_scroll(0, 8, 20, 8), ==, 8);
+  munit_assert_int(tui_layout_tasks_scroll(8, 8, 20, 8), ==, 12);
+  munit_assert_int(tui_layout_tasks_scroll(12, 0, 3, 8), ==, 0);
+  munit_assert_int(tui_layout_tasks_scroll(12, -8, 20, 8), ==, 4);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/tasks_viewport", test_tasks_viewport, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/workspace_footer", test_workspace_footer, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/input_hit_area", test_input_hit_area, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

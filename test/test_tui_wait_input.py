@@ -53,6 +53,16 @@ _G.agent_entry = function(messages)
     end)
     mark("running")
     return -- A local HTTP fixture keeps the stream open until Esc cancellation.
+  elseif input == "tasks" or input == "tasks_wait" then
+    local tasks = require('agent.tasks')
+    local items = {}
+    for i = 1, 12 do
+      items[i] = {id='t'..i, title=string.format('TASK_%02d', i), status='pending'}
+    end
+    items[1].title = items[1].title .. string.rep(' long', 30) .. ' WRAPPED_END'
+    items[2].title = 'Зафиксировать контракт OpenTelemetry'
+    assert(tasks.update({revision=0, tasks=items}))
+    if input == 'tasks_wait' then wait() end
   elseif input == "markdown" then
     local body = '**MD_BOLD** *MD_ITALIC* MD_PLAIN\n\n' ..
       '| Key | Value |\n| :--- | ---: |\n| item | **MD_CELL** |\n\n' ..
@@ -116,6 +126,9 @@ def run_case(case):
   providers = {fixture = {model = "fixture", context_limit = 4096,
     models = {{id = "fixture", context_limit = 4096}}}},
 }\n''')
+        if case == "tasks_collapsed":
+            (config / "plugins/tasks_config_test.lua").write_text(
+                'capstan.config.tasks = {expanded_by_default=false}\nreturn {id="tasks_config_test"}\n')
         if case.startswith("reasoning"):
             (config / "config.lua").write_text('''return {
   provider = "fixture",
@@ -296,6 +309,74 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 captured = json.loads((root / "captured").read_text())
                 assert captured[-1]["content"] == "draft\x1b[1;2A suffix", captured
                 print(f"TUI reasoning: {case}: keys, limits, footer, draft and paste: ok")
+                return
+
+            if case.startswith("tasks"):
+                send('tasks_wait\r' if case == 'tasks_wait' else 'tasks\r')
+                def view_on_disk():
+                    for path in (home / '.local/state/capstan/sessions').rglob('*.jsonl'):
+                        header = json.loads(path.read_text().splitlines()[0])
+                        if 'tasks_json' in header:
+                            return header.get('tasks_view', 0)
+                    return None
+                if case == 'tasks_collapsed':
+                    until(lambda: b'Tasks 0/12' in screen, 'configured collapsed summary')
+                    assert b'TASK_01' not in screen
+                    send('\x1b[1;6B')
+                until(lambda: b'WRAPPED_END' in screen, 'expanded wrapped tasks')
+                assert b'TASK_12' not in screen, 'overflow escaped viewport'
+                title = 'Зафиксировать контракт OpenTelemetry'.encode()
+                until(lambda: title in screen, 'intact Cyrillic title')
+                # Fresh output after each resize, not a match from an older paint.
+                for width in (80, 110):
+                    before = len(screen)
+                    fcntl.ioctl(master, termios.TIOCSWINSZ,
+                                struct.pack('HHHH', 30, width, 0, 0))
+                    proc.send_signal(signal.SIGWINCH)
+                    until(lambda: title in screen[before:], 'Unicode title after resize')
+                    until(lambda: b'WRAPPED_END' in screen[before:], 'wrapped title after resize')
+                send('draft')
+                send('\x1b[6;6~')
+                until(lambda: '6–13/13'.encode() in screen, 'tasks next page')
+                send('\x1b[5;6~')
+                pause()
+                send('\x07')  # Ctrl+G, independent of modified-arrow encoding.
+                until(lambda: view_on_disk() == 1, 'persisted Ctrl+G collapse')
+                until(lambda: b'Tasks 0/12' in screen, 'collapsed summary')
+                send('\x07')
+                until(lambda: view_on_disk() == 2, 'persisted Ctrl+G expansion')
+                # Keep the old explicit bindings as compatibility aliases.
+                send('\x1b[1;6A')
+                until(lambda: view_on_disk() == 1, 'legacy collapse')
+                send('\x1b[1;6B')
+                until(lambda: view_on_disk() == 2, 'legacy expansion')
+                pause()
+                # Centered framed label; click its text, not the chevron.
+                assert b'[ Tasks 0/12 ' in screen, 'framed summary missing'
+                assert '\u256d'.encode() in screen, 'rounded panel border missing'
+                if b'\x1b[?1006h' in screen:
+                    send('\x1b[<0;55;17M\x1b[<0;55;17m')
+                else:
+                    os.write(master, b'\x1b[M' + bytes((32, 87, 49)) +
+                             b'\x1b[M' + bytes((35, 87, 49)))
+                until(lambda: view_on_disk() == 1, 'mouse collapse')
+                pause()
+                assert view_on_disk() == 1, 'mouse toggled twice'
+                # The same centered text on the input border expands the panel.
+                if b'\x1b[?1006h' in screen:
+                    send('\x1b[<0;55;26M\x1b[<0;55;26m')
+                else:
+                    os.write(master, b'\x1b[M' + bytes((32, 87, 58)) +
+                             b'\x1b[M' + bytes((35, 87, 58)))
+                until(lambda: view_on_disk() == 2, 'mouse label expansion')
+                if case == 'tasks_wait':
+                    (root / 'release').touch()
+                    until(lambda: (root / 'finished').exists(), 'tasks wait end')
+                send(' suffix\r')
+                until(lambda: (root / 'captured').exists(), 'draft after task controls')
+                captured = json.loads((root / 'captured').read_text())
+                assert captured[-1]['content'] == 'draft suffix', captured
+                print(f'TUI tasks: {case}: default, wrapping, paging, keys, click, persistence, draft: ok')
                 return
 
             if case.startswith("workspace_footer"):
@@ -581,7 +662,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
 
 
 if __name__ == "__main__":
-    for scenario in ("reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
+    for scenario in ("tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
                      "permit_handoff", "permit_new", "shell_multiline",
                      "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear"):
         run_case(scenario)

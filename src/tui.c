@@ -17,6 +17,7 @@
 #include <lauxlib.h>
 #include "popup.h"
 #include "scroll.h"
+#include "session_manager.h"
 #include "start_screen.h"
 #include "tool_status.h"
 #include "tui_layout.h"
@@ -353,6 +354,181 @@ static void render_start_screen_content(WINDOW *win, int height, int width,
 
 /* Descriptor lookup only: all process I/O stays in the nonblocking collector.
  * Restore the Lua stack, including when rendering inside a tool callback. */
+static struct {
+  char summary[64];
+  struct { char title[513], mark[8]; } items[100];
+  int count, expanded, height, lines, width, y, chevron_y, chevron_x, control_width;
+} g_tasks;
+
+int tui_tasks_height(void) { return g_tasks.height; }
+
+static int task_summary(lua_State *l) {
+  lua_getglobal(l, "require");
+  lua_pushliteral(l, "agent.tasks");
+  lua_call(l, 1, 1);
+  lua_getfield(l, -1, "view");
+  lua_call(l, 0, 1);
+  return 1;
+}
+
+/* Same wrapped-row traversal counts and paints: continuation titles align. */
+static int task_rows(WINDOW *win, int width, int offset, int visible) {
+  int row = 0;
+  for (int i = 0; i < g_tasks.count; i++) {
+    const char *p = g_tasks.items[i].title;
+    int first = 1;
+    do {
+      size_t n = text_line_length(p, width);
+      if (!n && *p) { int cells; n = text_character(p, strlen(p), &cells); }
+      if (win && row >= offset && row < offset + visible) {
+        int y = row - offset + 1;
+        if (first) mvwaddstr(win, y, 1, g_tasks.items[i].mark);
+        if (text_columns(p, n) <= width) mvwaddnstr(win, y, 3, p, (int)n);
+        else mvwaddch(win, y, 3, '?');
+      }
+      row++;
+      p += n;
+      if (*p == '\n') p++;
+      first = 0;
+    } while (*p);
+  }
+  return row;
+}
+
+static void prepare_tasks(int available, int width) {
+  memset(&g_tasks, 0, sizeof(g_tasks));
+  g_tasks.chevron_y = g_tasks.chevron_x = -1;
+  g_tasks.width = width;
+  if (!L || width < 5) return;
+  int top = lua_gettop(L);
+  lua_pushcfunction(L, task_summary);
+  if (lua_pcall(L, 0, 1, 0) != LUA_OK || !lua_istable(L, -1)) {
+    snprintf(g_tasks.summary, sizeof(g_tasks.summary), "Tasks: error");
+    lua_settop(L, top);
+    return;
+  }
+  lua_getfield(L, -1, "summary");
+  snprintf(g_tasks.summary, sizeof(g_tasks.summary), "%s", lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "expanded");
+  int manual = session_manager_tasks_view();
+  g_tasks.expanded = manual ? manual == 2 : lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "items");
+  if (lua_istable(L, -1)) {
+    int count = (int)lua_rawlen(L, -1);
+    if (count > 100) count = 100;
+    for (int i = 0; i < count; i++) {
+      lua_rawgeti(L, -1, i + 1);
+      if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, "title");
+        lua_getfield(L, -2, "mark");
+        if (lua_isstring(L, -2) && lua_isstring(L, -1)) {
+          snprintf(g_tasks.items[g_tasks.count].title, 513, "%s", lua_tostring(L, -2));
+          snprintf(g_tasks.items[g_tasks.count++].mark, 8, "%s", lua_tostring(L, -1));
+        }
+        lua_pop(L, 2);
+      }
+      lua_pop(L, 1);
+    }
+  }
+  lua_settop(L, top);
+  g_tasks.lines = task_rows(NULL, width - 4, 0, 0);
+  g_tasks.height = tui_layout_tasks_height(available, g_tasks.lines, g_tasks.expanded);
+  int *offset = session_manager_tasks_scroll();
+  if (g_tasks.height) *offset = tui_layout_tasks_scroll(*offset, 0, g_tasks.lines, g_tasks.height - 1);
+}
+
+static void tasks_expand(int expanded) {
+  if (!session_manager_set_tasks_view(expanded))
+    popup_show_message("Tasks", "Could not save task view; previous state preserved", 1);
+}
+
+int tui_handle_tasks_key(int ch) {
+  if (popup_is_active() || popup_is_message_active()) return 0;
+  if (ch == 0x07) { /* Ctrl+G: plain BEL, no modified-arrow protocol. */
+    if (g_tasks.count) tasks_expand(!g_tasks.expanded);
+    return 1;
+  }
+  if (ch == TUI_KEY_TASKS_COLLAPSE || ch == TUI_KEY_TASKS_EXPAND) {
+    tasks_expand(ch == TUI_KEY_TASKS_EXPAND);
+    return 1;
+  }
+  if (ch != TUI_KEY_TASKS_PREV && ch != TUI_KEY_TASKS_NEXT) return 0;
+  if (g_tasks.height) {
+    int *offset = session_manager_tasks_scroll();
+    int page = g_tasks.height - 1;
+    *offset = tui_layout_tasks_scroll(*offset, ch == TUI_KEY_TASKS_PREV ? -page : page,
+                                      g_tasks.lines, page);
+  }
+  return 1;
+}
+
+int tui_handle_tasks_mouse(int y, int x, unsigned long buttons) {
+  if (popup_is_active() || popup_is_message_active()) return 0;
+  if (y == g_tasks.chevron_y && x >= g_tasks.chevron_x &&
+      x < g_tasks.chevron_x + g_tasks.control_width) {
+    if (buttons & (BUTTON1_CLICKED | BUTTON1_RELEASED)) tasks_expand(!g_tasks.height);
+    return 1;
+  }
+  if (!g_tasks.height || y < g_tasks.y || y >= g_tasks.y + g_tasks.height ||
+      x < MARGIN || x >= MARGIN + g_tasks.width) return 0;
+  int delta = buttons & BUTTON4_PRESSED ? -3 : buttons & BUTTON5_PRESSED ? 3 : 0;
+  int *offset = session_manager_tasks_scroll();
+  *offset = tui_layout_tasks_scroll(*offset, delta, g_tasks.lines, g_tasks.height - 1);
+  return 1;
+}
+
+/* One centered label and hit area for both collapsed and expanded views. */
+static void render_tasks_control(WINDOW *win, int y, int width, int clearance) {
+  if (!g_tasks.summary[0]) return;
+  int room = width - 2 * clearance - 6;
+  if (room < 1) return;
+  char summary[64], label[96];
+  start_screen_truncate(g_tasks.summary, summary, sizeof(summary), room);
+  snprintf(label, sizeof(label), "[ %s %s ]", summary, g_tasks.height ? "⌄" : "⌃");
+  int length = text_columns(label, strlen(label));
+  int x = (width - length) / 2;
+  int saved = getattrs(win);
+  wattrset(win, COLOR_PAIR(14)); /* Purple from the logo palette. */
+  mvwaddstr(win, 0, x, label);
+  wattrset(win, saved);
+  g_tasks.chevron_y = y;
+  g_tasks.chevron_x = MARGIN + x;
+  g_tasks.control_width = length;
+}
+
+static void render_tasks(int input_y, int width) {
+  if (!g_tasks.height) return;
+  g_tasks.y = input_y - g_tasks.height;
+  WINDOW *win = newwin(g_tasks.height, width, g_tasks.y, MARGIN);
+  if (!win) return;
+  /* Inherit the terminal palette; the input's top edge closes this panel. */
+  werase(win);
+  wattron(win, COLOR_PAIR(14));
+  mvwhline(win, 0, 1, ACS_HLINE, width - 2);
+  mvwvline(win, 1, 0, ACS_VLINE, g_tasks.height - 1);
+  mvwvline(win, 1, width - 1, ACS_VLINE, g_tasks.height - 1);
+  mvwaddstr(win, 0, 0, "╭");
+  mvwaddstr(win, 0, width - 1, "╮");
+  wattroff(win, COLOR_PAIR(14));
+  render_tasks_control(win, g_tasks.y, width, 1);
+  int offset = *session_manager_tasks_scroll();
+  if (g_tasks.lines > g_tasks.height - 1) {
+    char range[64];
+    snprintf(range, sizeof(range), "%d–%d/%d", offset + 1,
+             offset + g_tasks.height - 1, g_tasks.lines);
+    if (text_columns(range, strlen(range)) + 2 < g_tasks.chevron_x - MARGIN) {
+      wattron(win, A_DIM);
+      mvwaddstr(win, 0, 1, range);
+      wattroff(win, A_DIM);
+    }
+  }
+  task_rows(win, width - 4, offset, g_tasks.height - 1);
+  wnoutrefresh(win);
+  delwin(win);
+}
+
 static int footer_summary_descriptor(lua_State *l) {
   lua_getglobal(l, "require");
   lua_pushliteral(l, "agent.vcs");
@@ -563,6 +739,8 @@ void render_all(void) {
   int msg_h = rows - input_h - 2 * margin - badge_h - queue_h;
   int inner_w = cols - 2 * margin;
   int text_w = inner_w - 2 * MSG_PAD_H;
+  prepare_tasks(msg_h, inner_w);
+  msg_h -= g_tasks.height;
 
   g_shell_height = 0;
   if (msg_h < 1 || inner_w < 3 || text_w < 1)
@@ -949,6 +1127,11 @@ void render_all(void) {
     }
     char usage_buf[32];
     int usage_len = usage_format(usage, usage_buf, sizeof(usage_buf));
+    if (!g_tasks.height && g_tasks.summary[0]) {
+      int clearance = label_x + label_len + 1;
+      if (usage_len + 3 > clearance) clearance = usage_len + 3;
+      render_tasks_control(input_win, input_y, inner_w, clearance);
+    }
     if (usage_len > 0) {
       int usage_x = inner_w - usage_len - 2;
       if (usage_x > label_x + label_len + 1) {
@@ -1131,6 +1314,7 @@ void render_all(void) {
 
   wnoutrefresh(stdscr);
   wnoutrefresh(msg_win);
+  render_tasks(input_y, inner_w);
   wnoutrefresh(input_win);
   popup_render_message();
   popup_render();
@@ -1262,6 +1446,9 @@ void tui_pump_blocking(void) {
       continue;
     }
 
+    if (tui_handle_tasks_key(ch))
+      continue;
+
     if (!popup_is_active() && tui_handle_reasoning_shortcut(ch))
       continue;
 
@@ -1273,6 +1460,8 @@ void tui_pump_blocking(void) {
       if (getmouse(&event) == OK) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
+        if (tui_handle_tasks_mouse(event.y, event.x, event.bstate))
+          continue;
         if ((event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) &&
             tui_handle_shell_mouse(event.y, event.x,
                 (event.bstate & (BUTTON1_CLICKED | BUTTON1_RELEASED)) != 0)) {
