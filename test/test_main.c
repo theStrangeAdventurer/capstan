@@ -1,5 +1,6 @@
 #include "munit.h"
 
+extern MunitSuite otlp_wire_suite;
 extern MunitSuite dispatch_suite;
 extern MunitSuite app_config_suite;
 extern MunitSuite cli_args_suite;
@@ -36,6 +37,7 @@ extern MunitSuite workspace_status_suite;
 
 int main(int argc, char *argv[]) {
   MunitSuite suites[] = {
+    otlp_wire_suite,
     dispatch_suite,
     app_config_suite,
     cli_args_suite,

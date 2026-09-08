@@ -82,6 +82,25 @@ return {
     path = "~/.local/state/capstan/wiki",
   },
 
+  -- Native OTel is opt-in; OTEL_* settings alone never enable it.
+  -- OTEL_SDK_DISABLED=true forces it off even when enabled = true.
+  -- See specs/config.md and examples/otel-collector.yaml.
+  observability = {
+    enabled = false, -- Set true to export traces and lifecycle logs (not raw logs)
+    endpoint = "http://127.0.0.1:4318", -- Local Collector; recommend HTTPS remotely
+    protocol = "http/protobuf", -- Only supported protocol
+    traces_exporter = "otlp", -- Or "none"
+    logs_exporter = "otlp", -- Or "none"
+    service_name = "capstan",
+    -- service_version defaults to the compiled app version.
+    headers = {}, -- String map, e.g. { ["x-tenant"] = "example" }; no credentials here
+    resource_attributes = {}, -- Explicit export data; no session IDs or secrets
+    -- traces_endpoint / logs_endpoint are full URLs, not base URLs.
+    -- traces_headers / logs_headers replace headers rather than merge.
+    -- Precedence: signal env > generic env > signal config > generic config.
+    -- Keep transport credentials in OTEL_EXPORTER_OTLP_HEADERS, not this file.
+  },
+
   -- MCP is opt-in. Add trusted servers here, then set enabled = true.
   mcp = {
     enabled = false,

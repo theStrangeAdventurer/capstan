@@ -121,6 +121,34 @@ in the log. This is intentionally opt-in because raw stream logs can become
 large and may include full model output. Raw stream logs still pass through the
 best-effort redactor, but this mode should be treated as sensitive debug output.
 
+## Native OpenTelemetry boundary
+
+Optional [native OTel](observability.md#native-opentelemetry) is separate from
+persisted runtime logs and disabled by default. `observability.enabled = true`
+is required; `OTEL_SDK_DISABLED=true` forces it off. `CAPSTAN_LOG_LEVEL=trace`
+does not enable network export or make raw SSE/free-form messages exportable.
+Before-config free-form logs remain local: they are not buffered for export,
+replayed or converted into synthetic startup events by the native exporter.
+
+OTLP logs contain bounded `span.started` / `span.finished` lifecycle
+messages, severity and trace/span IDs, plus one uncorrelated `runtime.started`
+event retained as a timestamp-only slot until configuration enables export. Native lifecycle calls also emit local
+`telemetry` category events with additive `trace_id` and `span_id` fields.
+The span captures its session at start and children inherit the explicit
+parent's captured session, so completion after a TUI session switch remains
+locally correlated with the original session. Session IDs and titles are not
+exported. The lifecycle local-write adapter is synchronous; write failure does
+not prevent native span completion or export. Existing runtime content,
+redaction, rotation, `/logs` and `capstan.log.v1` remain compatible.
+
+Exporter polling/shutdown never append local diagnostics or print stderr.
+`capstan.telemetry.diagnostics()` exposes a nonblocking in-memory snapshot of
+loss/error counters and queue/enabled state, including shutdown losses; it does
+no I/O. An asynchronous diagnostic-queue adapter is not provided by the current
+native module. Disabled export discards the startup slot. See
+[Config](config.md#native-opentelemetry) for exact environment precedence and
+[Observability](observability.md#diagnostics) for counter semantics.
+
 ## Architecture
 
 `src/log.c` exposes `capstan.log(category, message)`, `capstan.log_path()`, and

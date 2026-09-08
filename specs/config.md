@@ -218,6 +218,88 @@ return {
 - `redaction.value_patterns` is a list of Lua patterns replaced anywhere in
   text with `[REDACTED]`.
 
+## Native OpenTelemetry
+
+`observability` configures the optional native OTLP/HTTP protobuf exporter for
+traces and span lifecycle logs, shared by CLI, TUI and ACP. It does not export
+metrics or existing free-form runtime logs. See [Observability](observability.md)
+for lifecycle, privacy, fixed queue/retry limits and nonblocking diagnostics.
+
+```lua
+observability = {
+  enabled = false, -- Must be true; OTEL environment settings alone do not enable it
+  endpoint = "http://localhost:4318", -- Base URL; use HTTPS for remote collectors
+  protocol = "http/protobuf",       -- Only supported protocol
+  traces_exporter = "otlp",         -- "otlp" or "none"
+  logs_exporter = "otlp",           -- "otlp" or "none"; lifecycle logs only
+  service_name = "capstan",
+  -- service_version defaults to the compiled app version ("local" fallback).
+  headers = {},                    -- String map, not an array of HTTP lines
+  resource_attributes = {},        -- Explicit export data; avoid sensitive values
+}
+```
+
+Configuration is read once after config/redaction initialization. Only boolean
+`enabled = true` enables export. `OTEL_SDK_DISABLED=true` (case-insensitive)
+forces it off; `false`, empty or other values do not enable it. Both exporters
+set to `none` also leave export disabled. Invalid active settings disable the
+whole exporter and increment `configuration_errors`, without affecting agent
+exit status or printing values to stderr. Unsupported gRPC/JSON protocols and
+exporter lists are not accepted. Disabled signals skip their transport settings.
+
+### Environment precedence
+
+Empty environment variables are treated as unset. For each signal (`TRACES` or
+`LOGS`), endpoint, protocol and headers use this order, selecting one value,
+not merging maps:
+
+1. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `_PROTOCOL`, `_HEADERS` (or `LOGS`).
+2. `OTEL_EXPORTER_OTLP_ENDPOINT`, `_PROTOCOL`, `_HEADERS`.
+3. Config `traces_endpoint`, `traces_protocol`, `traces_headers` (or `logs_*`).
+4. Config `endpoint`, `protocol`, `headers`.
+5. Defaults above (empty headers).
+
+In particular, generic environment settings outrank signal-specific config.
+Generic endpoints are base URLs: `/v1/traces` or `/v1/logs` is appended after
+removing trailing slashes and before any query. Signal-specific endpoints are
+full URLs used unchanged. URLs must be HTTP(S), with no userinfo, fragments,
+whitespace or non-ASCII bytes, and fit in 2,047 bytes including the signal path.
+HTTP is supported for a local Collector; HTTPS is strongly recommended remotely.
+TLS peer/host verification is always enabled; redirects are disabled.
+
+`OTEL_TRACES_EXPORTER` / `OTEL_LOGS_EXPORTER` override config
+`traces_exporter` / `logs_exporter` respectively. `OTEL_RESOURCE_ATTRIBUTES`
+replaces config `resource_attributes`. Within the selected resource map,
+`service.name` overrides config `service_name`, but `OTEL_SERVICE_NAME` wins
+above both; `service.version` overrides config `service_version`. Defaults are
+`capstan` and the compiled version. No other SDK environment controls (for
+example sampling, metric export or configurable batch limits) are implemented.
+
+Headers and resource attributes accept Lua string-to-string maps or
+comma-separated percent-encoded `key=value` lists; environment values use the
+latter. For example, `headers = { ["x-tenant"] = "example" }` is a map.
+A signal-specific map replaces the generic map even when empty. Lists decode
+`%XX` (use `%2C` for a comma); `+` is literal. Duplicate list keys use the last
+value; header names are case-insensitive. Keep credentials outside committed
+config, e.g. in `OTEL_EXPORTER_OTLP_HEADERS`; transport headers are not exported
+attributes or diagnostics.
+
+Each selected map/list allows at most 64 distinct pairs and 16 KiB of key/value
+bytes; keys are at most 128 bytes. Header values are printable ASCII up to
+2,048 bytes; invalid header names/control bytes and transport-owned headers
+(`content-type`, `content-length`, `transfer-encoding`, `host`, `connection`,
+`expect`, `trailer`, `te`) are rejected. The exporter supplies
+`Content-Type: application/x-protobuf`. Resource keys are printable non-space
+ASCII and resource values are strings up to 128 bytes; the same pair budget
+also includes the mandatory service name/version. Resource strings pass through
+the canonical redactor before export. Arbitrary resource keys are allowed only
+as explicit operator configuration; runtime span attributes use a fixed allowlist.
+
+See [`examples/otel-collector.yaml`](../examples/otel-collector.yaml) for a
+loopback-only receiver with batch processing and debug output, plus an optional
+HTTPS backend. Set `observability.enabled = true` and use
+`endpoint = "http://127.0.0.1:4318"` with that example.
+
 ## Compatibility
 
 Existing `system_prompt.txt` remains supported.

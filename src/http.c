@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "http.h"
+#include "telemetry.h"
 #include "popup.h"
 #include "tui.h"
 
@@ -87,6 +88,7 @@ static long long http_now_ms(void) {
 }
 
 static void http_wait_frame(void) {
+  telemetry_poll();
   if (g_headless) {
     usleep(10000);
   } else {
@@ -786,6 +788,7 @@ static void push_stream_metadata(lua_State *L, long http_status,
 }
 
 int http_poll_limited(lua_State *L, int max_callbacks) {
+  telemetry_poll();
   if (!multi_handle)
     return 0;
 

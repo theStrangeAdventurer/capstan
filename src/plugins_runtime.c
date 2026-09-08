@@ -5,6 +5,7 @@
 #include "app_config.h"
 #include "embedded_assets.h"
 #include "http.h"
+#include "telemetry.h"
 #include "log.h"
 #include "permit.h"
 #include "popup.h"
@@ -85,6 +86,7 @@ static void register_embedded_modules(void) {
   lua_pushcfunction(L, l_require_embedded_json);
   lua_setfield(L, -2, "vendor.rxi.json");
   preload_embedded_asset(L, "agent.runtime", "agent/runtime.lua");
+  preload_embedded_asset(L, "agent.telemetry", "agent/telemetry.lua");
   preload_embedded_asset(L, "agent.provider_config",
                          "agent/provider_config.lua");
   preload_embedded_asset(L, "agent.models", "agent/models.lua");
@@ -736,6 +738,7 @@ static void load_capstan_state(void) {
 }
 
 void plugins_init_with_options(const PluginsInitOptions *options) {
+  telemetry_startup();
   L = luaL_newstate();
   luaL_openlibs(L);
 
@@ -767,6 +770,7 @@ void plugins_init_with_options(const PluginsInitOptions *options) {
   load_capstan_state();
   permit_init(L);
   log_init(L);
+  telemetry_init(L, options && options->isolated);
 
   lua_newtable(L);
   lua_pushcfunction(L, l_popup_info);
@@ -786,6 +790,12 @@ void plugins_init_with_options(const PluginsInitOptions *options) {
 void plugins_init(void) { plugins_init_with_options(NULL); }
 
 void plugins_cleanup(void) {
+  if (L) {
+    /* Settle explicit run owners before Lua and foreground HTTP are destroyed. */
+    const char *shutdown = "local t=package.loaded['agent.telemetry']; if t then t.shutdown() end";
+    if (luaL_dostring(L, shutdown) != LUA_OK) lua_pop(L, 1);
+  }
+  telemetry_cleanup();
   if (L) {
     log_cleanup();
     lua_close(L);

@@ -6,6 +6,7 @@ local workspace = require("agent.workspace")
 local redact = require("agent.redact")
 local tool_output = require("agent.tool_output")
 local ui = require("agent.ui")
+local telemetry = require("agent.telemetry")
 
 local M = {}
 
@@ -552,6 +553,12 @@ local function run_subagents(args, run_ctx)
     local completed = 0
     local max_attempts = subagent_max_attempts()
     local max_result_bytes = subagent_max_result_bytes()
+    -- Capture ownership once; every retry belongs to this same tool call.
+    local telemetry_parent = run_ctx and run_ctx.telemetry_tool
+    local function cancelled()
+        return (telemetry_parent and telemetry_parent.ended) or
+            (run_ctx and run_ctx.is_cancelled and run_ctx.is_cancelled())
+    end
 
     ui.append(string.format("\n\n⚙ subagents: running %d concurrent, %d total\n", max_concurrent, #args.tasks), "agent")
     for _, task in ipairs(args.tasks) do
@@ -560,6 +567,7 @@ local function run_subagents(args, run_ctx)
     ui.append("\n", "agent")
 
     local function start_one(index, attempt)
+        if cancelled() then return end
         attempt = attempt or 1
         local task = args.tasks[index]
         local started_at = now_ms()
@@ -601,7 +609,7 @@ local function run_subagents(args, run_ctx)
 
         local function retry_if_allowed(error_message)
             local safe_error = safe_subagent_error(error_message)
-            if attempt >= max_attempts or not subagent_retryable_error(safe_error) then
+            if cancelled() or attempt >= max_attempts or not subagent_retryable_error(safe_error) then
                 return false
             end
             logging.runtime_log("subagents", string.format(
@@ -628,6 +636,8 @@ local function run_subagents(args, run_ctx)
             profile = run_ctx and run_ctx.profile or nil,
             max_turns = child_max_turns,
             depth = depth + 1,
+            telemetry_parent = telemetry_parent,
+            is_cancelled = run_ctx and run_ctx.is_cancelled,
             tools = child_tools,
             silent_tools = true,
             update_status = false,
@@ -644,6 +654,8 @@ local function run_subagents(args, run_ctx)
                 state.result.error = safe_subagent_error(message)
             end,
             on_done = function(result)
+                if state.settled then return end
+                state.settled = true
                 active = active - 1
                 local finished_at = now_ms()
                 local result_ok = result and result.ok ~= false
@@ -665,7 +677,8 @@ local function run_subagents(args, run_ctx)
                 sanitize_subagent_result(state.result, max_result_bytes)
             end,
         })
-        if not ok then
+        if not ok and not state.settled then
+            state.settled = true
             active = active - 1
             if retry_if_allowed(err) then
                 return
@@ -688,6 +701,7 @@ local function run_subagents(args, run_ctx)
     end
 
     while completed < #args.tasks do
+        if cancelled() then return "Subagents cancelled", false end
         if not http or type(http.poll) ~= "function" then
             return "Subagents failed: http.poll is not available", false
         end
@@ -1368,6 +1382,10 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
     local pending_image_blocks = {}
 
     for _, tc in ipairs(tool_calls) do
+        if run_ctx and run_ctx.is_cancelled and run_ctx.is_cancelled() then
+            continue_fn(current_msgs, combined_tools)
+            return
+        end
         local result_content
         local event_ok = false
         local permission_wait_ms = 0
@@ -1384,7 +1402,9 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         local observer_aborted = false
         local stop_after_event = false
 
+        local tool_span
         local function observer_failed(name, observer_error)
+            telemetry.finish(tool_span, false, false)
             local message = "observability callback " .. name ..
                 " failed: " .. tostring(observer_error)
             logging.runtime_log("tool_event", message, "error")
@@ -1396,6 +1416,8 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         end
 
         local function start_tool_event(name, arguments)
+            if run_ctx and ((run_ctx.telemetry_context and run_ctx.telemetry_context.ended) or
+                (run_ctx.is_cancelled and run_ctx.is_cancelled())) then return false end
             if event_started then return true end
             event_started = true
             event_tool_call.name = name or tc.name
@@ -1403,6 +1425,11 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 event_tool_call.effective_arguments = arguments
             end
             tool_started_at = now_ms()
+            tool_span = telemetry.start("agent.tool", run_ctx and run_ctx.telemetry_context, {
+                operation = "tool", tool = event_tool_call.name,
+                depth = run_ctx and run_ctx.depth,
+            })
+            if run_ctx then run_ctx.telemetry_tool = tool_span end
             if callbacks and type(callbacks.on_tool_start) == "function" then
                 local ok, observer_error = pcall(
                     callbacks.on_tool_start, event_tool_call)
@@ -1420,6 +1447,11 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 return false
             end
             event_finished = true
+            local cancelled = run_ctx and run_ctx.is_cancelled and run_ctx.is_cancelled() or false
+            telemetry.finish(tool_span, event_ok and not cancelled, cancelled, {
+                duration_ms = math.max(0, math.floor(now_ms() - tool_started_at)),
+            })
+            if run_ctx then run_ctx.telemetry_tool = nil end
             if callbacks and type(callbacks.on_tool_done) == "function" then
                 local ok, observer_error = pcall(
                     callbacks.on_tool_done,

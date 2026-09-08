@@ -9,6 +9,7 @@ local utf8_sanitize = require("agent.utf8")
 local stream = require("agent.stream")
 local tokens = require("agent.tokens")
 local tools_runtime = require("agent.tools")
+local telemetry = require("agent.telemetry")
 local tasks_runtime = require("agent.tasks")
 local ui = require("agent.ui")
 local workspace = require("agent.workspace")
@@ -426,7 +427,7 @@ local function retryable_stream_error(message)
 end
 
 -- Full agent run: build messages, stream LLM response, handle tool_calls recursively.
-function M.run(opts, callbacks)
+local function run_impl(opts, callbacks, run_span)
     opts = opts or {}
     callbacks = callbacks or {}
     if opts.profile ~= nil and not profiles.normalize(opts.profile) then
@@ -547,13 +548,14 @@ function M.run(opts, callbacks)
     local finished = false
 
     local function is_cancelled()
+        if run_span.ended then return true end
         if type(opts.is_cancelled) ~= "function" then return false end
         local ok, cancelled = pcall(opts.is_cancelled)
         return not ok or cancelled == true
     end
 
     local function stop_run(message, current_msgs)
-        if finished then return end
+        if finished or run_span.ended then return end
         finished = true
         logging.runtime_log("tool_guard", logging.compact(message, 500))
         if agent and type(agent.append) == "function" and opts.silent_tools ~= true then
@@ -567,7 +569,7 @@ function M.run(opts, callbacks)
     -- and either finishes or recurses into handle_tool_calls.
     local function continue_agent_cycle(current_msgs, tools, cycle_kind)
         cycle_kind = cycle_kind or "agent"
-        if finished then return end
+        if finished or run_span.ended then return end
         if is_cancelled() then
             finished = true
             finish({ok = false, error = "cancelled", text = "", messages = current_msgs})
@@ -589,6 +591,7 @@ function M.run(opts, callbacks)
         local stream_attempt = 0
         local stream_emitted_text = false
         local model_started_at = nil
+        local model_span
         local start_stream
 
         local function publish_text(text)
@@ -608,6 +611,7 @@ function M.run(opts, callbacks)
         end
 
         local function on_result(result, is_done)
+            if finished or run_span.ended then return end
             if is_cancelled() then
                 if not finished then
                     finished = true
@@ -627,6 +631,17 @@ function M.run(opts, callbacks)
                 return
             end
 
+            if result.cancelled == true or result.error == "cancelled" then
+                result.ok = false
+                result.error = "cancelled"
+            end
+            telemetry.finish(model_span, result.ok ~= false,
+                result.cancelled == true or result.error == "cancelled", telemetry.measurements(result.metrics, {
+                    duration_ms = math.max(0, math.floor(now_ms() - model_started_at)),
+                    text_bytes = #(result.text or ""),
+                    reasoning_bytes = #(result.reasoning or ""),
+                    tool_calls = #(result.tool_calls or {}),
+                }))
             if type(callbacks.on_model_done) == "function" then
                 local observer_ok, observer_error = pcall(
                     callbacks.on_model_done,
@@ -661,7 +676,7 @@ function M.run(opts, callbacks)
                     return
                 end
                 logging.runtime_log("agent", "stream failed error=" .. logging.compact(message, 500))
-                if run_state.completion_review_fallback then
+                if run_state.completion_review_fallback and message ~= "cancelled" then
                     local fallback = run_state.completion_review_fallback
                     logging.runtime_log("agent", "completion_review failed; preserving prior answer")
                     publish_text(fallback.text)
@@ -705,6 +720,8 @@ function M.run(opts, callbacks)
                 end
                 tools_runtime.handle_tool_calls(current_msgs, tools, result.tool_calls, result.text, continue_agent_cycle, {
                     runtime = M,
+                    telemetry_context = run_span,
+                    is_cancelled = is_cancelled,
                     provider = active,
                     provider_name = provider_name,
                     depth = tonumber(opts.depth) or 0,
@@ -841,7 +858,8 @@ function M.run(opts, callbacks)
                 agent.set_info("error", message)
             end
             if callbacks.on_error then callbacks.on_error(message) end
-            if callbacks.on_done then callbacks.on_done({ok = false, error = message, text = ""}) end
+            finished = true
+            finish({ok = false, error = message, text = ""})
             return false, message
         end
         local _, invalid_utf8_bytes = utf8_sanitize.sanitize_values(request)
@@ -860,8 +878,20 @@ function M.run(opts, callbacks)
         ))
 
         start_stream = function()
+            if finished or run_span.ended then return end
+            if is_cancelled() then
+                finished = true
+                finish({ok = false, cancelled = true, error = "cancelled", text = ""})
+                return
+            end
             stream_attempt = stream_attempt + 1
             model_started_at = now_ms()
+            model_span = telemetry.start("agent.model", run_span, {
+                operation = telemetry.purpose(cycle_kind == "agent" and opts.purpose or cycle_kind),
+                provider = provider_name, model = active.model,
+                profile = profile and profile.name, depth = run_depth,
+                attempt = stream_attempt, turn = turns, request_bytes = #body,
+            })
             if type(callbacks.on_model_start) == "function" then
                 local observer_ok, observer_error = pcall(
                     callbacks.on_model_start,
@@ -877,14 +907,27 @@ function M.run(opts, callbacks)
                     return
                 end
             end
-            local response_callback = stream.stream(
-                active, on_result, prompt_estimate, opts)
+            if finished or run_span.ended then return end
+            local attempt_span = model_span
+            local attempt_done = false
+            local parse_response = stream.stream(active, function(result, is_done)
+                if attempt_done or run_span.ended or attempt_span.ended then return end
+                if is_done then attempt_done = true end
+                return on_result(result, is_done)
+            end, prompt_estimate, opts)
+            local response_callback = function(...)
+                if attempt_done or run_span.ended then return end
+                return telemetry.protect(run_span, parse_response, ...)
+            end
             local transport_ok, transport_error = pcall(
                 http.post_stream,
                 endpoint, body, headers, response_callback,
                 stream_timeout_sec * 1000,
                 {background = opts.background == true})
             if not transport_ok then
+                -- A synchronous transport may invoke our callback inline.
+                -- Do not turn its already-settled exception into a retry.
+                if run_span.ended then error(transport_error, 0) end
                 response_callback(
                     nil, true,
                     "HTTP stream setup failed: " .. tostring(transport_error))
@@ -895,6 +938,43 @@ function M.run(opts, callbacks)
 
     continue_agent_cycle(msgs, combined_tools)
     return true, nil
+end
+
+-- Start before validation/hooks, so handled and unexpected setup failures own
+-- the same lifecycle as asynchronous completion. Callers' observers remain
+-- fail-closed; only the optional native exporter is best-effort.
+function M.run(opts, callbacks)
+    opts = opts or {}
+    callbacks = callbacks or {}
+    local run_span = telemetry.start("agent.run", opts.telemetry_parent, {
+        operation = telemetry.purpose(opts.purpose or ((tonumber(opts.depth) or 0) > 0 and "subagent" or "agent")),
+        depth = tonumber(opts.depth) or 0,
+    })
+    local observers = copy_table(callbacks) or {}
+    local settled = false
+    observers.on_done = function(result)
+        if settled then return end
+        settled = true
+        local closed, close_error = pcall(telemetry.finish, run_span, not result or result.ok ~= false,
+            result and (result.cancelled == true or result.error == "cancelled"),
+            {turns = result and result.turns, duration_ms = result and result.duration_ms})
+        local delivered, delivery_error = true, nil
+        if callbacks.on_done then
+            delivered, delivery_error = pcall(callbacks.on_done, result, run_span.context)
+        end
+        if not closed then error(close_error, 0) end
+        if not delivered then error(delivery_error, 0) end
+    end
+    run_span.on_terminal = function(_, cancelled)
+        observers.on_done({ok = false, cancelled = cancelled,
+            error = run_span.terminal_error or (cancelled and "cancelled" or "owner finished"), text = ""})
+    end
+    if run_span.ended then
+        run_span.on_terminal(false, true)
+        run_span.on_terminal = nil
+        return false, "cancelled"
+    end
+    return telemetry.protect(run_span, run_impl, opts, observers, run_span)
 end
 
 -- Inherit only model routing; background work keeps its own run policy.
@@ -1088,6 +1168,7 @@ local function compact_run_options(messages)
 
     local opts = {
         messages = compact_messages,
+        purpose = "compaction",
         max_turns = 1,
         tools = {},
         silent_tools = true,
@@ -1147,7 +1228,7 @@ or explanation.
 
 local session_title_jobs = {}
 
-local function generate_session_title()
+local function generate_session_title(parent_context)
     if type(agent.session_title_context) ~= "function" or
        type(agent.set_session_title) ~= "function" then
         return
@@ -1166,6 +1247,8 @@ local function generate_session_title()
         max_turns = 1,
         tools = {},
         background = true,
+        purpose = "title",
+        telemetry_parent = parent_context,
         silent_tools = true,
         update_status = false,
         update_usage = false,
@@ -1230,12 +1313,12 @@ _G.agent_entry = function(messages)
         on_error = function(message)
             popup.error("Provider", message)
         end,
-        on_done = function(result)
+        on_done = function(result, parent_context)
             agent.set_thinking(false)
             agent.set_activity(nil)
             agent.finish_run()
             if result and result.ok ~= false then
-                generate_session_title()
+                generate_session_title(parent_context)
             end
         end,
     })

@@ -1,5 +1,107 @@
 # Observability
 
+## Native OpenTelemetry
+
+Native export is opt-in through `observability.enabled = true`; see
+[configuration and environment precedence](config.md#native-opentelemetry).
+The existing local formats below remain unchanged.
+
+- Transport: OTLP/HTTP protobuf for traces and logs, through existing libcurl;
+  no new dynamic dependencies and no general-purpose SDK claim. Metrics are out
+  of scope. A Collector is recommended but compatible direct endpoints work.
+- The shared `agent/runtime.lua` execution paths supply instrumentation for CLI,
+  TUI and ACP. `agent/telemetry.lua` owns lifecycle, explicit parent context,
+  descendant cleanup and allowlisted measurement adaptation. `src/telemetry.c`
+  owns process configuration, IDs, state ownership, bounded records, final
+  attribute filtering and curl transport; `src/otlp_wire.c` owns protobuf wire
+  encoding. Runtime loops poll the same native exporter. Legacy observers and
+  trace output remain independent; none reconstruct spans from log messages.
+- One top-level execution is one trace, including in TUI. Session identity is
+  captured at start, not looked up when asynchronous work completes. Child runs
+  inherit explicit parent context. Model attempts and tools get separate spans;
+  compaction, title generation and completion review have distinct purposes.
+- Lua lifecycle ownership settles descendants on terminal success, error or
+  cancellation, including protected exceptions, and ignores repeated finishes.
+  Abrupt process death cannot guarantee delivery; native cleanup counts unfinished
+  spans as dropped. Cancellation has `cancelled=true`, `outcome=cancelled` and
+  unset span status, not a fabricated transport error. Success/error set OK/ERROR.
+  Unknown measurements remain absent, not zero.
+- Records carry resource (`service.name`, `service.version`), instrumentation
+  scope (`capstan.native`, version `1`), timestamps and IDs. Trace IDs are 16
+  random bytes and span IDs 8 random bytes, never all-zero, rendered as lowercase
+  hex in Lua. Parent context is explicit, not inferred from process-global work.
+  Session identity is captured locally and inherited from the parent, including
+  deferred work after session switching; it is never an OTLP attribute.
+- Exported logs contain `span.started` and `span.finished`, with trace/span
+  correlation, plus one uncorrelated `runtime.started` startup event. Severity is INFO (9), except failed, non-cancelled finishes use
+  ERROR (17). There is no raw-log exporter or historical free-form log replay.
+- Span string attributes have a fixed allowlist: `operation`, `provider`,
+  `model`, `profile`, `tool`, `purpose`; native completion adds `outcome` and
+  boolean `cancelled`. Only allowlisted finite nonnegative numeric measurements
+  (counts, durations, token usage, stream timings and HTTP/curl statistics) pass.
+  Names are `run`, `model`, `tool`, `agent.run`, `agent.model`, `agent.tool`,
+  `subagent`, `compaction`, `title`, `completion_review`; others become `operation`.
+- Export strings pass through canonical `agent.redact.text`, then UTF-8/control
+  normalization. Redactor errors or a missing module use `[REDACTION_FAILED]`,
+  never a weaker fallback. Redacted strings over 128 bytes or containing NUL
+  become `[OVERSIZED]`, not truncated credential prefixes. Arbitrary attribute
+  keys, prompts, reasoning, answers, arguments, commands, paths, URLs, headers,
+  result bodies and raw exceptions are not automatically exported. Session IDs
+  and titles stay local. Resource attributes are explicit operator-supplied
+  export data (not the span allowlist), also bounded and redacted; do not put
+  sensitive data in them. No host, workspace or session resource detection runs.
+- Local logging retains its existing content policy, redaction and rotation.
+  The native lifecycle adapter adds local trace/span correlation using the
+  captured session, but does not forward existing logs. Its local write is
+  synchronous; local write failure does not prevent OTLP completion/export.
+- Export is best-effort and disabled by default. Invalid telemetry settings
+  disable the exporter and increment `configuration_errors`, without printing
+  settings or diagnostics to stderr. Explicit `--trace-file` remains fail-closed
+  and retains `capstan.trace.v1` unchanged.
+- The exporter uses a separate curl multi handle: no spinner, foreground cancel,
+  recursive logging, stdout/JSON/ACP output or effect on agent exit status.
+  TLS verification is mandatory; redirects are disabled to protect headers.
+- Fixed bounds (not configurable): 1,024 live spans, 1,024 queued records,
+  4 MiB queued bytes, 256 KiB payloads, 128 records per batch, 8 KiB attributes
+  per start/end, 16 KiB encoded resource and 8 KiB response. A 1 s idle/initial
+  batching delay does not delay each backlog batch; subsequent polls drain it.
+  One request is in flight, with a 5 s request/connect timeout, three total
+  delivery attempts and a 2 s shutdown flush budget. Queue overflow drops new
+  records; oversized records are dropped, never split into invalid protobuf.
+  Shutdown discards remaining records and unfinished spans into loss counters.
+- Retry only connection failures and OTLP retryable HTTP 429/502/503/504, using
+  1 s then 2 s backoff, or a longer Retry-After (seconds or HTTP date, capped at
+  60 s). HTTP 200 partial success counts rejected records without retry;
+  malformed success responses increment `malformed`. Delivery can duplicate
+  after network loss. Other permanent failures count failed records.
+- Before-config free-form logs are neither retained for export nor replayed.
+  A single timestamp-only startup slot emits `runtime.started` after configuration
+  enables export; otherwise it is discarded. Repeated startup calls do not grow
+  the buffer. No startup configuration or free-form content is captured.
+  Isolated benchmark Lua states cannot export, inspect diagnostics or finish
+  another state's spans. Isolation is sticky, including saved closures.
+  Configuration is process-scoped; session switching does not reset exporters.
+  A libcurl build without asynchronous DNS disables export rather than risking
+  blocking name resolution.
+
+### Diagnostics
+
+`capstan.telemetry.diagnostics()` returns a nonblocking in-memory snapshot:
+`dropped`, `rejected`, `failed`, `malformed`, `configuration_errors`, `queued`
+(numeric counters/gauge) and `enabled` (boolean). `queued` excludes in-flight
+records. Isolated states receive `nil`. Counters remain readable after cleanup,
+including shutdown losses. The snapshot does no polling, redaction or I/O;
+export polling and shutdown write no diagnostic files or stderr. There is no
+implemented asynchronous local diagnostic-queue adapter.
+
+### Acceptance checks
+
+Pure-C tests cover encoding, limits and delivery decisions; Lua tests cover
+lifecycle and concurrent child correlation. Decode payloads independently and
+send them to an actual Collector. Exercise unavailable endpoints, queue overflow,
+cancellation, redaction and partial success. Run affected C/Lua/build tests and
+legacy trace validation; do not claim Collector compatibility from mocks alone.
+
 ## Structured headless traces
 
 `capstan run --trace-file PATH` writes a newline-delimited JSON trace independently

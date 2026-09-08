@@ -1,5 +1,6 @@
 #include "log.h"
 #include "munit.h"
+#include <errno.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
@@ -383,7 +384,171 @@ static MunitResult test_log_rejects_symlink_target(
   return MUNIT_OK;
 }
 
+static MunitResult test_log_correlated_ownership_and_redaction(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char state_dir[256];
+  snprintf(state_dir, sizeof(state_dir), "/tmp/capstan-log-correlated-%ld",
+           (long)getpid());
+  munit_assert_int(mkdir(state_dir, 0700), ==, 0);
+  munit_assert_int(setenv("XDG_STATE_HOME", state_dir, 1), ==, 0);
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  luaL_openlibs(L);
+  munit_assert_int(luaL_dostring(L,
+      "capstan = { config = { redaction = { names = {'tenant-id'} } } }"),
+      ==, LUA_OK);
+  log_init(L);
+
+  const char *trace = "0123456789abcdef0123456789abcdef";
+  const char *span = "0123456789abcdef";
+  char owner[128], owner_path[512], active_path[512], unscoped_path[512];
+  munit_assert_true(log_set_session_id(NULL));
+  munit_assert_int(log_path(unscoped_path, sizeof(unscoped_path)), ==, 0);
+  munit_assert_true(log_set_session_id("captured owner"));
+  snprintf(owner, sizeof(owner), "%s", log_session_id());
+  munit_assert_int(log_path(owner_path, sizeof(owner_path)), ==, 0);
+  munit_assert_true(log_set_session_id("new-active"));
+  munit_assert_int(log_path(active_path, sizeof(active_path)), ==, 0);
+  munit_assert_true(log_event_correlated("warn", "span.end",
+      "Tenant-Id: tenant-secret\nX-Subscription-Key: subscription-secret\n"
+      "Accept: */*", owner, trace, span));
+  munit_assert_string_equal(log_session_id(), "new-active");
+  munit_assert_int(access(active_path, F_OK), ==, -1);
+  char *content = read_file_alloc(owner_path);
+  munit_assert_not_null(content);
+  munit_assert_not_null(strstr(content, "\"schema\":\"capstan.log.v1\""));
+  munit_assert_not_null(strstr(content, "\"timestamp\":"));
+  munit_assert_not_null(strstr(content, "\"level\":\"warn\""));
+  munit_assert_not_null(strstr(content, "\"category\":\"span.end\""));
+  munit_assert_not_null(strstr(content, "\"session_id\":\"captured owner\""));
+  munit_assert_not_null(strstr(content,
+      "\"trace_id\":\"0123456789abcdef0123456789abcdef\""));
+  munit_assert_not_null(strstr(content, "\"span_id\":\"0123456789abcdef\""));
+  munit_assert_not_null(strstr(content, "\"message\":\"Tenant-Id: [REDACTED]\\n"));
+  munit_assert_not_null(strstr(content, "X-Subscription-Key: [REDACTED]"));
+  munit_assert_not_null(strstr(content, "Accept: */*"));
+  munit_assert_null(strstr(content, "tenant-secret"));
+  munit_assert_null(strstr(content, "subscription-secret"));
+  munit_assert_char(content[strlen(content) - 1], ==, '\n');
+  munit_assert_ptr_equal(strchr(content, '\n'), content + strlen(content) - 1);
+  free(content);
+
+  /* NULL and empty owners must not inherit the active session. */
+  munit_assert_true(log_event_correlated(NULL, NULL, "null owner", NULL,
+                                        trace, span));
+  munit_assert_true(log_event_correlated(NULL, NULL, "empty owner", "",
+                                        trace, span));
+  munit_assert_string_equal(log_session_id(), "new-active");
+  content = read_file_alloc(unscoped_path);
+  munit_assert_not_null(content);
+  munit_assert_not_null(strstr(content, "null owner"));
+  munit_assert_not_null(strstr(content, "empty owner"));
+  munit_assert_null(strstr(content, "\"session_id\""));
+  free(content);
+
+  /* Legacy events retain their schema without correlation fields. */
+  munit_assert_true(log_event("test", "legacy marker"));
+  content = read_file_alloc(active_path);
+  munit_assert_not_null(content);
+  munit_assert_not_null(strstr(content, "\"session_id\":\"new-active\""));
+  munit_assert_not_null(strstr(content, "legacy marker"));
+  munit_assert_null(strstr(content, "\"trace_id\""));
+  munit_assert_null(strstr(content, "\"span_id\""));
+  free(content);
+  log_cleanup();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_log_correlated_rejects_invalid_ids(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  char state_dir[256];
+  snprintf(state_dir, sizeof(state_dir), "/tmp/capstan-log-invalid-%ld",
+           (long)getpid());
+  munit_assert_int(mkdir(state_dir, 0700), ==, 0);
+  munit_assert_int(setenv("XDG_STATE_HOME", state_dir, 1), ==, 0);
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  luaL_openlibs(L);
+  munit_assert_int(luaL_dostring(L, "capstan = { config = {} }"), ==, LUA_OK);
+  log_init(L);
+  const char *trace = "0123456789abcdef0123456789abcdef";
+  const char *span = "0123456789abcdef";
+  const char *bad_traces[] = {
+      NULL, "", "0123456789abcdef0123456789abcde",
+      "0123456789abcdef0123456789abcdef0",
+      "00000000000000000000000000000000",
+      "0123456789ABCDEF0123456789ABCDEF",
+      "g123456789abcdef0123456789abcdef",
+      "0123456789abcdef0123456789abcde "};
+  const char *bad_spans[] = {
+      NULL, "", "0123456789abcde", "0123456789abcdef0",
+      "0000000000000000", "0123456789ABCDEF", "g123456789abcdef",
+      "0123456789abcde\n"};
+  const char *bad_sessions[] = {".", "..", "../escape", "owner/child"};
+  char owner_path[512], active_path[512];
+  munit_assert_true(log_set_session_id("owner"));
+  munit_assert_int(log_path(owner_path, sizeof(owner_path)), ==, 0);
+  munit_assert_true(log_event("test", "owner seed"));
+  munit_assert_true(log_set_session_id("active"));
+  munit_assert_int(log_path(active_path, sizeof(active_path)), ==, 0);
+  munit_assert_true(log_event("test", "active seed"));
+  char *owner_before = read_file_alloc(owner_path);
+  char *active_before = read_file_alloc(active_path);
+  munit_assert_not_null(owner_before);
+  munit_assert_not_null(active_before);
+  for (size_t i = 0; i < sizeof(bad_traces) / sizeof(bad_traces[0]); i++) {
+    errno = 0;
+    munit_assert_false(log_event_correlated("info", "test", "must not write",
+                                            "owner", bad_traces[i], span));
+    munit_assert_int(errno, ==, EINVAL);
+  }
+  for (size_t i = 0; i < sizeof(bad_spans) / sizeof(bad_spans[0]); i++) {
+    errno = 0;
+    munit_assert_false(log_event_correlated("info", "test", "must not write",
+                                            "owner", trace, bad_spans[i]));
+    munit_assert_int(errno, ==, EINVAL);
+  }
+  for (size_t i = 0; i < sizeof(bad_sessions) / sizeof(bad_sessions[0]); i++) {
+    errno = 0;
+    munit_assert_false(log_event_correlated("info", "test", "must not write",
+                                            bad_sessions[i], trace, span));
+    munit_assert_int(errno, ==, EINVAL);
+  }
+  char *content = read_file_alloc(owner_path);
+  munit_assert_not_null(content);
+  munit_assert_string_equal(content, owner_before);
+  free(content);
+  content = read_file_alloc(active_path);
+  munit_assert_not_null(content);
+  munit_assert_string_equal(content, active_before);
+  free(content);
+  free(owner_before);
+  free(active_before);
+  munit_assert_string_equal(log_session_id(), "active");
+
+  /* Rejection must not create a previously missing destination either. */
+  munit_assert_int(unlink(owner_path), ==, 0);
+  errno = 0;
+  munit_assert_false(log_event_correlated("info", "test", "must not create",
+                                          "owner", trace, ""));
+  munit_assert_int(errno, ==, EINVAL);
+  munit_assert_int(access(owner_path, F_OK), ==, -1);
+  log_cleanup();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/correlated_ownership_and_redaction",
+     test_log_correlated_ownership_and_redaction, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/correlated_rejects_invalid_ids", test_log_correlated_rejects_invalid_ids,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/event_uses_lua_redaction_config", test_log_event_uses_lua_redaction_config,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/event_preserves_long_messages", test_log_event_preserves_long_messages,

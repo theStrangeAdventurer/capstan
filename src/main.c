@@ -5,6 +5,7 @@
 #include "clipboard.h"
 #include "dispatch.h"
 #include "http.h"
+#include "telemetry.h"
 #include "input.h"
 #include "input_history.h"
 #include "jsonl.h"
@@ -1546,6 +1547,7 @@ int main(int argc, char *argv[]) {
   long long last_mcp_tick_ms = 0;
 
   while (1) {
+    telemetry_poll();
     int ch = getch();
     if (ch == ERR) {
       int had_http_events = http_poll_limited(L, 2);
@@ -1770,6 +1772,7 @@ int main(int argc, char *argv[]) {
   terminal_reset_mouse_modes();
   endwin();
   plugin_registry_cleanup();
+  plugins_cleanup();
   system("reset");
   return 0;
 }

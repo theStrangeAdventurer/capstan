@@ -33,7 +33,8 @@ static char g_log_session_id[SESSION_ID_SIZE] = "";
 static int g_log_read_lock_fd = -1;
 static char g_log_read_lock_path[512] = "";
 
-int log_path(char *buf, size_t buf_size) {
+static int log_path_scoped(char *buf, size_t buf_size,
+                           const char *session_id) {
   time_t now = time(NULL);
   struct tm tm_buf;
   struct tm *tm = localtime_r(&now, &tm_buf);
@@ -46,14 +47,18 @@ int log_path(char *buf, size_t buf_size) {
   }
   char relative[512];
   int count;
-  if (g_log_session_id[0])
+  if (session_id[0])
     count = snprintf(relative, sizeof(relative), "logs/sessions/%s/%s",
-                     g_log_session_id, name);
+                     session_id, name);
   else
     count = snprintf(relative, sizeof(relative), "logs/%s", name);
   if (count < 0 || (size_t)count >= sizeof(relative))
     return -1;
   return app_state_path(buf, buf_size, relative);
+}
+
+int log_path(char *buf, size_t buf_size) {
+  return log_path_scoped(buf, buf_size, g_log_session_id);
 }
 
 int log_set_session_id(const char *session_id) {
@@ -85,13 +90,13 @@ static int ensure_dir(const char *path, mode_t mode) {
   return -1;
 }
 
-static int ensure_log_dir(void) {
+static int ensure_log_dir(const char *session_id) {
   char logs[512];
   if (app_state_path(logs, sizeof(logs), "logs") != 0 ||
       ensure_dir(logs, 0700) != 0)
     return -1;
 
-  if (!g_log_session_id[0])
+  if (!session_id[0])
     return 0;
 
   char sessions[512];
@@ -101,7 +106,7 @@ static int ensure_log_dir(void) {
     return -1;
   char scoped[512];
   count = snprintf(scoped, sizeof(scoped), "%s/%s", sessions,
-                   g_log_session_id);
+                   session_id);
   if (count < 0 || (size_t)count >= sizeof(scoped))
     return -1;
   return ensure_dir(scoped, 0700);
@@ -726,11 +731,16 @@ static void unlock_log(int fd) {
   (void)close(fd);
 }
 
-int log_event_level(const char *level, const char *category,
-                    const char *message) {
+static int log_event_scoped(const char *level, const char *category,
+                            const char *message, const char *session_id,
+                            const char *trace_id, const char *span_id) {
+  /* Snapshot before Lua redaction, which can re-enter runtime code. */
+  char captured_session[SESSION_ID_SIZE];
+  snprintf(captured_session, sizeof(captured_session), "%s", session_id);
+  session_id = captured_session;
   char path[512];
-  if (app_state_ensure_dir() != 0 || ensure_log_dir() != 0 ||
-      log_path(path, sizeof(path)) != 0)
+  if (app_state_ensure_dir() != 0 || ensure_log_dir(session_id) != 0 ||
+      log_path_scoped(path, sizeof(path), session_id) != 0)
     return 0;
 
   struct timespec now;
@@ -768,9 +778,14 @@ int log_event_level(const char *level, const char *category,
               jsonl_append_string(&line, level ? level : "info") &&
               jsonl_append(&line, ",\"category\":") &&
               jsonl_append_string(&line, category ? category : "event");
-  if (built && g_log_session_id[0])
+  if (built && session_id[0])
     built = jsonl_append(&line, ",\"session_id\":") &&
-            jsonl_append_string(&line, g_log_session_id);
+            jsonl_append_string(&line, session_id);
+  if (built && trace_id && span_id)
+    built = jsonl_append(&line, ",\"trace_id\":") &&
+            jsonl_append_string(&line, trace_id) &&
+            jsonl_append(&line, ",\"span_id\":") &&
+            jsonl_append_string(&line, span_id);
   built = built && jsonl_append(&line, ",\"message\":") &&
           jsonl_append_string(&line, redacted) && jsonl_append(&line, "}");
   free(redacted);
@@ -794,6 +809,41 @@ int log_event_level(const char *level, const char *category,
   }
   jsonl_buffer_free(&line);
   return result;
+}
+
+static int correlation_id_valid(const char *id, size_t length) {
+  if (!id)
+    return 0;
+  int nonzero = 0;
+  for (size_t i = 0; i < length; i++) {
+    if (!((id[i] >= '0' && id[i] <= '9') ||
+          (id[i] >= 'a' && id[i] <= 'f')))
+      return 0;
+    nonzero |= id[i] != '0';
+  }
+  return id[length] == '\0' && nonzero;
+}
+
+int log_event_correlated(const char *level, const char *category,
+                         const char *message, const char *session_id,
+                         const char *trace_id, const char *span_id) {
+  if ((session_id && session_id[0] && !session_id_valid(session_id)) ||
+      !correlation_id_valid(trace_id, 32) ||
+      !correlation_id_valid(span_id, 16)) {
+    errno = EINVAL;
+    return 0;
+  }
+  char trace[33], span[17];
+  memcpy(trace, trace_id, sizeof(trace));
+  memcpy(span, span_id, sizeof(span));
+  return log_event_scoped(level, category, message,
+                          session_id ? session_id : "", trace, span);
+}
+
+int log_event_level(const char *level, const char *category,
+                    const char *message) {
+  return log_event_scoped(level, category, message, g_log_session_id,
+                          NULL, NULL);
 }
 
 int log_event(const char *category, const char *message) {
@@ -821,7 +871,8 @@ static int l_capstan_log_path(lua_State *state) {
 static int l_capstan_log_read_lock(lua_State *state) {
   char path[512];
   if (g_log_read_lock_fd >= 0 || app_state_ensure_dir() != 0 ||
-      ensure_log_dir() != 0 || log_path(path, sizeof(path)) != 0) {
+      ensure_log_dir(g_log_session_id) != 0 ||
+      log_path(path, sizeof(path)) != 0) {
     lua_pushboolean(state, 0);
     return 1;
   }

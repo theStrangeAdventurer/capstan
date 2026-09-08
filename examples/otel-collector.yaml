@@ -1,0 +1,44 @@
+# Standalone OpenTelemetry Collector (core or contrib), OTLP/HTTP only.
+# Validate: otelcol-contrib validate --config examples/otel-collector.yaml
+# Run:      otelcol-contrib --config examples/otel-collector.yaml
+# Capstan: observability.enabled = true, endpoint = "http://127.0.0.1:4318"
+# OTEL_SDK_DISABLED=true still forces Capstan export off.
+# Debug output is local Collector output, not Capstan stderr or raw runtime logs.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: "127.0.0.1:4318"
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: basic
+  # Optional remote backend: uncomment and replace debug in BOTH pipelines
+  # with otlphttp/backend (or keep both if local debug output is wanted).
+  # Set these variables in the Collector process, not in a committed file.
+  # OTEL_BACKEND_ENDPOINT must be an HTTPS base URL, without /v1/traces.
+  # OTEL_BACKEND_AUTHORIZATION holds the complete authorization header value.
+  # otlphttp/backend:
+  #   endpoint: "${env:OTEL_BACKEND_ENDPOINT}"
+  #   headers:
+  #     Authorization: "${env:OTEL_BACKEND_AUTHORIZATION}"
+  #   tls:
+  #     insecure: false
+  #     insecure_skip_verify: false
+
+service:
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

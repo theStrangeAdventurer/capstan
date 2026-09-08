@@ -7634,7 +7634,25 @@ static MunitResult test_hook_error_logs_and_keeps_request(
   return MUNIT_OK;
 }
 
+static MunitResult test_runtime_telemetry_lifecycle(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  lua_pushboolean(L, 1);
+  lua_setglobal(L, "TELEMETRY_RUNTIME_FIXTURE");
+  int rc = luaL_dofile(L, "test/test_telemetry.lua");
+  if (rc != LUA_OK)
+    munit_errorf("runtime telemetry: %s", lua_tostring(L, -1));
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/runtime_telemetry_lifecycle", test_runtime_telemetry_lifecycle,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/plan_tasks_update_allowed", test_plan_tasks_update_allowed,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/implement_without_tasks_has_no_plan_message",
