@@ -393,18 +393,10 @@ void visual_selection_range(int *sl, int *sc, int *el, int *ec) {
     }
 }
 
+/* Clipboard policy is shared with session-header copy actions. */
+#include "clipboard.h"
 static void copy_to_clipboard(const char *text) {
-#ifdef __APPLE__
-    FILE *p = popen("pbcopy", "w");
-#else
-    FILE *p = popen("xclip -selection clipboard 2>/dev/null", "w");
-    if (!p)
-        p = popen("xsel --clipboard 2>/dev/null", "w");
-#endif
-    if (p) {
-        fputs(text, p);
-        pclose(p);
-    }
+    (void)clipboard_write_text(text);
 }
 
 static int byte_offset_for_col(const char *str, int col) {

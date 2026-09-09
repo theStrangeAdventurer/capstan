@@ -38,6 +38,8 @@ extern BufferedPluginResults g_buffered_results;
 void init_tui(void);
 void render_all(void);
 int tui_tasks_height(void);
+int tui_session_height(void);
+int tui_handle_session_mouse(int y, int x, unsigned long buttons);
 int tui_handle_tasks_key(int ch);
 int tui_handle_tasks_mouse(int y, int x, unsigned long buttons);
 int tui_handle_shell_mouse(int y, int x, int activate);

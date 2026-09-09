@@ -4,6 +4,37 @@
 #include <stdio.h>
 #include <string.h>
 
+int tui_layout_session_height(int rows, int cols) {
+  return rows >= INPUT_WIN_HEIGHT + 2 * MARGIN + 3 && cols >= 7 ? 2 : 0;
+}
+
+void tui_layout_session_row(int cols, const char *value, const char *icon,
+                            TuiSessionRow *row) {
+  memset(row, 0, sizeof(*row));
+  if (!value || !*value || cols < 7) return;
+  int budget = cols - 2 * MARGIN;
+  if (budget > 60) budget = 60;
+  int icon_width = text_columns(icon, strlen(icon));
+  int room = budget - icon_width - 1;
+  size_t len = strlen(value), used = 0, i = 0;
+  int width = 0;
+  while (i < len) {
+    int cells;
+    size_t n = text_character(value + i, len - i, &cells);
+    int control = (unsigned char)value[i] < 32 || value[i] == 127;
+    if (control) cells = 1;
+    if (width + cells > room - 1 || used + n + 8 >= sizeof(row->text)) break;
+    if (control) row->text[used++] = ' ';
+    else { memcpy(row->text + used, value + i, n); used += n; }
+    width += cells;
+    i += n;
+  }
+  if (i < len) { memcpy(row->text + used, "…", 3); used += 3; }
+  snprintf(row->text + used, sizeof(row->text) - used, " %s", icon);
+  row->width = text_columns(row->text, strlen(row->text));
+  row->x = cols - MARGIN - row->width;
+}
+
 static int columns(const char *text) {
   return text_columns(text, strlen(text));
 }

@@ -75,7 +75,29 @@ static MunitResult test_tasks_viewport(const MunitParameter params[], void *data
   return MUNIT_OK;
 }
 
+static MunitResult test_session_header(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  setlocale(LC_CTYPE, "");
+  munit_assert_int(tui_layout_session_height(30, 80), ==, 2);
+  munit_assert_int(tui_layout_session_height(8, 80), ==, 0);
+  munit_assert_int(tui_layout_session_height(30, 6), ==, 0);
+  TuiSessionRow row;
+  for (int cols = 7; cols < 120; cols++) {
+    tui_layout_session_row(cols, "目录 é Очень длинное имя сессии", "⧉", &row);
+    munit_assert_int(row.x, >=, 1);
+    munit_assert_int(row.x + row.width, ==, cols - 1);
+    munit_assert_int(row.width, <=, 60);
+    munit_assert_int(row.width, ==, text_columns(row.text, strlen(row.text)));
+  }
+  tui_layout_session_row(80, "raw\nname\033", "[]", &row);
+  munit_assert_string_equal(row.text, "raw name  []");
+  tui_layout_session_row(80, NULL, "[]", &row);
+  munit_assert_int(row.width, ==, 0);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/session_header", test_session_header, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/tasks_viewport", test_tasks_viewport, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/workspace_footer", test_workspace_footer, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/input_hit_area", test_input_hit_area, NULL, NULL,

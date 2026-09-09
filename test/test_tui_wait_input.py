@@ -218,6 +218,14 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                "PATH": os.defpath, "LANG": "en_US.UTF-8",
                "XDG_CONFIG_HOME": str(home / ".config"),
                "XDG_STATE_HOME": str(home / ".local/state")}
+        if case == "session_copy":
+            commands = root / "bin"
+            commands.mkdir()
+            for name in ("pbcopy", "wl-copy", "xclip", "xsel"):
+                script = commands / name
+                script.write_text('#!/bin/sh\n/bin/cat > copied\n')
+                script.chmod(0o700)
+            env["PATH"] = str(commands) + os.pathsep + os.defpath
         proc = subprocess.Popen([str(BINARY), "--no-mcp", "--no-wiki",
                                  "--workdir", str(root), "--workspace", str(root)],
                                 stdin=slave, stdout=slave, stderr=slave,
@@ -260,6 +268,35 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
             until(lambda: b"\x1b[?2004h" in screen, "terminal startup")
             # Wait for initial rendering after plugin and session initialization.
             until(lambda: b"ready" in screen, "initial screen")
+            if case == "session_copy":
+                def active_header():
+                    directory = next((home / '.local/state/capstan/sessions').iterdir())
+                    identity = (directory / 'active').read_text().strip()
+                    return json.loads((directory / (identity + '.jsonl')).read_text().splitlines()[0])
+                def copy_row(row, width, expected):
+                    pause(0.6)
+                    copied = root / 'copied'
+                    copied.unlink(missing_ok=True)
+                    if b'\x1b[?1006h' in screen:
+                        send(f'\x1b[<0;{width - 1};{row}M\x1b[<0;{width - 1};{row}m')
+                    else:
+                        os.write(master, b'\x1b[M' + bytes((32, width + 31, row + 32)) +
+                                 b'\x1b[M' + bytes((35, width + 31, row + 32)))
+                    until(lambda: copied.exists() and copied.read_text() == expected, 'full session copy')
+                header = active_header()
+                copy_row(2, 110, header['title'])
+                copy_row(3, 110, header['id'])
+                send(' /new\r')
+                pause(0.7)
+                updated = active_header()
+                assert updated['id'] != header['id']
+                copy_row(3, 110, updated['id'])
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 15, 0, 0))
+                proc.send_signal(signal.SIGWINCH)
+                copy_row(3, 15, updated['id'])
+                print('TUI session header: title/id copy, new session and narrow resize: ok')
+                return
+
             if case.startswith("reasoning"):
                 if case == "reasoning_wait":
                     send("delegate\r")
@@ -562,7 +599,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
 
                 # Fixed fixture layout: first manual message, or user + agent.
                 # Status shares the command row; the fold marker is next.
-                row = 4 if manual else 7
+                row = 6 if manual else 9  # Two reserved session-header rows.
                 def click():
                     if b"\x1b[?1006h" in screen:
                         send(f"\x1b[<0;3;{row}M\x1b[<0;3;{row}m")
@@ -662,7 +699,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
 
 
 if __name__ == "__main__":
-    for scenario in ("tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
+    for scenario in ("session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
                      "permit_handoff", "permit_new", "shell_multiline",
                      "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear"):
         run_case(scenario)

@@ -127,6 +127,60 @@ void init_tui(void) {
 }
 
 static int spinner_tick = 0;
+static int g_session_flash = -1;
+
+int tui_session_height(void) {
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+  return tui_layout_session_height(rows, cols);
+}
+
+static const char *session_value(int row) {
+  return row ? session_manager_active_id() : session_manager_active_title();
+}
+
+static void session_row(int cols, int row, TuiSessionRow *layout) {
+  /* Non-Unicode locales cannot display U+29C9; use an ASCII copy mark. */
+  const char *icon = MB_CUR_MAX > 1 && text_columns("⧉", strlen("⧉")) == 1 ? "⧉" : "[]";
+  tui_layout_session_row(cols, session_value(row), icon, layout);
+}
+
+static void render_session_header(int cols) {
+  for (int row = 0; row < tui_session_height(); row++) {
+    move(MARGIN + row, 0);
+    clrtoeol();
+    TuiSessionRow layout;
+    session_row(cols, row, &layout);
+    attron(COLOR_PAIR(14) | (g_session_flash == row ? A_REVERSE : 0));
+    if (layout.width) mvaddstr(MARGIN + row, layout.x, layout.text);
+    attroff(COLOR_PAIR(14) | A_REVERSE);
+  }
+}
+
+int tui_handle_session_mouse(int y, int x, unsigned long buttons) {
+  if (popup_is_active() || popup_is_message_active() ||
+      !(buttons & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED))) return 0;
+  int row = y - MARGIN;
+  if (row < 0 || row >= tui_session_height()) return 0;
+  TuiSessionRow layout;
+  session_row(getmaxx(stdscr), row, &layout);
+  if (!layout.width || x < layout.x || x >= layout.x + layout.width) return 0;
+  if (buttons & (BUTTON1_CLICKED | BUTTON1_RELEASED)) {
+    if (!clipboard_write_text(session_value(row))) {
+      popup_show_message_ms("Clipboard", "Could not copy text", 1, 1600);
+      return 1;
+    }
+    for (int phase = 0; phase < 3; phase++) {
+      g_session_flash = phase == 1 ? -1 : row;
+      render_all();
+      napms(70);
+    }
+    g_session_flash = -1;
+    popup_show_message_ms("Copied", "Text copied", 0, 500);
+    render_all();
+  }
+  return 1;
+}
 
 static const char *mode_label(void) {
   if (mode_get() == FOCUS_MESSAGES) {
@@ -693,10 +747,10 @@ static unsigned long g_shell_revision = 0;
 int tui_handle_shell_mouse(int y, int x, int activate) {
   if (popup_is_active() || popup_is_message_active() ||
       g_shell_revision != agent_messages_revision() ||
-      y < MARGIN || y >= MARGIN + g_shell_height ||
+      y < MARGIN + tui_session_height() || y >= MARGIN + tui_session_height() + g_shell_height ||
       x < MARGIN + MSG_PAD_H || x >= MARGIN + MSG_PAD_H + g_shell_width)
     return 0;
-  const LineInfo *line = linemap_get(g_shell_top + y - MARGIN);
+  const LineInfo *line = linemap_get(g_shell_top + y - MARGIN - tui_session_height());
   Messages *messages = get_messages();
   if (!line || line->role == LINE_PADDING || line->msg_index >= messages->size)
     return 0;
@@ -736,7 +790,9 @@ void render_all(void) {
   int queue_h = (!popup_is_active() && !popup_is_message_active())
                     ? dispatch_queue_visible_size()
                     : 0;
-  int msg_h = rows - input_h - 2 * margin - badge_h - queue_h;
+  int session_h = tui_session_height();
+  int msg_y = margin + session_h;
+  int msg_h = rows - input_h - 2 * margin - badge_h - queue_h - session_h;
   int inner_w = cols - 2 * margin;
   int text_w = inner_w - 2 * MSG_PAD_H;
   prepare_tasks(msg_h, inner_w);
@@ -746,7 +802,7 @@ void render_all(void) {
   if (msg_h < 1 || inner_w < 3 || text_w < 1)
     return;
 
-  WINDOW *msg_win = newwin(msg_h, inner_w, margin, margin);
+  WINDOW *msg_win = newwin(msg_h, inner_w, msg_y, margin);
   if (!msg_win)
     return;
   werase(msg_win);
@@ -1016,7 +1072,7 @@ void render_all(void) {
   }
 
   if (g_buffered_results.size > 0 && !popup_is_active() && !popup_is_message_active()) {
-    int badge_y = margin + msg_h;
+    int badge_y = msg_y + msg_h;
     int available = inner_w;
     int show = g_buffered_results.size;
     int overflow = 0;
@@ -1060,7 +1116,7 @@ void render_all(void) {
   }
 
   if (queue_h > 0) {
-    int queue_y = margin + msg_h + badge_h;
+    int queue_y = msg_y + msg_h + badge_h;
     for (int i = 0; i < queue_h; i++) {
       const char *queued = dispatch_queue_at(i);
       char preview[512];
@@ -1312,6 +1368,7 @@ void render_all(void) {
     }
   }
 
+  render_session_header(cols);
   wnoutrefresh(stdscr);
   wnoutrefresh(msg_win);
   render_tasks(input_y, inner_w);
@@ -1460,6 +1517,8 @@ void tui_pump_blocking(void) {
       if (getmouse(&event) == OK) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
+        if (tui_handle_session_mouse(event.y, event.x, event.bstate))
+          continue;
         if (tui_handle_tasks_mouse(event.y, event.x, event.bstate))
           continue;
         if ((event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) &&

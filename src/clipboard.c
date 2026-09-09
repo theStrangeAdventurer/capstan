@@ -10,6 +10,51 @@
 #include <time.h>
 #include <unistd.h>
 
+static int write_text_command(FILE *input, char *const argv[]) {
+  rewind(input);
+  pid_t pid = fork();
+  if (pid < 0) return 0;
+  if (pid == 0) {
+    if (dup2(fileno(input), STDIN_FILENO) < 0) _exit(127);
+    int fd = open("/dev/null", O_WRONLY);
+    if (fd >= 0) {
+      dup2(fd, STDOUT_FILENO);
+      dup2(fd, STDERR_FILENO);
+      close(fd);
+    }
+    execvp(argv[0], argv);
+    _exit(127);
+  }
+  int status = 0;
+  pid_t result;
+  do { result = waitpid(pid, &status, 0); } while (result < 0 && errno == EINTR);
+  return result == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+int clipboard_write_text(const char *text) {
+  if (!text) return 0;
+  FILE *input = tmpfile();
+  if (!input) return 0;
+  size_t size = strlen(text);
+  if (fwrite(text, 1, size, input) != size || fflush(input) != 0) {
+    fclose(input);
+    return 0;
+  }
+  int ok;
+#ifdef __APPLE__
+  char *const command[] = {"pbcopy", NULL};
+  ok = write_text_command(input, command);
+#else
+  char *const wayland[] = {"wl-copy", NULL};
+  char *const xclip[] = {"xclip", "-selection", "clipboard", NULL};
+  char *const xsel[] = {"xsel", "--clipboard", "--input", NULL};
+  ok = (getenv("WAYLAND_DISPLAY") && write_text_command(input, wayland)) ||
+       write_text_command(input, xclip) || write_text_command(input, xsel);
+#endif
+  fclose(input);
+  return ok;
+}
+
 char *clipboard_base64_encode(const unsigned char *data, size_t size) {
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

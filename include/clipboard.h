@@ -20,6 +20,8 @@ ClipboardReadStatus clipboard_read_fd_limited(int fd, size_t limit,
 /* Returns malloc-owned image bytes, or NULL with a user-facing error. */
 unsigned char *clipboard_read_image(size_t *size, char *error,
                                     size_t error_size);
+/* Returns success only after the clipboard command exits successfully. */
+int clipboard_write_text(const char *text);
 char *clipboard_base64_encode(const unsigned char *data, size_t size);
 
 #endif
