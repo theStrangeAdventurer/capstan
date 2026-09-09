@@ -286,7 +286,15 @@ If a transient transport or server failure occurs before producing text, the
 runtime retries it once; a stream that has already produced visible text is
 never retried automatically. This transport policy is independent of benchmark
 mode and prevents provider heartbeats or stalled streams from bypassing the
-agent-loop guard indefinitely.
+agent-loop guard indefinitely. Retries are immediate; the `retry` operation
+span measures retry dispatch bookkeeping, not a wait or backoff. No artificial
+delay is added for telemetry. Cancellation prevents the next attempt.
+
+Immediate policy denials and user prompt denials mark the owning tool span
+failed with `error.category = permission`. Allowed calls remain unclassified;
+prompt exceptions retain `exception` rather than becoming permission denials.
+The standalone runtime timeline tests cover these categories, immediate retry
+timing, and parallel subagent ownership/cancellation.
 
 The overall `max_duration_sec` guard counts active agent time. It pauses only
 while the blocking permission prompt is waiting for a user decision and resumes

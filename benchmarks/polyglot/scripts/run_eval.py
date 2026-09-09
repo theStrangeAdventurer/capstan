@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -15,7 +17,20 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
+
+def _load_canonical_logs():
+    path = Path(__file__).resolve().with_name("canonical_logs.py")
+    spec = importlib.util.spec_from_file_location("aider_polyglot_canonical_logs", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load canonical log adapter: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+load_log_summary = _load_canonical_logs().load_log_summary
 
 
 PINNED_COMMIT = "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f"
@@ -73,7 +88,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--agent-command",
         required=True,
-        help="Command template containing {prompt_file} and {workdir}; {repo_root} is optional",
+        help="Command template containing {prompt_file} and {workdir}; optional "
+             "{repo_root}, {trace_file}, and --session-id {attempt_id} for explicit "
+             "Capstan correlation (benchmark mode still disables OTLP)",
     )
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--test-timeout", type=int, default=300)
@@ -90,6 +107,13 @@ def parse_args() -> argparse.Namespace:
         "--comparison-id",
         help="Shared provider/model/reasoning configuration ID for paired agent comparisons",
     )
+    parser.add_argument(
+        "--telemetry-context", action="store_true",
+        help="Pass explicit benchmark identity as OTEL_RESOURCE_ATTRIBUTES; "
+             "requires a diagnostic command without --benchmark",
+    )
+    parser.add_argument("--canonical-log", type=Path,
+                        help="Optional shared capstan.log.v1 file; requires --session-id {attempt_id}")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -341,11 +365,35 @@ def _wait4(
         time.sleep(0.05)
 
 
-def run_process(command: list[str], cwd: Path, timeout: int, log_path: Path) -> dict:
+def telemetry_environment(attempt: dict, inherited: str = "") -> dict[str, str]:
+    """Adapt explicit harness identity to standard process-scoped OTel resources.
+
+    No configuration/credential discovery. Preserve unrelated operator resources;
+    replace our namespace so inherited identity cannot misattribute a new attempt.
+    """
+    fields = ("attempt_id", "config_id", "harness_sha256", "task",
+              "comparison_id", "replicate_id")
+    resources = [part for part in inherited.split(",")
+                 if part and not part.strip().split("=", 1)[0].startswith("benchmark.")]
+    for key in fields:
+        value = attempt.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,128}", value):
+            raise RuntimeError("invalid benchmark telemetry identity: " + key)
+        resources.append("benchmark." + key + "=" + value)
+    return {"OTEL_RESOURCE_ATTRIBUTES": ",".join(resources)}
+
+
+def run_process(command: list[str], cwd: Path, timeout: int, log_path: Path,
+                *, telemetry_context: dict | None = None) -> dict:
     started = time.monotonic()
     agent_pid_file = log_path.with_name(log_path.stem + "-primary.pid")
     agent_pid_file.unlink(missing_ok=True)
     env = os.environ.copy()
+    if telemetry_context is not None:
+        env.update(telemetry_environment(
+            telemetry_context, env.get("OTEL_RESOURCE_ATTRIBUTES", "")))
     env["CAPSTAN_BENCH_AGENT_PID_FILE"] = str(agent_pid_file)
     try:
         with log_path.open("w", encoding="utf-8") as log:
@@ -489,6 +537,24 @@ def _validate_event_lifecycle(events: list[dict]) -> None:
         raise ValueError(f"unfinished {active_kind} lifecycle event")
 
 
+def valid_trace_context(context: object) -> bool:
+    """Validate common lifecycle identity, never infer it from legacy IDs."""
+    if not isinstance(context, dict):
+        return False
+    for key, width in (("trace_id", 32), ("span_id", 16)):
+        if key == "span_id" and key not in context:
+            continue
+        value = context.get(key)
+        if (not isinstance(value, str)
+                or re.fullmatch(r"[0-9a-f]{%d}" % width, value) is None
+                or value == "0" * width):
+            return False
+    return (isinstance(context.get("run_id"), str) and bool(context["run_id"])
+            and ("session_id" not in context
+                 or (isinstance(context["session_id"], str)
+                     and bool(context["session_id"]))))
+
+
 def load_trace_summary(path: Path) -> dict | None:
     partial_path = Path(str(path) + ".partial")
     source = partial_path if partial_path.is_file() else path
@@ -541,10 +607,28 @@ def load_trace_summary(path: Path) -> dict | None:
         return _trace_error("corrupt", source,
                             "invalid trace sequence, run ID, or elapsed time")
 
+    # Additive compatibility adapter event: identities are supplied by the
+    # common lifecycle, never inferred from names or the legacy writer ID.
+    correlation = {"legacy_run_id": events[0]["run_id"]}
+    contexts = [event["data"] for event in events if event["event"] == "run.context"]
+    if contexts:
+        context = contexts[0]
+        valid = len(contexts) == 1 and valid_trace_context(context)
+        context_index = next(i for i, event in enumerate(events)
+                             if event["event"] == "run.context")
+        if any(event["event"] == "model.request.started"
+               for event in events[:context_index]):
+            valid = False
+        if not valid:
+            return _trace_error("corrupt", source, "invalid run correlation")
+        correlation.update({key: context[key] for key in
+                            ("run_id", "trace_id", "span_id", "session_id") if key in context})
+
     terminals = [event for event in events if event["event"] == "run.finished"]
     if is_partial:
         return _trace_error(
             "partial", source, "trace was not finalized",
+            correlation=correlation,
             observed_events=len(events), last_seq=events[-1]["seq"],
             last_elapsed_ms=events[-1]["elapsed_ms"],
             truncated_tail=truncated_tail,
@@ -578,6 +662,7 @@ def load_trace_summary(path: Path) -> dict | None:
         "source": str(source),
         "observed_events": len(events),
         "run_id": events[0]["run_id"],
+        "correlation": correlation,
         "terminal": terminal,
     }
 
@@ -597,7 +682,8 @@ def reconcile_process_telemetry(
         expected_ok = return_code == 0
         if terminal.get("ok") is not expected_ok:
             reason = "terminal ok does not match process return code"
-        elif terminal.get("intended_exit_code") != return_code:
+        elif (telemetry.get("schema") != "capstan.log.v1"
+              and terminal.get("intended_exit_code") != return_code):
             reason = "terminal intended_exit_code does not match process return code"
     if reason is None:
         return telemetry
@@ -613,15 +699,40 @@ def reconcile_process_telemetry(
 
 
 def render_agent_command(
-    template: str, prompt_file: Path, work: Path, trace_file: Path
+    template: str, prompt_file: Path, work: Path, trace_file: Path | None = None,
+    attempt_id: str | None = None,
 ) -> list[str]:
     if "{prompt_file}" not in template or "{workdir}" not in template:
         raise RuntimeError("--agent-command must contain {prompt_file} and {workdir}")
     rendered = template.replace("{repo_root}", shlex.quote(str(REPO_ROOT)))
     rendered = rendered.replace("{prompt_file}", shlex.quote(str(prompt_file))).replace(
         "{workdir}", shlex.quote(str(work))
-    ).replace("{trace_file}", shlex.quote(str(trace_file)))
+    )
+    if "{trace_file}" in rendered:
+        if trace_file is None:
+            raise RuntimeError("{trace_file} requires an explicit trace path")
+        rendered = rendered.replace("{trace_file}", shlex.quote(str(trace_file)))
+    if "{attempt_id}" in template:
+        if not attempt_id or not re.fullmatch(r"[0-9a-f]{32}", attempt_id):
+            raise RuntimeError("{attempt_id} requires a generated 32-digit hex identity")
+        rendered = rendered.replace("{attempt_id}", attempt_id)
     return shlex.split(rendered)
+
+
+def attempt_identity(template: str, attempt_id: str) -> dict:
+    """Explicit opt-in only: never add flags or inspect credentials/config files.
+
+    Use --session-id {attempt_id} to enter Capstan's canonical session path.
+    --benchmark disables native OTLP even when observability is configured;
+    run.context is therefore unavailable there, not an exporter failure.
+    attempt.json and the explicit session ID remain the local correlation link.
+    """
+    words = shlex.split(template)
+    linked = any(words[i:i + 2] == ["--session-id", "{attempt_id}"]
+                 for i in range(len(words)))
+    return {"attempt_id": attempt_id,
+            "session_id": attempt_id if linked else None,
+            "identity_transport": "--session-id" if linked else "harness_only"}
 
 
 def run_tests(
@@ -683,8 +794,26 @@ def write_summary(output: Path, metadata: dict, results: list[dict]) -> None:
     (output / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def harness_sha256() -> str:
+    """Fingerprint the harness and its canonical ingestion dependency."""
+    digest = hashlib.sha256()
+    for name in ('run_eval.py', 'canonical_logs.py'):
+        content = Path(__file__).with_name(name).read_bytes()
+        digest.update(name.encode() + b'\0' + str(len(content)).encode() + b'\0')
+        digest.update(content)
+    return digest.hexdigest()
+
+
 def main() -> int:
     args = parse_args()
+    if getattr(args, 'canonical_log', None):
+        if '--benchmark' in shlex.split(args.agent_command):
+            raise RuntimeError('--canonical-log requires a command without --benchmark')
+        if not attempt_identity(args.agent_command, '1' * 32)['session_id']:
+            raise RuntimeError('--canonical-log requires --session-id {attempt_id}')
+        args.canonical_log = args.canonical_log.resolve()
+    if args.telemetry_context and "--benchmark" in shlex.split(args.agent_command):
+        raise RuntimeError("--telemetry-context requires a command without --benchmark")
     corpus = args.corpus.expanduser().resolve()
     output = args.output.expanduser().resolve()
     replicate_id = args.replicate_id or inferred_replicate_id(output)
@@ -739,7 +868,16 @@ def main() -> int:
         "agent_timeout": args.timeout,
         "test_timeout": args.test_timeout,
         "comparable": commit == PINNED_COMMIT,
+        "telemetry_context": args.telemetry_context,
     }
+    # Hash only explicit evaluation settings and this harness, never environment
+    # or user configuration (which may contain credentials).
+    metadata["harness_sha256"] = harness_sha256()
+    metadata["config_id"] = hashlib.sha256(json.dumps(
+        {key: metadata[key] for key in ("suite", "corpus_commit", "tasks",
+         "comparison_id", "agent_command", "agent_timeout", "test_timeout",
+         "telemetry_context")},
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     (output / "metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
     )
@@ -752,21 +890,37 @@ def main() -> int:
         prompt_file = task_dir / "prompt.md"
         prompt_file.write_text(public_prompt(source), encoding="utf-8")
         work = copy_task(source, task_dir)
+        attempt = {
+            **attempt_identity(args.agent_command, uuid.uuid4().hex),
+            "config_id": metadata["config_id"],
+            "harness_sha256": metadata["harness_sha256"],
+            "task": task_id,
+            "comparison_id": comparison_id,
+            "replicate_id": replicate_id,
+        }
+        # Persist before launch, including attempts interrupted with the harness.
+        (task_dir / "attempt.json").write_text(
+            json.dumps(attempt, indent=2) + "\n", encoding="utf-8"
+        )
         trace_file = task_dir / "agent-trace.jsonl"
-        command = render_agent_command(args.agent_command, prompt_file, work, trace_file)
+        command = render_agent_command(args.agent_command, prompt_file, work, trace_file,
+                                       attempt["attempt_id"])
         print(f"[{index}/{len(task_ids)}] {task_id}", flush=True)
-        agent = run_process(command, work, args.timeout, task_dir / "agent.log")
+        agent = run_process(command, work, args.timeout, task_dir / "agent.log",
+                            telemetry_context=attempt if args.telemetry_context else None)
         partial_trace = Path(str(trace_file) + ".partial")
         agent["trace"] = (str(partial_trace) if partial_trace.is_file() else
                           str(trace_file) if trace_file.is_file() else None)
         agent["telemetry"] = reconcile_process_telemetry(
-            load_trace_summary(trace_file),
+            (load_log_summary(args.canonical_log, session_id=attempt['session_id'])
+             if getattr(args, 'canonical_log', None) else load_trace_summary(trace_file)),
             timed_out=agent["timed_out"],
             return_code=agent["return_code"],
         )
         tests = run_tests(language, source, work, args.test_timeout, task_dir)
         status = classify(agent, tests)
         result = {
+            "attempt": attempt,
             "task": task_id,
             "language": language,
             "status": status,

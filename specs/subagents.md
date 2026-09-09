@@ -88,7 +88,16 @@ retry is reserved for transient transport/API failures: connection errors and
 HTTP `408`, `429`, `500`, `502`, `503`, or `504`. Client/auth/request-shape
 errors such as `400`, `401`, and `403` are not retried automatically; they
 require an orchestrator repair/analyze step before another request would be
-useful.
+useful. Retries start immediately: the `retry` operation measures dispatch
+bookkeeping, not backoff or a configured sleep.
+
+Each child attempt owns a `subagent` span directly beneath the initiating
+`agent.tool` span. Its `subagent_index` (one-based), `subagent_id`, and `attempt`
+identify the task and attempt; model and inner tool spans belong to that child.
+Parallel children are siblings, never implicitly nested under one another.
+`subagent_queue` measures time awaiting a concurrency slot, separately from
+execution and immediate retries. Parent cancellation closes all unfinished
+children and queue spans exactly once; late callbacks cannot restart work.
 
 Model-visible subagent errors contain only a short, single-line transport
 reason. Raw HTTP response bodies and partial SSE streams are never copied into

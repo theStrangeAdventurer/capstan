@@ -10,6 +10,11 @@ int session_manager_init_selected(const char *workspace_root,
 int session_manager_new(void);
 int session_manager_switch(const char *id);
 int session_manager_save(void);
+struct lua_State;
+/* Explicit immutable run context; never infer a parent from the active session. */
+int session_manager_persistence_begin(struct lua_State *L, int context);
+void session_manager_persistence_end(struct lua_State *L, int ref, int ok,
+                                     long long duration_ms);
 /* Borrow the CLI-owned session until detached with NULL. */
 void session_manager_tasks_session(Session *session);
 const char *session_manager_tasks(void);

@@ -2,6 +2,7 @@
 #include "dyn_arr.h"
 #include "popup.h"
 #include "session_manager.h"
+#include "telemetry.h"
 #include "utils.h"
 #include <lauxlib.h>
 #include <lua.h>
@@ -44,10 +45,23 @@ void agent_begin_run(void) { g_running = 1; }
 void agent_finish_run(void) { g_running = 0; }
 int agent_is_running(void) { return g_running; }
 
+static long long monotonic_ms(void);
+
 static int l_agent_finish_run(lua_State *L) {
-  (void)L;
+  /* The submission owns its session even when telemetry is disabled. A late
+     completion must not save a newly selected session under the old run. */
+  const char *id = lua_tostring(L, 2);
+  int ok = 1;
+  if (id && id[0] && strcmp(id, session_manager_active_id()) == 0) {
+    int ref = session_manager_persistence_begin(L, 1);
+    long long started = monotonic_ms();
+    ok = session_manager_save();
+    session_manager_persistence_end(L, ref, ok, monotonic_ms() - started);
+  }
   agent_finish_run();
-  return 0;
+  if (!ok) popup_show_message("Session", "Session could not be saved", 1);
+  lua_pushboolean(L, ok);
+  return 1;
 }
 
 static int l_agent_tasks_get(lua_State *L) {
@@ -91,7 +105,13 @@ static int l_agent_session_title_context(lua_State *L) {
 static int l_agent_set_session_title(lua_State *L) {
   const char *id = luaL_checkstring(L, 1);
   const char *title = luaL_checkstring(L, 2);
-  lua_pushboolean(L, session_manager_set_generated_title(id, title));
+  int ref = LUA_NOREF;
+  if (strcmp(id, session_manager_active_id()) == 0)
+    ref = session_manager_persistence_begin(L, 3);
+  long long started = monotonic_ms();
+  int ok = session_manager_set_generated_title(id, title);
+  session_manager_persistence_end(L, ref, ok, monotonic_ms() - started);
+  lua_pushboolean(L, ok);
   return 1;
 }
 
@@ -472,6 +492,8 @@ static void push_messages_table(lua_State *L) {
 }
 
 void agent_build_and_dispatch(lua_State *L) {
+  telemetry_set_context("tui", session_manager_active_id(),
+                        session_manager_active_title());
   agent_begin_run();
   push_messages_table(L);
   lua_getglobal(L, "agent_entry");
@@ -520,6 +542,8 @@ static void agent_compact_internal(lua_State *L, int automatic) {
 
   /* Compact is a top-level operation: keep normal submissions in the existing
      FIFO until the compacted context has replaced the old history. */
+  telemetry_set_context("tui", session_manager_active_id(),
+                        session_manager_active_title());
   agent_begin_run();
   push_messages_table(L);
   lua_getglobal(L, "compact_entry");

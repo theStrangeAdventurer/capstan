@@ -7650,7 +7650,76 @@ static MunitResult test_runtime_telemetry_lifecycle(
   return MUNIT_OK;
 }
 
+static MunitResult test_runtime_timeline_edges(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  int rc = luaL_dofile(L, "test/test_runtime_timeline.lua");
+  if (rc != LUA_OK)
+    munit_errorf("runtime timeline: %s", lua_tostring(L, -1));
+  rc = luaL_dostring(L,
+      "local json = require('vendor.rxi.json')\n"
+      "local stream = require('agent.stream')\n"
+      "local function usage(value)\n"
+      "  local result\n"
+      "  local cb = stream.stream({suppress_agent_state=true}, function(r, done) if done then result=r end end)\n"
+      "  cb('data: '..json.encode({usage=value})..'\\n\\n', false)\n"
+      "  cb(nil, true)\n"
+      "  return result.metrics.usage\n"
+      "end\n"
+      "assert(usage(true) == nil and usage('invalid') == nil)\n"
+      "local u = usage({cached_tokens=3, prompt_tokens_details={cached_tokens=9}, reasoning_tokens=0})\n"
+      "assert(u.cached_tokens == 3 and u.reasoning_tokens == 0)\n"
+      "u = usage({prompt_tokens_details='invalid', completion_tokens_details=false})\n"
+      "assert(u.cached_tokens == nil and u.reasoning_tokens == nil)\n"
+      "local records = {}\n"
+      "capstan.telemetry = {start=function(name, parent, attrs)\n"
+      "  local r={name=name, parent=parent, attrs=attrs}; records[#records+1]=r; return r\n"
+      "end, end_span=function(r, ok, cancelled, attrs)\n"
+      "  assert(not r.ended); r.ended=true; r.ok=ok; r.final=attrs or {}\n"
+      "end}\n"
+      "local tools = require('agent.tools')\n"
+      "local ran, continued = 0, 0\n"
+      "plugins={{id='edge', command='/edge', tool={name='edge'}, handler=function() ran=ran+1; return 'ok' end}}\n"
+      "permit.check=function() return 'ask' end\n"
+      "permit.prompt=function() error('callback override ignored') end\n"
+      "local available=tools.collect()\n"
+      "for _, decision in ipairs({'invalid', 'allow_run'}) do\n"
+      "  tools.handle_tool_calls({}, available, {{id='edge', name='edge', arguments='{}'}}, '',\n"
+      "    function() continued=continued+1 end, {tools=available, silent_tools=true, permission_scope={},\n"
+      "    callbacks={on_permission_request=function() return decision end}})\n"
+      "end\n"
+      "assert(ran == 1 and continued == 2)\n"
+      "local waits={}\n"
+      "for _, r in ipairs(records) do if r.attrs.operation == 'permission_wait' then waits[#waits+1]=r end end\n"
+      "assert(#waits == 2 and not waits[1].ok and waits[1].final.purpose == 'invalid_decision')\n"
+      "assert(waits[2].ok and waits[2].final.purpose == 'allow')\n"
+      "local callbacks, starts, dones, completed = {}, 0, 0, 0\n"
+      "http.post_stream=function(_, _, _, cb) callbacks[#callbacks+1]=cb end\n"
+      "require('agent.runtime').run({tools={}, update_status=false, update_usage=false}, {\n"
+      "  on_model_start=function() starts=starts+1 end,\n"
+      "  on_model_done=function() dones=dones+1 end,\n"
+      "  on_done=function(r) assert(r.ok); completed=completed+1 end})\n"
+      "callbacks[1](nil, true, 'Connection error: fixture')\n"
+      "assert(#callbacks == 2 and starts == 2 and dones == 1)\n"
+      "callbacks[1]('data: {\"choices\":[{\"delta\":{\"content\":\"stale\"}}]}\\n\\n', false)\n"
+      "callbacks[1](nil, true, 'Connection error: late')\n"
+      "assert(#callbacks == 2 and dones == 1 and completed == 0)\n"
+      "callbacks[2]('data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\\n\\n', false)\n"
+      "callbacks[2](nil, true); callbacks[2](nil, true)\n"
+      "assert(starts == 2 and dones == 2 and completed == 1)\n"
+      "for _, r in ipairs(records) do assert(r.ended) end\n");
+  if (rc != LUA_OK)
+    munit_errorf("runtime timeline edges: %s", lua_tostring(L, -1));
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/runtime_timeline_edges", test_runtime_timeline_edges,
+     NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/runtime_telemetry_lifecycle", test_runtime_telemetry_lifecycle,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/plan_tasks_update_allowed", test_plan_tasks_update_allowed,

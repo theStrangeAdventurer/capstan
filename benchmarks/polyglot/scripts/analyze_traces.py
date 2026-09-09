@@ -8,6 +8,44 @@ from pathlib import Path
 import re
 from statistics import mean
 import sys
+from urllib.parse import urlsplit
+
+try:
+    from benchmarks.polyglot.scripts.run_eval import valid_trace_context
+except ModuleNotFoundError:
+    from run_eval import valid_trace_context
+
+
+def trace_url_template(value: str) -> str:
+    """Explicit backend navigation only: no backend discovery or HTTP calls."""
+    parsed = urlsplit(value)
+    remainder = value.replace("{trace_id}", "").replace("{span_id}", "")
+    if ("{trace_id}" not in value or "{" in remainder or "}" in remainder
+            or parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or "{" in parsed.netloc or any(c.isspace() for c in value)):
+        raise argparse.ArgumentTypeError("expected HTTP(S) URL with {trace_id} and optional {span_id}")
+    return value
+
+
+def backend_trace_links(rows: list[dict], template: str) -> list[dict]:
+    links = []
+    for row in rows:
+        telemetry = row.get("agent", {}).get("telemetry")
+        if not isinstance(telemetry, dict) or telemetry.get("status") not in {
+                "complete", "partial", "inconsistent"}:
+            continue
+        context = telemetry.get("correlation")
+        if not valid_trace_context(context):
+            continue
+        if "{span_id}" in template and "span_id" not in context:
+            continue
+        url = template.replace("{trace_id}", context["trace_id"])
+        if "span_id" in context:
+            url = url.replace("{span_id}", context["span_id"])
+        links.append({"replicate_id": row.get("_replicate_id"),
+                      "status": telemetry["status"], "url": url})
+    return links
 
 
 def inferred_replicate_id(root: Path) -> str | None:
@@ -63,6 +101,14 @@ def validate_telemetry(telemetry: dict, source: Path) -> None:
         value = terminal["intended_exit_code"]
         if not isinstance(value, int) or isinstance(value, bool):
             raise ValueError(f"invalid intended exit code: {source}")
+    for name in ("duration_ms", "turns"):
+        if name not in terminal:
+            continue
+        value = terminal[name]
+        if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                or not math.isfinite(value) or value < 0
+                or (name == "turns" and not isinstance(value, int))):
+            raise ValueError(f"invalid telemetry {name}: {source}")
     for name in ("breakdown", "timing"):
         values = terminal.get(name)
         if values is None:
@@ -100,7 +146,8 @@ def reconcile_process_telemetry(agent: dict) -> None:
         expected_ok = return_code == 0
         if terminal.get("ok") is not expected_ok:
             reason = "terminal ok does not match process return code"
-        elif terminal.get("intended_exit_code") != return_code:
+        elif (telemetry.get("schema") != "capstan.log.v1"
+              and terminal.get("intended_exit_code") != return_code):
             reason = "terminal intended_exit_code does not match process return code"
     if reason is None:
         return
@@ -265,18 +312,25 @@ DISPLAY_METRICS = (
 )
 
 
-def metric_telemetry_rows(rows: list[dict]) -> list[dict]:
+ROOT_DISPLAY_METRICS = (
+    ("duration_ms",),
+    ("turns",),
+    ("breakdown", "overlap_ms"),
+)
+
+
+def metric_telemetry_rows(rows: list[dict], paths=DISPLAY_METRICS) -> list[dict]:
     selected = []
     for row in rows:
         terminal = terminal_telemetry(row)
         if terminal is None:
             continue
         valid = True
-        for path in DISPLAY_METRICS:
+        for path in paths:
             value = terminal
             for key in path:
                 value = value.get(key) if isinstance(value, dict) else None
-            if path[0] == "counts":
+            if path[0] == "counts" or path == ("turns",):
                 valid_value = (isinstance(value, int) and
                                not isinstance(value, bool) and value >= 0)
             else:
@@ -355,6 +409,8 @@ def main() -> int:
     parser.add_argument("--capstan", type=Path, action="append", required=True)
     parser.add_argument("--other", type=Path, action="append")
     parser.add_argument("--limit", type=positive_int, default=12)
+    parser.add_argument("--trace-url-template", type=trace_url_template,
+                        help="Append diagnostic backend links using {trace_id} and optional {span_id}")
     args = parser.parse_args()
     capstan = load_runs(args.capstan)
     other = load_runs(args.other or [])
@@ -379,7 +435,9 @@ def main() -> int:
           "other_agent_errors\tother_missing\ttraces\tmetrics\t"
           "inconsistent_telemetry\tmodel_s\ttools_s\tpermissions_s\t"
           "subagents_s\tunattributed_s\trequests\t"
-          "tool_calls")
+          "tool_calls" + "".join(
+              f"\t{path[-1]}\t{path[-1]}_coverage" for path in ROOT_DISPLAY_METRICS)
+          + ("\tbackend_traces" if args.trace_url_template else ""))
     for (delta, task, wall, other_wall, all_runs, other_runs, trace_runs,
          metric_runs, pairs) in rows[: args.limit]:
         model = avg_telemetry(metric_runs, ("breakdown", "model_ms"))
@@ -405,6 +463,13 @@ def main() -> int:
         other_agent_errors = (
             f"{agent_error_count(other_runs)}/{len(other_runs)}")
         other_missing = f"{missing_count(other_runs)}/{len(other_runs)}"
+        root_metrics = ""
+        for path in ROOT_DISPLAY_METRICS:
+            measured = metric_telemetry_rows(all_runs, (path,))
+            root_metrics += (f"\t{metric(avg_telemetry(measured, path))}"
+                             f"\t{len(measured)}/{len(all_runs)}")
+        links = ("\t" + json.dumps(backend_trace_links(all_runs, args.trace_url_template))
+                 if args.trace_url_template else "")
         print(f"{task}\t{metric(wall)}\t{metric(other_wall)}\t{delta_text}\t{pairs}\t"
               f"{timeouts}\t{agent_errors}\t{missing}\t{other_timeouts}\t"
               f"{other_agent_errors}\t{other_missing}\t{trace_coverage}\t"
@@ -412,7 +477,7 @@ def main() -> int:
               f"{metric(model, 1000)}\t{metric(tools, 1000)}\t"
               f"{metric(permissions, 1000)}\t"
               f"{metric(subagents, 1000)}\t{metric(unknown, 1000)}\t"
-              f"{metric(requests, digits=1)}\t{metric(calls, digits=1)}")
+              f"{metric(requests, digits=1)}\t{metric(calls, digits=1)}{root_metrics}{links}")
     return 0
 
 

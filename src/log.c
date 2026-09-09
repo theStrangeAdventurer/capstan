@@ -6,6 +6,7 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <errno.h>
+#include <math.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -733,7 +734,8 @@ static void unlock_log(int fd) {
 
 static int log_event_scoped(const char *level, const char *category,
                             const char *message, const char *session_id,
-                            const char *trace_id, const char *span_id) {
+                            const char *trace_id, const char *span_id,
+                            const LogAttribute *attrs, size_t count) {
   /* Snapshot before Lua redaction, which can re-enter runtime code. */
   char captured_session[SESSION_ID_SIZE];
   snprintf(captured_session, sizeof(captured_session), "%s", session_id);
@@ -786,6 +788,22 @@ static int log_event_scoped(const char *level, const char *category,
             jsonl_append_string(&line, trace_id) &&
             jsonl_append(&line, ",\"span_id\":") &&
             jsonl_append_string(&line, span_id);
+  if (built && attrs) {
+    built = jsonl_append(&line, ",\"attributes\":[");
+    for (size_t i = 0; built && i < count; i++) {
+      const LogAttribute *a = &attrs[i];
+      built = (!i || jsonl_append(&line, ",")) &&
+              jsonl_append(&line, "{\"key\":") &&
+              jsonl_append_string(&line, a->key) &&
+              jsonl_append(&line, ",\"value\":");
+      if (built && a->type == 0) built = jsonl_append_string(&line, a->text);
+      else if (built && a->type == 1)
+        built = jsonl_append_number(&line, a->number);
+      else if (built) built = jsonl_append(&line, a->number ? "true" : "false");
+      built = built && jsonl_append(&line, "}");
+    }
+    built = built && jsonl_append(&line, "]");
+  }
   built = built && jsonl_append(&line, ",\"message\":") &&
           jsonl_append_string(&line, redacted) && jsonl_append(&line, "}");
   free(redacted);
@@ -837,13 +855,35 @@ int log_event_correlated(const char *level, const char *category,
   memcpy(trace, trace_id, sizeof(trace));
   memcpy(span, span_id, sizeof(span));
   return log_event_scoped(level, category, message,
-                          session_id ? session_id : "", trace, span);
+                          session_id ? session_id : "", trace, span, NULL, 0);
+}
+
+int log_event_structured(const char *level, const char *category,
+                         const char *message, const char *session_id,
+                         const char *trace_id, const char *span_id,
+                         const LogAttribute *attrs, size_t count) {
+  if (count > 128 || (count && !attrs) ||
+      (session_id && *session_id && !session_id_valid(session_id)) ||
+      ((trace_id || span_id) && (!correlation_id_valid(trace_id, 32) ||
+                                 !correlation_id_valid(span_id, 16)))) {
+    errno = EINVAL; return 0;
+  }
+  for (size_t i = 0; i < count; i++) {
+    const LogAttribute *a = &attrs[i];
+    if (!memchr(a->key, 0, sizeof(a->key)) ||
+        !memchr(a->text, 0, sizeof(a->text)) || a->type < 0 || a->type > 2 ||
+        (a->type != 0 && (!isfinite(a->number) || a->number < 0))) {
+      errno = EINVAL; return 0;
+    }
+  }
+  return log_event_scoped(level, category, message, session_id ? session_id : "",
+                          trace_id, span_id, attrs, count);
 }
 
 int log_event_level(const char *level, const char *category,
                     const char *message) {
   return log_event_scoped(level, category, message, g_log_session_id,
-                          NULL, NULL);
+                          NULL, NULL, NULL, 0);
 }
 
 int log_event(const char *category, const char *message) {

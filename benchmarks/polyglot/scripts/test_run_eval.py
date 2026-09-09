@@ -14,6 +14,30 @@ RUN_EVAL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RUN_EVAL)
 
 
+class ImportTests(unittest.TestCase):
+    def test_file_loader_without_repository_on_sys_path(self):
+        import subprocess
+
+        code = """
+import importlib.util
+import sys
+from pathlib import Path
+before = list(sys.path)
+assert importlib.util.find_spec('benchmarks') is None
+assert importlib.util.find_spec('canonical_logs') is None
+spec = importlib.util.spec_from_file_location('trace_consumer', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert sys.path == before
+assert module.load_log_summary(Path('absent.jsonl')) is None
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, '-I', '-c', code, str(SCRIPT.resolve())],
+                cwd=directory, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 class TraceTests(unittest.TestCase):
     def event(self, seq, name, data=None, run_id="run-1", elapsed=None):
         return {
@@ -31,6 +55,75 @@ class TraceTests(unittest.TestCase):
         if trailing_newline:
             content += "\n"
         path.write_text(content, encoding="utf-8")
+
+    def test_trace_placeholder_requires_explicit_path(self):
+        with self.assertRaises(RuntimeError):
+            RUN_EVAL.render_agent_command(
+                "agent {prompt_file} {workdir} {trace_file}", Path("prompt"), Path("work"))
+
+    def test_common_span_context_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trace.jsonl"
+            for span in ("b" * 16, "0" * 16, "B" * 16, "short", None):
+                context = {"run_id": "native", "trace_id": "a" * 32, "span_id": span}
+                self.write_events(path, [self.event(1, "run.started"),
+                                        self.event(2, "run.context", context),
+                                        self.event(3, "run.finished", {})])
+                summary = RUN_EVAL.load_trace_summary(path)
+                if span == "b" * 16:
+                    self.assertEqual(summary["correlation"]["span_id"], span)
+                else:
+                    self.assertEqual(summary["status"], "corrupt")
+
+    def test_common_context_is_additive_and_survives_partial_attempt(self):
+        context = {"run_id": "native-run", "trace_id": "a" * 32,
+                   "session_id": "saved-session"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trace.jsonl"
+            events = [self.event(1, "run.started"),
+                      self.event(2, "run.context", context),
+                      self.event(3, "run.finished", {"ok": True})]
+            self.write_events(path, events)
+            summary = RUN_EVAL.load_trace_summary(path)
+            self.assertEqual(summary["status"], "complete")
+            self.assertEqual(summary["correlation"],
+                             {"legacy_run_id": "run-1", **context})
+            path.rename(Path(str(path) + ".partial"))
+            partial = RUN_EVAL.load_trace_summary(path)
+            self.assertEqual(partial["status"], "partial")
+            self.assertEqual(partial["correlation"], summary["correlation"])
+            self.assertNotIn("terminal", partial)
+
+    def test_run_start_context_precedes_first_request(self):
+        context = {"run_id": "native", "trace_id": "b" * 32}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trace.jsonl"
+            for late in (False, True):
+                middle = [("run.context", context),
+                          ("model.request.started", {"turn": 1, "attempt": 1})]
+                if late:
+                    middle.reverse()
+                events = [self.event(1, "run.started")]
+                events += [self.event(i + 2, name, data)
+                           for i, (name, data) in enumerate(middle)]
+                events += [self.event(4, "model.request.finished", {"turn": 1, "attempt": 1}),
+                           self.event(5, "run.finished", {"ok": True})]
+                self.write_events(path, events)
+                self.assertEqual(RUN_EVAL.load_trace_summary(path)["status"],
+                                 "corrupt" if late else "complete")
+
+    def test_invalid_or_duplicate_common_context_is_rejected(self):
+        valid = {"run_id": "native", "trace_id": "b" * 32}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trace.jsonl"
+            for contexts in ([{**valid, "trace_id": "0" * 32}],
+                             [{**valid, "session_id": ""}], [valid, valid]):
+                events = [self.event(1, "run.started")]
+                events += [self.event(i + 2, "run.context", context)
+                           for i, context in enumerate(contexts)]
+                events.append(self.event(len(events) + 1, "run.finished", {"ok": True}))
+                self.write_events(path, events)
+                self.assertEqual(RUN_EVAL.load_trace_summary(path)["status"], "corrupt")
 
     def test_loads_terminal_trace_summary_without_payload_collision(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -213,7 +306,76 @@ class TraceTests(unittest.TestCase):
                              "corrupt")
 
 
+class TelemetryEnvironmentTests(unittest.TestCase):
+    def test_preserves_resources_and_replaces_stale_identity(self):
+        result = RUN_EVAL.telemetry_environment(
+            {"attempt_id": "a" * 32, "task": "python/pov", "comparison_id": None,
+             "untrusted": "not exported"},
+            "service.name=capstan,benchmark.attempt_id=old,benchmark.task=old")
+        self.assertEqual(result, {"OTEL_RESOURCE_ATTRIBUTES":
+            "service.name=capstan,benchmark.attempt_id=" + "a" * 32 +
+            ",benchmark.task=python/pov"})
+
+    def test_rejects_attribute_injection_and_oversize(self):
+        for value in ("x,service.name=other", "x=y", "x\\ny", "a" * 129, 1, ""):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                RUN_EVAL.telemetry_environment({"task": value})
+
+    def test_child_receives_context_without_mutating_parent(self):
+        original = os.environ.get("OTEL_RESOURCE_ATTRIBUTES")
+        command = ("import os; "
+                   "assert 'benchmark.attempt_id=" + "a" * 32 +
+                   "' in os.environ['OTEL_RESOURCE_ATTRIBUTES']")
+        with tempfile.TemporaryDirectory() as directory:
+            result = RUN_EVAL.run_process(
+                [sys.executable, "-c", command], Path(directory), 5,
+                Path(directory) / "agent.log", telemetry_context={"attempt_id": "a" * 32})
+        self.assertEqual(result["return_code"], 0)
+        self.assertEqual(os.environ.get("OTEL_RESOURCE_ATTRIBUTES"), original)
+
+
+class AttemptIdentityTests(unittest.TestCase):
+    def test_explicit_session_placeholder_and_no_injection(self):
+        identity = "a" * 32
+        base = "capstan run --benchmark --prompt-file {prompt_file} --workdir {workdir}"
+        paths = (Path("prompt with spaces"), Path("work dir"), Path("trace"))
+        plain = RUN_EVAL.render_agent_command(base, *paths, identity)
+        self.assertNotIn("--session-id", plain)
+        self.assertEqual(RUN_EVAL.attempt_identity(base, identity)["identity_transport"],
+                         "harness_only")
+        template = base + " --session-id {attempt_id}"
+        command = RUN_EVAL.render_agent_command(template, *paths, identity)
+        self.assertEqual(command, plain + ["--session-id", identity])
+        self.assertIn("prompt with spaces", command)
+        self.assertEqual(RUN_EVAL.attempt_identity(template, identity)["session_id"], identity)
+        for bad in (None, "x; echo injected", "-flag"):
+            with self.assertRaises(RuntimeError):
+                RUN_EVAL.render_agent_command(template, *paths, bad)
+
+
 class ArgumentValidationTests(unittest.TestCase):
+    def test_canonical_log_rejects_isolation_before_corpus_access(self):
+        from argparse import Namespace
+        from unittest.mock import patch
+        args = Namespace(canonical_log=Path('absent.jsonl'), agent_command=
+                         'capstan run --benchmark --session-id {attempt_id}')
+        with patch.object(RUN_EVAL, 'parse_args', return_value=args), \
+             self.assertRaisesRegex(RuntimeError, 'without --benchmark'):
+            RUN_EVAL.main()
+
+    def test_harness_hash_includes_canonical_adapter(self):
+        from unittest.mock import patch
+        reads = []
+        def content(path):
+            reads.append(path.name)
+            return path.name.encode()
+        with patch.object(Path, 'read_bytes', content):
+            first = RUN_EVAL.harness_sha256()
+        self.assertEqual(reads, ['run_eval.py', 'canonical_logs.py'])
+        with patch.object(Path, 'read_bytes', lambda path:
+                          b'changed' if path.name == 'canonical_logs.py' else path.name.encode()):
+            self.assertNotEqual(first, RUN_EVAL.harness_sha256())
+
     def test_task_selection_rejects_duplicates_and_empty_ids(self):
         self.assertEqual(
             RUN_EVAL.selected_task_ids("python/pov, rust/acronym"),

@@ -56,6 +56,17 @@ function tests.explicit_parents_and_native_context()
     eq(#ends, 3)
 end
 
+function tests.tool_detail_selection()
+    local a = telemetry.tool_attributes("shell", {command = "echo fixture", env = {private = true}, stdin = "private"})
+    eq(a["shell.command"], "echo fixture")
+    eq(a.env, nil)
+    eq(a.stdin, nil)
+    eq(telemetry.tool_attributes("file_read", {path = "fixture"})["tool.target"], "fixture")
+    eq(next(telemetry.tool_attributes("file_read", {paths = {"a", "b"}})), nil)
+    eq(next(telemetry.tool_attributes("unknown", {path = "fixture", command = "private"})), nil)
+    eq(next(telemetry.tool_attributes("shell", {command = {"private"}})), nil)
+end
+
 function tests.owner_closes_descendants_once()
     local _, ends, counts = fake_api()
     local root = telemetry.start("agent.run")
@@ -154,6 +165,39 @@ function tests.measurement_allowlist()
     eq(metrics.unknown, 123, "source preserved")
 end
 
+function tests.normalized_cache_and_reasoning_measurements()
+    local result = telemetry.measurements({usage = {cached_tokens = 12,
+        reasoning_tokens = 34, arbitrary = 56}})
+    eq(result.cached_tokens, 12)
+    eq(result.reasoning_tokens, 34)
+    eq(result.arbitrary, nil)
+    for _, invalid in ipairs({"12", false, {}, 0/0, math.huge, -math.huge}) do
+        eq(next(telemetry.measurements({usage = {cached_tokens = invalid,
+            reasoning_tokens = invalid}})), nil)
+    end
+end
+
+function tests.native_http_phases_and_byte_names()
+    local phases = {"namelookup_elapsed_ms", "connect_elapsed_ms",
+        "appconnect_elapsed_ms", "pretransfer_elapsed_ms", "starttransfer_elapsed_ms",
+        "total_ms", "dns_ms", "tcp_connect_ms", "tls_handshake_ms",
+        "request_setup_ms", "upload_and_server_wait_ms", "download_ms"}
+    local transport = {uploaded_bytes = 123, downloaded_bytes = 456}
+    for i, key in ipairs(phases) do transport[key] = i / 2 end
+    local result = telemetry.measurements({transport = transport})
+    eq(result["transport.upload_bytes"], 123)
+    eq(result["transport.download_bytes"], 456)
+    for i, key in ipairs(phases) do eq(result["transport." .. key], i / 2) end
+    eq(result["transport.uploaded_bytes"], nil, "one canonical byte name")
+    eq(result["transport.downloaded_bytes"], nil)
+    eq(telemetry.measurements({transport = {redirect_count = 1}})["transport.dns_ms"],
+        nil, "missing redirect phases stay absent")
+    for _, value in ipairs({"123", false, {}, 0/0, math.huge, -1}) do
+        eq(next(telemetry.measurements({transport = {uploaded_bytes = value,
+            downloaded_bytes = value}})), nil)
+    end
+end
+
 function tests.invalid_measurements_are_ignored()
     for _, invalid in ipairs({"12", true, {}, 0/0, math.huge, -math.huge}) do
         local result = telemetry.measurements({events = invalid,
@@ -237,6 +281,8 @@ function tests.protect_preserves_values_and_original_exception()
     local ok, err = pcall(telemetry.protect, root, function() error(original_error) end)
     eq(ok, false)
     eq(err, original_error, "exception identity preserved")
+    eq(ends[1].attributes["error.category"], "exception")
+    eq(ends[2].attributes["error.category"], "exception")
     eq(root.ended, true); eq(child.ended, true)
     eq(#ends, 2)
     eq(ends[1].ok, false); eq(ends[1].cancelled, false)
@@ -366,6 +412,11 @@ if rawget(_G, "TELEMETRY_RUNTIME_FIXTURE") then
     native_capstan.telemetry = capstan.telemetry
     capstan = native_capstan
     local streams, results, model_done = {}, {}, 0
+    local original_now_ms, clock = capstan.now_ms, 0
+    capstan.now_ms = function()
+        clock = clock + 7
+        return clock
+    end
     http.post_stream = function(_, _, _, callback)
         streams[#streams + 1] = callback
         return #streams
@@ -374,7 +425,16 @@ if rawget(_G, "TELEMETRY_RUNTIME_FIXTURE") then
         options = options or {}
         options.messages = {{role = "user", content = "fixture request"}}
         return runtime.run(options, {
-            on_model_done = function() model_done = model_done + 1 end,
+            on_run_start = function(context)
+                eq(context, starts[#starts].context, "root context delivered before model start")
+                eq(starts[#starts].name, (tonumber(options.depth) or 0) > 0 and "subagent" or "agent.run")
+                eq(counts[context], nil, "run is still active")
+            end,
+            on_model_done = function(_, _, _, duration_ms)
+                model_done = model_done + 1
+                eq(duration_ms, ends[#ends].attributes.duration_ms,
+                    "native and legacy model duration are identical")
+            end,
             on_done = function(result, context)
                 results[#results + 1] = {result = result, context = context}
             end,
@@ -385,7 +445,7 @@ if rawget(_G, "TELEMETRY_RUNTIME_FIXTURE") then
         callback(nil, true)
     end
     local function paired(first, operation)
-        eq(starts[first].name, "agent.run")
+        eq(starts[first].name, operation == "subagent" and "subagent" or "agent.run")
         eq(starts[first + 1].name, "agent.model")
         eq(starts[first + 1].parent, starts[first].context)
         eq(starts[first].attributes.operation, operation)
@@ -453,15 +513,21 @@ if rawget(_G, "TELEMETRY_RUNTIME_FIXTURE") then
     local failed_attempt = streams[#streams]
     delivered = #results
     failed_attempt(nil, true, "connection error: fixture retry")
-    eq(#starts, first + 2)
+    eq(#starts, first + 3)
     eq(#results, delivered)
     eq(starts[first].parent, owner.context)
     eq(starts[first + 1].attributes.attempt, 1)
-    eq(starts[first + 2].attributes.attempt, 2)
+    eq(starts[first + 2].attributes.operation, "retry")
+    eq(starts[first + 2].attributes.purpose, "stream_transient_error")
     eq(starts[first + 2].parent, starts[first].context)
-    eq(starts[first + 2].attributes.operation, "subagent")
-    eq(ends[#ends].context, starts[first + 1].context)
-    eq(ends[#ends].ok, false)
+    eq(starts[first + 3].attributes.attempt, 2)
+    eq(starts[first + 3].parent, starts[first].context)
+    eq(starts[first + 3].attributes.operation, "subagent")
+    eq(ends[#ends - 1].context, starts[first + 1].context)
+    eq(ends[#ends - 1].ok, false)
+    eq(ends[#ends].context, starts[first + 2].context)
+    eq(ends[#ends].ok, true)
+    assert(ends[#ends].attributes.duration_ms >= 0)
     complete(failed_attempt)
     eq(#results, delivered)
     complete(streams[#streams])
@@ -477,9 +543,38 @@ if rawget(_G, "TELEMETRY_RUNTIME_FIXTURE") then
         complete(streams[#streams])
         paired(first, purpose)
     end
+    local tool_observed = false
+    require("agent.tools").handle_tool_calls({}, {}, {
+        {id = "missing-tool", name = "missing_fixture_tool", arguments = "{}"},
+    }, "", function() end, {silent_tools = true, callbacks = {
+        on_tool_done = function(_, _, _, duration_ms)
+            tool_observed = true
+            eq(ends[#ends].attributes.duration_ms, duration_ms,
+                "native and legacy tool duration are identical")
+        end,
+    }})
+    eq(tool_observed, true)
+
+    local settled_failure
+    local stream_count = #streams
+    local observer_ok, observer_error = pcall(runtime.run, {}, {
+        on_run_start = function(context)
+            eq(context, starts[#starts].context)
+            error("fixture run start failure")
+        end,
+        on_done = function(result) settled_failure = result end,
+    })
+    eq(observer_ok, false)
+    assert(tostring(observer_error):find("fixture run start failure", 1, true))
+    eq(settled_failure.ok, false)
+    eq(#streams, stream_count, "failed start observer prevents transport")
+    eq(counts[starts[#starts].context], 1)
+
     local exports = 0
-    capstan.telemetry.end_span = function()
+    local record_end = capstan.telemetry.end_span
+    capstan.telemetry.end_span = function(...)
         exports = exports + 1
+        record_end(...)
         error("fixture native failure")
     end
     delivered = #results
@@ -487,6 +582,7 @@ if rawget(_G, "TELEMETRY_RUNTIME_FIXTURE") then
     complete(streams[#streams])
     eq(exports, 2); eq(#results, delivered + 1)
     eq(results[#results].result.ok, true)
+    capstan.now_ms = original_now_ms
     return
 end
 

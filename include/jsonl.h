@@ -19,6 +19,7 @@ void jsonl_buffer_free(JsonlBuffer *buffer);
 int jsonl_append(JsonlBuffer *buffer, const char *text);
 int jsonl_append_n(JsonlBuffer *buffer, const char *text, size_t len);
 int jsonl_append_format(JsonlBuffer *buffer, const char *format, ...);
+int jsonl_append_number(JsonlBuffer *buffer, double value);
 int jsonl_append_string(JsonlBuffer *buffer, const char *value);
 int jsonl_write_line(int fd, const JsonlBuffer *buffer);
 int jsonl_write_line_with(int fd, const JsonlBuffer *buffer,

@@ -426,6 +426,20 @@ local function retryable_stream_error(message)
         value:match("http 5%d%d") ~= nil
 end
 
+-- Publish completed measurements before exception-driven native closure. Do
+-- not invent a duration for the interrupted request/tool or the run itself.
+local function protect_run(span, fn, ...)
+    local args = table.pack(...)
+    return telemetry.protect(span, function()
+        local values = table.pack(pcall(fn, table.unpack(args, 1, args.n)))
+        if not values[1] then
+            if span.finish_exception then pcall(span.finish_exception, values[2]) end
+            error(values[2], 0)
+        end
+        return table.unpack(values, 2, values.n)
+    end)
+end
+
 -- Full agent run: build messages, stream LLM response, handle tool_calls recursively.
 local function run_impl(opts, callbacks, run_span)
     opts = opts or {}
@@ -433,7 +447,7 @@ local function run_impl(opts, callbacks, run_span)
     if opts.profile ~= nil and not profiles.normalize(opts.profile) then
         local message = "Unknown profile: " .. tostring(opts.profile)
         if callbacks.on_error then callbacks.on_error(message) end
-        if callbacks.on_done then callbacks.on_done({ok = false, error = message, text = ""}) end
+        if callbacks.on_done then callbacks.on_done({ok = false, error = message, error_category = "configuration", text = ""}) end
         return false, message
     end
     local profile = effective_profile(opts)
@@ -442,7 +456,7 @@ local function run_impl(opts, callbacks, run_span)
         local message = "Unknown provider: " .. tostring(provider_name)
         logging.runtime_log("provider", "unknown provider: " .. tostring(provider_name))
         if callbacks.on_error then callbacks.on_error(message) end
-        if callbacks.on_done then callbacks.on_done({ok = false, error = message, text = ""}) end
+        if callbacks.on_done then callbacks.on_done({ok = false, error = message, error_category = "configuration", text = ""}) end
         return false, message
     end
 
@@ -554,15 +568,18 @@ local function run_impl(opts, callbacks, run_span)
         return not ok or cancelled == true
     end
 
-    local function stop_run(message, current_msgs)
+    local function stop_run(message, current_msgs, error_category)
+        error_category = error_category or "guard"
         if finished or run_span.ended then return end
         finished = true
+        local stop_span = telemetry.start("operation", run_span, {operation = "guard_stop"})
+        telemetry.finish(stop_span, false, false, {["error.category"] = error_category})
         logging.runtime_log("tool_guard", logging.compact(message, 500))
         if agent and type(agent.append) == "function" and opts.silent_tools ~= true then
             ui.append("\n[stopped: " .. message .. "]\n")
         end
         if callbacks.on_error then callbacks.on_error(message) end
-        finish({ok = false, error = message, text = "", messages = current_msgs or {}, turns = turns})
+        finish({ok = false, error = message, error_category = error_category, text = "", messages = current_msgs or {}, turns = turns})
     end
 
     -- One turn of the agent cycle: sends the request, streams the response,
@@ -592,6 +609,7 @@ local function run_impl(opts, callbacks, run_span)
         local stream_emitted_text = false
         local model_started_at = nil
         local model_span
+        local retry_span, retry_started_at
         local start_stream
 
         local function publish_text(text)
@@ -635,9 +653,11 @@ local function run_impl(opts, callbacks, run_span)
                 result.ok = false
                 result.error = "cancelled"
             end
+            local model_duration_ms = math.max(0, math.floor(now_ms() - model_started_at))
             telemetry.finish(model_span, result.ok ~= false,
                 result.cancelled == true or result.error == "cancelled", telemetry.measurements(result.metrics, {
-                    duration_ms = math.max(0, math.floor(now_ms() - model_started_at)),
+                    ["error.category"] = result.error_category,
+                    duration_ms = model_duration_ms,
                     text_bytes = #(result.text or ""),
                     reasoning_bytes = #(result.reasoning or ""),
                     tool_calls = #(result.tool_calls or {}),
@@ -648,7 +668,7 @@ local function run_impl(opts, callbacks, run_span)
                     turns,
                     stream_attempt,
                     result.ok ~= false,
-                    math.max(0, math.floor(now_ms() - (model_started_at or now_ms()))),
+                    model_duration_ms,
                     #(result.text or ""),
                     #(result.reasoning or ""),
                     #(result.tool_calls or {}),
@@ -657,7 +677,7 @@ local function run_impl(opts, callbacks, run_span)
                     stop_run(
                         "observability callback on_model_done failed: " ..
                             tostring(observer_error),
-                        current_msgs)
+                        current_msgs, "observer")
                     return
                 end
             end
@@ -666,6 +686,11 @@ local function run_impl(opts, callbacks, run_span)
                 local message = result.error or "agent stream failed"
                 if not stream_emitted_text and stream_attempt <= max_stream_retries and
                     retryable_stream_error(message) then
+                    retry_started_at = now_ms()
+                    retry_span = telemetry.start("operation", run_span, {
+                        operation = "retry", purpose = "stream_transient_error",
+                        attempt = stream_attempt + 1, turn = turns,
+                    })
                     logging.runtime_log("agent", string.format(
                         "stream failed before output; retrying attempt=%d/%d error=%s",
                         stream_attempt + 1,
@@ -694,7 +719,7 @@ local function run_impl(opts, callbacks, run_span)
                 end
                 if callbacks.on_error then callbacks.on_error(message) end
                 finished = true
-                finish({ok = false, error = message, text = result.text or ""})
+                finish({ok = false, error = message, error_category = result.error_category, text = result.text or ""})
                 return
             end
 
@@ -760,6 +785,7 @@ local function run_impl(opts, callbacks, run_span)
                     finish({
                         ok = false,
                         error = message,
+                        error_category = "empty_response",
                         text = "",
                         messages = current_msgs,
                         turns = turns,
@@ -859,7 +885,7 @@ local function run_impl(opts, callbacks, run_span)
             end
             if callbacks.on_error then callbacks.on_error(message) end
             finished = true
-            finish({ok = false, error = message, text = ""})
+            finish({ok = false, error = message, error_category = "request", text = ""})
             return false, message
         end
         local _, invalid_utf8_bytes = utf8_sanitize.sanitize_values(request)
@@ -884,6 +910,12 @@ local function run_impl(opts, callbacks, run_span)
                 finish({ok = false, cancelled = true, error = "cancelled", text = ""})
                 return
             end
+            if retry_span then
+                telemetry.finish(retry_span, true, false, {
+                    duration_ms = math.max(0, now_ms() - retry_started_at),
+                })
+                retry_span = nil
+            end
             stream_attempt = stream_attempt + 1
             model_started_at = now_ms()
             model_span = telemetry.start("agent.model", run_span, {
@@ -903,7 +935,7 @@ local function run_impl(opts, callbacks, run_span)
                     stop_run(
                         "observability callback on_model_start failed: " ..
                             tostring(observer_error),
-                        current_msgs)
+                        current_msgs, "observer")
                     return
                 end
             end
@@ -917,7 +949,7 @@ local function run_impl(opts, callbacks, run_span)
             end, prompt_estimate, opts)
             local response_callback = function(...)
                 if attempt_done or run_span.ended then return end
-                return telemetry.protect(run_span, parse_response, ...)
+                return protect_run(run_span, parse_response, ...)
             end
             local transport_ok, transport_error = pcall(
                 http.post_stream,
@@ -946,24 +978,69 @@ end
 function M.run(opts, callbacks)
     opts = opts or {}
     callbacks = callbacks or {}
-    local run_span = telemetry.start("agent.run", opts.telemetry_parent, {
-        operation = telemetry.purpose(opts.purpose or ((tonumber(opts.depth) or 0) > 0 and "subagent" or "agent")),
+    local is_subagent = (tonumber(opts.depth) or 0) > 0
+    local run_span = telemetry.start(is_subagent and "subagent" or "agent.run", opts.telemetry_parent, {
+        operation = telemetry.purpose(opts.purpose or (is_subagent and "subagent" or "agent")),
         depth = tonumber(opts.depth) or 0,
+        subagent_index = is_subagent and opts.subagent_index or nil,
+        subagent_id = is_subagent and opts.subagent_id or nil,
+        attempt = is_subagent and opts.subagent_attempt or nil,
     })
     local observers = copy_table(callbacks) or {}
+    -- Completed measurements belong to this run only. In particular, a
+    -- subagents tool measures parent wait; its children's work is not added.
+    -- Count before publishing so a fail-closed observer retains the measured
+    -- completion, just as the legacy trace adapter did.
+    local measurements = {request_count = 0, tool_count = 0,
+        model_ms = 0, tool_ms = 0, permission_wait_ms = 0, subagent_wait_ms = 0}
+    observers.on_model_done = function(turn, attempt, ok, duration, ...)
+        measurements.request_count = measurements.request_count + 1
+        measurements.model_ms = measurements.model_ms + duration
+        if callbacks.on_model_done then
+            return callbacks.on_model_done(turn, attempt, ok, duration, ...)
+        end
+    end
+    observers.on_tool_done = function(tool, text, ok, duration, permission_wait)
+        permission_wait = math.min(duration, math.max(0, permission_wait or 0))
+        measurements.tool_count = measurements.tool_count + 1
+        measurements.permission_wait_ms = measurements.permission_wait_ms + permission_wait
+        local bucket = tool.name == "subagents" and "subagent_wait_ms" or "tool_ms"
+        measurements[bucket] = measurements[bucket] + duration - permission_wait
+        if callbacks.on_tool_done then
+            return callbacks.on_tool_done(tool, text, ok, duration, permission_wait)
+        end
+    end
+    run_span.finish_attributes = function(attributes)
+        attributes = copy_table(attributes) or {}
+        for key, value in pairs(measurements) do attributes[key] = value end
+        return attributes
+    end
     local settled = false
     observers.on_done = function(result)
         if settled then return end
         settled = true
-        local closed, close_error = pcall(telemetry.finish, run_span, not result or result.ok ~= false,
-            result and (result.cancelled == true or result.error == "cancelled"),
-            {turns = result and result.turns, duration_ms = result and result.duration_ms})
+        result = result or {}
+        if type(result.duration_ms) == "number" then
+            local residual = result.duration_ms - measurements.model_ms - measurements.tool_ms
+                - measurements.permission_wait_ms - measurements.subagent_wait_ms
+            measurements.unattributed_ms = math.max(0, residual)
+            measurements.overlap_ms = math.max(0, -residual)
+        end
+        result.measurements = copy_table(measurements)
+        local attributes = copy_table(measurements)
+        attributes["error.category"] = result.error_category
+        attributes.turns, attributes.duration_ms = result.turns, result.duration_ms
+        local closed, close_error = pcall(telemetry.finish, run_span, result.ok ~= false,
+            result.cancelled == true or result.error == "cancelled", attributes)
         local delivered, delivery_error = true, nil
         if callbacks.on_done then
             delivered, delivery_error = pcall(callbacks.on_done, result, run_span.context)
         end
         if not closed then error(close_error, 0) end
         if not delivered then error(delivery_error, 0) end
+    end
+    run_span.finish_exception = function(err)
+        observers.on_done({ok = false, error = err, error_category = "exception", text = ""})
     end
     run_span.on_terminal = function(_, cancelled)
         observers.on_done({ok = false, cancelled = cancelled,
@@ -974,7 +1051,15 @@ function M.run(opts, callbacks)
         run_span.on_terminal = nil
         return false, "cancelled"
     end
-    return telemetry.protect(run_span, run_impl, opts, observers, run_span)
+    return protect_run(run_span, function()
+        -- Deliver explicit correlation before validation, hooks, or transport.
+        -- Like other API observers, failures terminate the owned run.
+        if type(callbacks.on_run_start) == "function" then
+            callbacks.on_run_start(run_span.context)
+        end
+        if run_span.ended then return false, "cancelled" end
+        return run_impl(opts, observers, run_span)
+    end)
 end
 
 -- Inherit only model routing; background work keeps its own run policy.
@@ -1185,6 +1270,7 @@ _G.compact_entry = function(messages)
         return
     end
 
+    local session_id = type(agent.session_id) == "function" and agent.session_id() or nil
     local chunks = {}
     local opts = compact_run_options(messages)
     agent.set_activity("Compacting")
@@ -1198,11 +1284,11 @@ _G.compact_entry = function(messages)
             agent.set_activity(nil)
             popup.error("Compact", message)
         end,
-        on_done = function(result)
+        on_done = function(result, run_context)
             agent.set_thinking(false)
             agent.set_activity(nil)
             if not result or result.ok == false then
-                agent.finish_run()
+                agent.finish_run(run_context, session_id)
                 local message = result and result.error or "compact failed"
                 popup.error("Compact", message)
                 return
@@ -1210,12 +1296,12 @@ _G.compact_entry = function(messages)
             local text = result.text or table.concat(chunks)
             text = text:gsub("^%s+", ""):gsub("%s+$", "")
             if text == "" then
-                agent.finish_run()
+                agent.finish_run(run_context, session_id)
                 popup.error("Compact", "Compact returned an empty summary")
                 return
             end
             agent.replace_compacted_context(text)
-            agent.finish_run()
+            agent.finish_run(run_context, session_id)
         end,
     })
 end
@@ -1228,13 +1314,14 @@ or explanation.
 
 local session_title_jobs = {}
 
-local function generate_session_title(parent_context)
+local function generate_session_title(parent_context, owner_session_id)
     if type(agent.session_title_context) ~= "function" or
        type(agent.set_session_title) ~= "function" then
         return
     end
     local session_id, user_text, assistant_text = agent.session_title_context()
     if not session_id or session_title_jobs[session_id] then return end
+    if owner_session_id and session_id ~= owner_session_id then return end
     session_title_jobs[session_id] = true
 
     local opts = {
@@ -1259,13 +1346,13 @@ local function generate_session_title(parent_context)
         -- Title generation is metadata work. Supplying an explicit text
         -- callback prevents M.run's UI-visible agent.append fallback.
         on_text = function() end,
-        on_done = function(result)
+        on_done = function(result, run_context)
             session_title_jobs[session_id] = nil
             if not result or result.ok == false then return end
             local title = tostring(result.text or "")
             title = title:gsub("^%s+", ""):gsub("%s+$", "")
             title = title:gsub("^[\"'`]+", ""):gsub("[\"'`]+$", "")
-            if title ~= "" then agent.set_session_title(session_id, title) end
+            if title ~= "" then agent.set_session_title(session_id, title, run_context) end
         end,
     })
 end
@@ -1297,6 +1384,7 @@ end
 -- Entry point called from C via agent_build_and_dispatch. Receives message
 -- history as a Lua table, runs the full agent cycle with UI-visible streaming.
 _G.agent_entry = function(messages)
+    local session_id = type(agent.session_id) == "function" and agent.session_id() or nil
     local opts = {
         messages = messages,
         update_status = true,
@@ -1313,12 +1401,12 @@ _G.agent_entry = function(messages)
         on_error = function(message)
             popup.error("Provider", message)
         end,
-        on_done = function(result, parent_context)
+        on_done = function(result, run_context)
             agent.set_thinking(false)
             agent.set_activity(nil)
-            agent.finish_run()
+            agent.finish_run(run_context, session_id)
             if result and result.ok ~= false then
-                generate_session_title(parent_context)
+                generate_session_title(run_context, session_id)
             end
         end,
     })

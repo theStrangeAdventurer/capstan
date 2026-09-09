@@ -59,12 +59,44 @@ r2: OpenCode -> Capstan
 r3: Capstan -> OpenCode
 ```
 
-For every Capstan command, include `--trace-file {trace_file}`. For both agents,
+For every Capstan command in the published isolated comparison, include
+`--trace-file {trace_file}`. For both agents,
 pass the same `--replicate-id rN` for corresponding repetitions and the same
 `--comparison-id` only when provider route, model, reasoning setting, corpus,
 task matrix, and timeouts are comparable. The documented commands in
 `benchmarks/polyglot/README.md` are the source of truth for these flags and
 placeholders.
+
+## Optional trace-free diagnosis
+
+For a separate, non-isolated diagnostic configuration, pass
+`run_eval.py --canonical-log PATH` and include `--session-id {attempt_id}` in
+its Capstan agent command. Omit `--benchmark`; `--trace-file` is not required
+for this mode. Configure the local `capstan.log.v1` lifecycle file exporter
+externally through normal runtime configuration: the harness only reads PATH,
+not configures logging. Optional harness `--telemetry-context` supplies benchmark
+identity as `OTEL_RESOURCE_ATTRIBUTES`; it does not enable an exporter.
+
+The harness enforces the session placeholder and rejects `--benchmark` with
+both `--canonical-log` and `--telemetry-context`: isolated benchmark mode disables
+native context and export. Non-isolated runs may load normal extension surfaces; record their
+configuration and keep these diagnostics separate from the published isolated
+comparison, with a distinct configuration/comparison ID. Public prompts,
+corpus, task selection, scoring, and fairness rules still apply.
+
+Canonical ingestion selects exactly one trace/run by generated session ID and
+fails closed on ambiguous/corrupt input, without legacy fallback. It consumes
+local JSONL only, not OTLP or backend queries; provide a complete ordered input
+across rotations. Missing files yield missing telemetry; unfinished spans are
+partial, and paired events cannot prove no spans were dropped.
+
+Report native correlation, root outcome, and producer-supplied root measurements
+when present: duration/turns, request/tool counts, and model/tool/permission/
+subagent/unattributed/overlap time. The analyzer adapts explicit runtime totals;
+it never infers them from log timestamps or child spans. Old or interrupted
+records may lack totals: report `N/A` and reduced metric coverage, not zero. Harness process measurements and upstream scoring remain authoritative;
+timeout or outcome/exit disagreement makes telemetry inconsistent. See
+`specs/benchmarks.md` for the adapter contract.
 
 ## Evaluation integrity
 
@@ -99,8 +131,9 @@ Treat process wall time as authoritative for all attempts, including timeouts
 and crashes. Use model/tool/permission/subagent/unattributed breakdowns only
 from complete, process-consistent Capstan traces. Preserve `.partial` traces for
 diagnosis, but do not include partial, corrupt, or inconsistent telemetry in
-breakdown averages. Runtime logs are diagnostic context and never replace the
-per-task trace. Preserve OpenCode's raw event logs; compare normalized metrics
+breakdown averages. For published isolated comparisons, runtime logs are diagnostic context and
+never replace the per-task legacy trace. The optional canonical diagnostic
+mode above is not a replacement for published legacy breakdown evidence. Preserve OpenCode's raw event logs; compare normalized metrics
 without treating format differences as performance differences.
 
 Report score, grouped failure modes, per-task and aggregate wall time, CPU,

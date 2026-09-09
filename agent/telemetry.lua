@@ -2,6 +2,8 @@
 -- Native telemetry is optional and must never affect legacy observers or work.
 local M = {}
 local active = {}
+-- Wrapper fields are diagnostic conveniences, not inheritance authority.
+local contexts = setmetatable({}, {__mode = "k"})
 local shutting_down = false
 
 local function api()
@@ -28,8 +30,11 @@ function M.start(name, parent, attributes, session_id)
     local native = api()
     if native and type(native.start) == "function" then
         local ok, context = pcall(native.start, name,
-            parent and (parent.context or (not parent.children and parent)) or nil, attributes)
-        if ok and type(context) == "table" then span.context = context end
+            parent and (contexts[parent] or parent.context or (not parent.children and parent)) or nil, attributes)
+        if ok and type(context) == "table" then
+            span.context = context
+            contexts[span] = context
+        end
     end
     return span
 end
@@ -46,17 +51,42 @@ function M.finish(span, ok, cancelled, attributes)
         if not success and not failure then failure = {err} end
     end
     while next(span.children) do
-        settle(M.finish, next(span.children), false, cancelled)
+        settle(M.finish, next(span.children), false, cancelled,
+            attributes and {["error.category"] = attributes["error.category"]})
     end
     if span.parent and span.parent.children then span.parent.children[span] = nil end
+    -- Snapshot owner measurements before native closure, including forced
+    -- descendant cancellation. Terminal observers run afterwards as before.
+    local finish_attributes = span.finish_attributes
+    span.finish_attributes = nil
+    if finish_attributes then
+        settle(function() attributes = finish_attributes(attributes) end)
+    end
     local native = api()
-    if span.context and native and type(native.end_span) == "function" then
-        pcall(native.end_span, span.context, ok == true, cancelled == true, attributes)
+    local context = contexts[span] or span.context
+    if context and native and type(native.end_span) == "function" then
+        pcall(native.end_span, context, ok == true, cancelled == true, attributes)
     end
     local on_terminal = span.on_terminal
     span.on_terminal = nil
     if on_terminal then settle(on_terminal, ok == true, cancelled == true) end
     if failure then error(failure[1], 0) end
+end
+
+-- Only scalar, explicitly selected targets; never serialize argument tables.
+-- Native export owns opt-in, redaction and byte bounds for both sinks.
+function M.tool_attributes(name, args, attributes)
+    attributes = attributes or {}
+    args = type(args) == "table" and args or {}
+    if name == "shell" then
+        if type(args.command) == "string" then attributes["shell.command"] = args.command end
+    else
+        local targets = {file_read = "path", file_edit = "path", file_write = "path",
+            fetch = "url", wiki_read = "path", wiki_write = "path", wiki_source_read = "path"}
+        local key = targets[name]
+        if key and type(args[key]) == "string" then attributes["tool.target"] = args[key] end
+    end
+    return attributes
 end
 
 -- Copy only known numeric measurements, never arbitrary provider/HTTP data.
@@ -76,8 +106,25 @@ function M.measurements(metrics, attributes)
         "first_tool_ms", "events", "raw_bytes", "text_chunks", "reasoning_chunks",
         "tool_delta_chunks", "usage_chunks"})
     numbers(metrics.usage, {"prompt_tokens", "completion_tokens", "total_tokens"}, "usage.")
+    -- Normalized by stream.lua; retain the canonical native attribute names.
+    numbers(metrics.usage, {"cached_tokens", "reasoning_tokens"})
     numbers(metrics.transport, {"http_status", "curl_code", "download_bytes",
-        "upload_bytes", "chunk_count", "redirect_count", "ttfb_ms"}, "transport.")
+        "upload_bytes", "chunk_count", "redirect_count", "ttfb_ms",
+        "namelookup_elapsed_ms", "connect_elapsed_ms", "appconnect_elapsed_ms",
+        "pretransfer_elapsed_ms", "starttransfer_elapsed_ms", "total_ms",
+        "dns_ms", "tcp_connect_ms", "tls_handshake_ms", "request_setup_ms",
+        "upload_and_server_wait_ms", "download_ms"}, "transport.")
+    -- Native HTTP uses past-tense byte counters. Preserve the established OTLP
+    -- names; older provider adapters may already supply those names directly.
+    if type(metrics.transport) == "table" then
+        for target, source in pairs({download_bytes = "downloaded_bytes",
+            upload_bytes = "uploaded_bytes"}) do
+            local value = metrics.transport[source]
+            if type(value) == "number" and value >= 0 and value < math.huge then
+                attributes["transport." .. target] = value
+            end
+        end
+    end
     return attributes
 end
 
@@ -86,7 +133,7 @@ function M.protect(span, fn, ...)
     local values = table.pack(pcall(fn, ...))
     if not values[1] then
         if span then span.terminal_error = values[2] end
-        pcall(M.finish, span, false, false)
+        pcall(M.finish, span, false, false, {["error.category"] = "exception"})
         -- Settle async owners too (notably the subagent scheduler). Preserve
         -- the triggering exception even if the terminal observer also fails.
         if span and span.on_exception then pcall(span.on_exception, values[2]) end

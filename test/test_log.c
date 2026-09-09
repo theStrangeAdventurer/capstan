@@ -543,7 +543,42 @@ static MunitResult test_log_correlated_rejects_invalid_ids(
   return MUNIT_OK;
 }
 
+static MunitResult test_log_structured(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  char dir[256], path[512];
+  snprintf(dir,sizeof(dir),"/tmp/capstan-log-structured-%ld",(long)getpid());
+  munit_assert_int(mkdir(dir,0700),==,0);
+  munit_assert_int(setenv("XDG_STATE_HOME",dir,1),==,0);
+  log_cleanup();
+  LogAttribute attrs[]={
+    {"model","quoted\" [REDACTED]",0,0},
+    {"duration_ms","",2.5,1}, {"cancelled","",1,2},
+    {"mode","cli",0,0}, {"run.id","0123456789abcdef",0,0},
+    {"model","finished",0,0}
+  };
+  munit_assert_true(log_event_structured("info","telemetry","span.finished",
+      "owner","0123456789abcdef0123456789abcdef","0123456789abcdef",attrs,6));
+  munit_assert_true(log_set_session_id("owner"));
+  munit_assert_int(log_path(path,sizeof(path)),==,0);
+  char *content=read_file_alloc(path);
+  munit_assert_not_null(content);
+  munit_assert_not_null(strstr(content,
+    "\"attributes\":[{\"key\":\"model\",\"value\":\"quoted\\\" [REDACTED]\"},"
+    "{\"key\":\"duration_ms\",\"value\":2.5},{\"key\":\"cancelled\",\"value\":true},"
+    "{\"key\":\"mode\",\"value\":\"cli\"},{\"key\":\"run.id\",\"value\":\"0123456789abcdef\"},"
+    "{\"key\":\"model\",\"value\":\"finished\"}]"));
+  free(content);
+  attrs[1].number=-1;
+  errno=0;
+  munit_assert_false(log_event_structured("info","telemetry","bad","owner",
+                                         NULL,NULL,attrs,6));
+  munit_assert_int(errno,==,EINVAL);
+  log_cleanup();
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/structured", test_log_structured, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/correlated_ownership_and_redaction",
      test_log_correlated_ownership_and_redaction, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

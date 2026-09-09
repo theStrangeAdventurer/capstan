@@ -223,16 +223,19 @@ return {
 `observability` configures the optional native OTLP/HTTP protobuf exporter for
 traces and span lifecycle logs, shared by CLI, TUI and ACP. It does not export
 metrics or existing free-form runtime logs. See [Observability](observability.md)
-for lifecycle, privacy, fixed queue/retry limits and nonblocking diagnostics.
+for lifecycle, privacy, fixed queue/retry limits and explicit diagnostics pulls.
 
 ```lua
 observability = {
-  enabled = false, -- Must be true; OTEL environment settings alone do not enable it
+  enabled = false, -- OTLP only; OTEL environment settings alone do not enable it
+  file_exporter = true, -- Independent local lifecycle JSONL; boolean, default true
   endpoint = "http://localhost:4318", -- Base URL; use HTTPS for remote collectors
   protocol = "http/protobuf",       -- Only supported protocol
   traces_exporter = "otlp",         -- "otlp" or "none"
   logs_exporter = "otlp",           -- "otlp" or "none"; lifecycle logs only
   service_name = "capstan",
+  include_session_name = false,    -- Explicit opt-in for redacted session titles
+  include_tool_details = false,    -- Explicit opt-in for bounded command/target attributes
   -- service_version defaults to the compiled app version ("local" fallback).
   headers = {},                    -- String map, not an array of HTTP lines
   resource_attributes = {},        -- Explicit export data; avoid sensitive values
@@ -240,12 +243,21 @@ observability = {
 ```
 
 Configuration is read once after config/redaction initialization. Only boolean
-`enabled = true` enables export. `OTEL_SDK_DISABLED=true` (case-insensitive)
-forces it off; `false`, empty or other values do not enable it. Both exporters
-set to `none` also leave export disabled. Invalid active settings disable the
-whole exporter and increment `configuration_errors`, without affecting agent
-exit status or printing values to stderr. Unsupported gRPC/JSON protocols and
-exporter lists are not accepted. Disabled signals skip their transport settings.
+`enabled = true` enables OTLP. The independent boolean `file_exporter` defaults
+to `true` and writes canonical lifecycle records through the existing local log
+configuration; it is not a path or a replacement for `--trace-file`.
+`OTEL_SDK_DISABLED=true` (case-insensitive) suppresses both sinks, but retains
+native identity. `false`, empty or other values do not enable OTLP. Both OTLP
+signal exporters set to `none` also leave network export disabled. Invalid active
+transport settings disable network export and increment `configuration_errors`,
+without affecting agent exit status, local lifecycle output or native identity,
+or printing values to stderr. Unsupported gRPC/JSON protocols and exporter lists
+are not accepted. Disabled signals skip their transport settings.
+
+Normal runtime states receive trace/span/run context even offline or with both
+sinks disabled. Strict isolated-state denial remains the default: isolated states
+receive no contexts, exports or diagnostics. Local and OTLP sinks consume the
+same bounded, filtered/redacted encoded records, not separate content policies.
 
 ### Environment precedence
 

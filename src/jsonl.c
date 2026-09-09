@@ -1,5 +1,7 @@
 #include "jsonl.h"
 #include <errno.h>
+#include <locale.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -76,6 +78,25 @@ int jsonl_append_format(JsonlBuffer *buffer, const char *format, ...) {
   va_end(args);
   buffer->len += (size_t)needed;
   return 1;
+}
+
+int jsonl_append_number(JsonlBuffer *buffer, double value) {
+  if (!isfinite(value)) {
+    errno = EINVAL;
+    return 0;
+  }
+  /* Normalize the locale's radix without changing process-global locale. */
+  char number[128];
+  int length = snprintf(number, sizeof(number), "%.17g", value);
+  if (length < 0 || (size_t)length >= sizeof(number))
+    return 0;
+  const char *decimal = localeconv()->decimal_point;
+  char *radix = decimal && *decimal ? strstr(number, decimal) : NULL;
+  if (!radix)
+    return jsonl_append_n(buffer, number, (size_t)length);
+  return jsonl_append_n(buffer, number, (size_t)(radix - number)) &&
+         jsonl_append(buffer, ".") &&
+         jsonl_append(buffer, radix + strlen(decimal));
 }
 
 static size_t valid_utf8_length(const unsigned char *p, size_t remaining) {

@@ -1,0 +1,32 @@
+# Requires OpenTelemetry Collector Contrib (file exporter).
+# Run from a directory containing a writable ./otel-output directory.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:14318
+
+processors:
+  batch: {}
+
+exporters:
+  file/traces:
+    path: ./otel-output/traces.jsonl
+    format: json
+  file/logs:
+    path: ./otel-output/logs.jsonl
+    format: json
+
+service:
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file/traces]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file/logs]

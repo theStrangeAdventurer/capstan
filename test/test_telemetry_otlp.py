@@ -168,6 +168,48 @@ def run(mode, base, env=None):
 
 
 class OTLPTests(unittest.TestCase):
+    def test_tool_details_opt_in_and_common_redaction(self):
+        for mode in ('details', 'details-off'):
+            with self.subTest(mode=mode), receiver() as server:
+                run(mode, server.base)
+                spans, logs = self.inspect(server)
+            child, = [s for s in spans if one(s, 5, 2) == b'subagent']
+            records = [(child, 9)] + [(log, 6) for log in logs
+                       if attributes(log, 6).get('span.name') == 'subagent']
+            for record, field in records:
+                attrs = attributes(record, field)
+                self.assertEqual(attrs['subagent_index'], 2)
+                self.assertEqual(attrs['subagent_id'], 'api_key=[REDACTED]')
+                self.assertEqual(attrs['attempt'], 1)
+                if mode == 'details-off':
+                    self.assertNotIn('shell.command', attrs)
+                    self.assertNotIn('tool.target', attrs)
+                else:
+                    # Preserve the canonical redactor's existing whitespace normalization.
+                    self.assertEqual(attrs['shell.command'], 'echoapi_key=[REDACTED]')
+                    self.assertEqual(attrs['tool.target'], 'fixture.lua')
+            bounded, = [s for s in spans if one(s, 5, 2) == b'tool']
+            records = [(bounded, 9)] + [(log, 6) for log in logs
+                       if attributes(log, 6).get('span.name') == 'tool'
+                       and attributes(log, 6).get('outcome')]
+            for record, field in records:
+                attrs = attributes(record, field)
+                if mode == 'details':
+                    self.assertEqual(attrs['shell.command'], '[OVERSIZED]')
+                    self.assertEqual(attrs['tool.target'], 'api_key=[REDACTED]')
+                else:
+                    self.assertNotIn('shell.command', attrs)
+                    self.assertNotIn('tool.target', attrs)
+        with receiver() as server:
+            stdout, _ = run('details-invalid', server.base)
+            self.assertIn('disabled', stdout)
+            self.assertEqual(server.requests, [])
+
+    def test_exporter_result_classification(self):
+        # Pure C policy: no Lua state, collector, DNS, TLS backend or timing.
+        stdout, _ = run('classification', '')
+        self.assertEqual(stdout, 'classification ok\n')
+
     def inspect(self, server, prefix='', header='config', service='native-test', suite='native'):
         spans, logs = [], []
         for path, headers, body, _ in server.requests:
@@ -213,12 +255,13 @@ class OTLPTests(unittest.TestCase):
             self.assertGreaterEqual(end, start)
             self.assertEqual(one(span, 6, 0), 1)
         self.assertEqual(len(ids), 3)
-        self.assertEqual(attributes(root, 9), dict(operation='run', depth=0,
+        context = {'session.id': 'native-session', 'run.id': one(root, 2, 2).hex()}
+        self.assertEqual(attributes(root, 9), dict(context, operation='run', depth=0,
                          provider='api_key=[REDACTED]', model='fixture-model',
                          cancelled=False, outcome='success'))
-        self.assertEqual(attributes(model, 9), dict(input_tokens=12, profile='fixture',
+        self.assertEqual(attributes(model, 9), dict(context, input_tokens=12, profile='fixture',
                          output_tokens=3, cancelled=False, outcome='error'))
-        self.assertEqual(attributes(tool, 9), dict(tool='shell', duration_ms=2.5,
+        self.assertEqual(attributes(tool, 9), dict(context, tool='shell', duration_ms=2.5,
                          cancelled=True, outcome='cancelled'))
         for span, status in [(root, 1), (model, 2), (tool, 0)]:
             self.assertEqual(one(wire(one(span, 15, 2)), 3, 0), status)
@@ -233,9 +276,48 @@ class OTLPTests(unittest.TestCase):
             self.assertEqual(one(log, 2, 0), 17 if error else 9)
             self.assertEqual(one(log, 3, 2), b'ERROR' if error else b'INFO')
             self.assertGreater(int.from_bytes(one(log, 1, 1), 'little'), 0)
-            self.assertFalse(attributes(log, 6))
+            span = next(s for s in spans if one(s, 2, 2) == sid)
+            expected = attributes(span, 9)
+            if event == b'span.started':
+                for key in ('outcome', 'cancelled', 'duration_ms', 'output_tokens'):
+                    expected.pop(key, None)
+            expected['span.name'] = one(span, 5, 2).decode()
+            if 4 in span:
+                expected['parent.span_id'] = one(span, 4, 2).hex()
+            self.assertEqual(attributes(log, 6), expected)
         self.assertEqual(events, collections.Counter({(sid, event): 1 for sid in ids
                          for event in (b'span.started', b'span.finished')}))
+
+    def test_closed_error_categories(self):
+        with receiver() as server:
+            run('categories', server.base)
+            spans, logs = self.inspect(server)
+        self.assertEqual((len(spans), len(logs)), (6, 12))
+        categorized = [s for s in spans if 'error.category' in attributes(s, 9)]
+        self.assertEqual(len(categorized), 1)
+        self.assertEqual(attributes(categorized[0], 9)['error.category'], 'transport')
+        categorized_logs = [log for log in logs if 'error.category' in attributes(log, 6)]
+        self.assertEqual(len(categorized_logs), 1)
+        self.assertEqual(attributes(categorized_logs[0], 6)['error.category'], 'transport')
+        self.assertEqual(one(categorized_logs[0], 10, 2), one(categorized[0], 2, 2))
+        self.assertEqual(one(wire(one(categorized_logs[0], 5, 2)), 1, 2), b'span.finished')
+
+    def test_network_phases_on_spans_and_correlated_logs(self):
+        with receiver() as server:
+            run('phases', server.base)
+            spans, logs = self.inspect(server)
+        self.assertEqual((len(spans), len(logs)), (1, 2))
+        expected = {'transport.' + key: i / 2 for i, key in enumerate([
+            'namelookup_elapsed_ms', 'connect_elapsed_ms', 'appconnect_elapsed_ms',
+            'pretransfer_elapsed_ms', 'starttransfer_elapsed_ms', 'total_ms',
+            'dns_ms', 'tcp_connect_ms', 'tls_handshake_ms', 'request_setup_ms',
+            'upload_and_server_wait_ms', 'download_ms'], 1)}
+        expected.update({'transport.upload_bytes': 123, 'transport.download_bytes': 456})
+        actual = attributes(spans[0], 9)
+        self.assertEqual({k: v for k, v in actual.items() if k.startswith('transport.')}, expected)
+        finished, = [log for log in logs
+                     if one(wire(one(log, 5, 2)), 1, 2) == b'span.finished']
+        self.assertEqual(attributes(finished, 6), dict(actual, **{'span.name': 'agent.run'}))
 
     def test_startup_once_uncorrelated_and_disabled_discarded(self):
         with receiver() as server:
@@ -260,17 +342,39 @@ class OTLPTests(unittest.TestCase):
             self.assertEqual(stdout, 'disabled\n')
             self.assertEqual(server.requests, [])
 
-    def test_local_session_context_never_exported(self):
+    def test_distinct_roots_and_ephemeral_context(self):
+        with receiver() as server:
+            stdout, _ = run('roots', server.base)
+            self.assertEqual(stdout, 'enabled\n')
+            spans, logs = self.inspect(server)
+        self.assertEqual((len(spans), len(logs)), (4, 8))
+        roots = [s for s in spans if one(s, 5, 2) != b'title']
+        self.assertEqual(len({attributes(s, 9)['run.id'] for s in roots}), 3)
+        ephemeral, = [s for s in roots if attributes(s, 9).get('mode') == 'acp']
+        self.assertNotIn('session.id', attributes(ephemeral, 9))
+        self.assertNotIn('session.name', attributes(ephemeral, 9))
+        root, = [s for s in roots if one(s, 5, 2) == b'agent.run']
+        title, = [s for s in spans if one(s, 5, 2) == b'title']
+        self.assertEqual(attributes(title, 9)['run.id'], attributes(root, 9)['run.id'])
+        self.assertEqual(one(title, 4, 2), one(root, 2, 2))
+
+    def test_session_context_immutable_after_completion(self):
         with receiver() as server:
             stdout, _ = run('context', server.base)
             self.assertEqual(stdout, 'enabled\n')
             spans, logs = self.inspect(server)
             for _, _, body, _ in server.requests:
-                for value in (b'session_id', b'native-session', b'mutated-session',
+                for value in (b'session_id', b'mutated-session',
                               b'completed-session'):
                     self.assertNotIn(value, body)
         self.assertEqual((len(spans), len(logs)), (3, 6))
         root, = [s for s in spans if one(s, 5, 2) == b'agent.run']
+        for record, field in [(s, 9) for s in spans] + [(log, 6) for log in logs]:
+            actual = attributes(record, field)
+            self.assertEqual(actual['session.id'], 'native-session')
+            self.assertEqual(actual['session.name'], 'api_key=[REDACTED]')
+            self.assertEqual(actual['mode'], 'tui')
+            self.assertEqual(actual['run.id'], one(root, 2, 2).hex())
         for span in spans:
             self.assertEqual(one(span, 1, 2), one(root, 1, 2))
             if span is not root:
@@ -326,6 +430,18 @@ class OTLPTests(unittest.TestCase):
             run('single', server.base)
             self.assertEqual([r[0] for r in server.requests], ['/v1/traces'])
 
+    def test_independent_file_and_network_sinks(self):
+        # Driver asserts offline IDs, successful/repeated completion and local
+        # lifecycle counts. Receiver independently proves network suppression.
+        with receiver() as server:
+            stdout, _ = run('offline-silent', server.base)
+            self.assertEqual(stdout, 'disabled\n')
+            self.assertEqual(server.requests, [])
+            stdout, _ = run('network-only', server.base)
+            self.assertEqual(stdout, 'enabled\n')
+            spans, logs = self.inspect(server)
+            self.assertEqual((len(spans), len(logs)), (3, 6))
+
     def test_no_redirects(self):
         with receiver() as destination:
             with receiver(lambda _: (307, {'Location': destination.base + '/stolen'}, b'', 0)) as server:
@@ -363,6 +479,22 @@ class OTLPTests(unittest.TestCase):
                     self.assertEqual(len(server.requests), 1)
                     self.assertIn(diagnostic, stdout)
 
+    def test_cleanup_exports_root_before_blocked_lifecycle_logs(self):
+        for failure in [(503, {'Retry-After': '60'}, b'', 0),
+                        (200, {}, b'', 4)]:
+            with self.subTest(failure=failure), receiver() as server:
+                server.policy = lambda _: (failure if server.requests[-1][0].endswith('/logs')
+                                           else (200, {}, b'', 0))
+                stdout, elapsed = run('sample', server.base)
+                spans, _ = self.inspect(server)
+                self.assertEqual(server.requests[0][0], '/v1/traces')
+                self.assertEqual(len(spans), 3)
+                root, = [s for s in spans if one(s, 5, 2) == b'agent.run']
+                self.assertNotIn(4, root)
+                self.assertEqual(attributes(root, 9)['outcome'], 'success')
+                self.assertIn('losses 6 0 0 0', stdout)
+                self.assertLess(elapsed, 3.0)
+
     def test_cleanup_deadline_retry_after_and_slow_receiver(self):
         for policy in [lambda _: (503, {'Retry-After': '60'}, b'', 0),
                        lambda _: (200, {}, b'', 4)]:
@@ -397,7 +529,9 @@ class OTLPTests(unittest.TestCase):
                 self.assertNotIn(b'CUSTOM_PRIVATE', body)
         self.assertEqual((len(spans), len(logs)), (2, 4))
         tool, = [s for s in spans if one(s, 5, 2) == b'tool']
-        self.assertEqual(attributes(tool, 9), dict(model='[CUSTOM]', profile='[CUSTOM]',
+        root, = [s for s in spans if one(s, 5, 2) == b'agent.run']
+        context = {'session.id': 'native-session', 'run.id': one(root, 2, 2).hex()}
+        self.assertEqual(attributes(tool, 9), dict(context, model='[CUSTOM]', profile='[CUSTOM]',
                                                   cancelled=False, outcome='success'))
 
     def test_second_state_isolation_and_retained_closure_revocation(self):

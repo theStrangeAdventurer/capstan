@@ -312,6 +312,50 @@ class AnalyzeTraceTests(unittest.TestCase):
         self.assertEqual(len(ANALYZE.metric_telemetry_rows(
             [complete, incomplete])), 1)
 
+    def test_root_metrics_have_independent_coverage_and_missing_is_not_zero(self):
+        for explicit in (True, False):
+            with self.subTest(explicit=explicit), tempfile.TemporaryDirectory() as directory:
+                measured = self.result(10)
+                terminal = measured['agent']['telemetry']['terminal']
+                # Root-only canonical measurements do not require legacy breakdowns.
+                terminal.pop('counts')
+                terminal['breakdown'] = {}
+                if explicit:
+                    terminal.update(duration_ms=1250, turns=2)
+                    terminal['breakdown']['overlap_ms'] = 0
+                partial = self.result(240, complete=False, timed_out=True)
+                partial['agent']['telemetry']['terminal'] = {
+                    'duration_ms': 9999, 'turns': 99, 'breakdown': {'overlap_ms': 99}}
+                argv = [str(SCRIPT)]
+                for i, row in enumerate((measured, self.result(12), partial)):
+                    root = Path(directory) / str(i)
+                    root.mkdir()
+                    self.write_results(root, [row], replicate_id=f'r{i}')
+                    argv.extend(['--capstan', str(root)])
+                output = io.StringIO()
+                with mock.patch('sys.argv', argv), redirect_stdout(output):
+                    self.assertEqual(ANALYZE.main(), 0)
+                header, rendered = output.getvalue().splitlines()
+                values = dict(zip(header.split('\t'), rendered.split('\t')))
+                self.assertEqual(values['metrics'], '1/3')
+                for key, expected in [('duration_ms', '1250.00'), ('turns', '2.00'),
+                                      ('overlap_ms', '0.00')]:
+                    self.assertEqual(values[key], expected if explicit else 'N/A')
+                    self.assertEqual(values[key + '_coverage'], '1/3' if explicit else '0/3')
+
+    def test_invalid_root_metrics_are_rejected(self):
+        for key, bad_values in [('duration_ms', [-1, True, '2', float('nan'), float('inf')]),
+                                ('turns', [-1, True, '2', 1.5]),
+                                ('overlap_ms', [-1, True, '2', float('nan')])]:
+            for value in bad_values:
+                with self.subTest(key=key, value=value):
+                    row = self.result(1)
+                    terminal = row['agent']['telemetry']['terminal']
+                    target = terminal['breakdown'] if key == 'overlap_ms' else terminal
+                    target[key] = value
+                    with self.assertRaises(ValueError):
+                        ANALYZE.validate_result_row(row, Path('fixture'))
+
     def test_nonfinite_metrics_are_ignored(self):
         self.assertIsNone(ANALYZE.agent_seconds({"agent": {"seconds": float("inf")}}))
         row = self.result(1.0)
@@ -320,6 +364,37 @@ class AnalyzeTraceTests(unittest.TestCase):
 
     def test_boolean_wall_time_is_not_numeric(self):
         self.assertIsNone(ANALYZE.agent_seconds({"agent": {"seconds": True}}))
+
+    def test_backend_links_are_diagnostic_and_optional(self):
+        template = ANALYZE.trace_url_template("https://tempo.example/trace/{trace_id}?span={span_id}")
+        row = self.result(240, complete=False, timed_out=True)
+        row["agent"]["telemetry"]["correlation"] = {
+            "run_id": "native", "trace_id": "a" * 32, "span_id": "b" * 16}
+        self.assertEqual(ANALYZE.backend_trace_links([row], template)[0]["url"],
+                         "https://tempo.example/trace/" + "a" * 32 + "?span=" + "b" * 16)
+        self.assertEqual(ANALYZE.metric_telemetry_rows([row]), [])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_results(root, [row])
+            output = io.StringIO()
+            with mock.patch("sys.argv", [str(SCRIPT), "--capstan", str(root),
+                                         "--trace-url-template", template]), redirect_stdout(output):
+                self.assertEqual(ANALYZE.main(), 0)
+            header, rendered = output.getvalue().splitlines()
+            self.assertTrue(header.endswith("backend_traces"))
+            self.assertEqual(json.loads(rendered.split("\t")[-1])[0]["status"], "partial")
+        del row["agent"]["telemetry"]["correlation"]["span_id"]
+        self.assertEqual(ANALYZE.backend_trace_links([row], template), [])
+        row["agent"]["telemetry"]["correlation"]["trace_id"] = "0" * 32
+        self.assertEqual(ANALYZE.backend_trace_links([row], template), [])
+        self.assertEqual(ANALYZE.backend_trace_links([self.result(1)], template), [])
+
+    def test_backend_template_rejects_invalid_links(self):
+        for value in ("file:///{trace_id}", "https://user:pass@host/{trace_id}",
+                      "https://host/no-id", "https://host/{run_id}/{trace_id}",
+                      "https://{trace_id}/", "https://host/{trace_id}\n"):
+            with self.subTest(value=value), self.assertRaises(ANALYZE.argparse.ArgumentTypeError):
+                ANALYZE.trace_url_template(value)
 
     def test_limit_must_be_positive(self):
         self.assertEqual(ANALYZE.positive_int("1"), 1)

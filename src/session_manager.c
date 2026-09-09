@@ -2,6 +2,8 @@
 #include "agent.h"
 #include "log.h"
 #include "utils.h"
+#include <lauxlib.h>
+#include <lua.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +23,61 @@ static long long now_ms(void) {
   struct timeval tv;
   gettimeofday(&tv, NULL);
   return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
+}
+
+/* Adapter only: canonical lifecycle and optional export policy live in Lua. */
+static int l_persistence_start(lua_State *L) {
+  lua_getglobal(L, "require");
+  lua_pushliteral(L, "agent.telemetry");
+  lua_call(L, 1, 1);
+  lua_getfield(L, -1, "start");
+  lua_pushliteral(L, "operation");
+  lua_pushvalue(L, 1);
+  lua_newtable(L);
+  lua_pushliteral(L, "session_save");
+  lua_setfield(L, -2, "operation");
+  lua_call(L, 3, 1);
+  return 1;
+}
+
+static int l_persistence_finish(lua_State *L) {
+  lua_getglobal(L, "require");
+  lua_pushliteral(L, "agent.telemetry");
+  lua_call(L, 1, 1);
+  lua_getfield(L, -1, "finish");
+  lua_pushvalue(L, 1);
+  lua_pushvalue(L, 2);
+  lua_pushboolean(L, 0);
+  lua_newtable(L);
+  lua_pushvalue(L, 3);
+  lua_setfield(L, -2, "duration_ms");
+  lua_call(L, 4, 0);
+  return 0;
+}
+
+int session_manager_persistence_begin(lua_State *L, int context) {
+  if (!lua_istable(L, context)) return LUA_NOREF;
+  context = lua_absindex(L, context);
+  int top = lua_gettop(L), ref = LUA_NOREF;
+  lua_pushcfunction(L, l_persistence_start);
+  lua_pushvalue(L, context);
+  if (lua_pcall(L, 1, 1, 0) == LUA_OK && lua_istable(L, -1))
+    ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lua_settop(L, top);
+  return ref;
+}
+
+void session_manager_persistence_end(lua_State *L, int ref, int ok,
+                                     long long duration_ms) {
+  if (ref == LUA_NOREF) return;
+  int top = lua_gettop(L);
+  lua_pushcfunction(L, l_persistence_finish);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+  lua_pushboolean(L, ok);
+  lua_pushinteger(L, duration_ms);
+  (void)lua_pcall(L, 3, 0, 0);
+  lua_settop(L, top);
+  luaL_unref(L, LUA_REGISTRYINDEX, ref);
 }
 
 static void release_snapshot(void) {

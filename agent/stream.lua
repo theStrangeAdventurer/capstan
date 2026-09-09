@@ -405,8 +405,19 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                     #tool_calls_accum[idx].arguments
                 ))
             end
-        elseif chunk.type == "usage" and chunk.usage then
-            final_usage = chunk.usage
+        elseif chunk.type == "usage" and type(chunk.usage) == "table" then
+            -- Preserve provider usage for legacy observers, adding only validated
+            -- normalized optional counters. Missing details are not measured zero.
+            final_usage = {}
+            for key, value in pairs(chunk.usage) do final_usage[key] = value end
+            for field, details in pairs({cached_tokens = "prompt_tokens_details",
+                reasoning_tokens = "completion_tokens_details"}) do
+                local nested = chunk.usage[details]
+                local value = chunk.usage[field]
+                if value == nil and type(nested) == "table" then value = nested[field] end
+                final_usage[field] = type(value) == "number" and value >= 0 and
+                    value < math.huge and value or nil
+            end
             usage_chunks = usage_chunks + 1
             if not provider.suppress_agent_state then
                 agent.set_usage(
@@ -481,7 +492,10 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             if not provider.suppress_agent_state then
                 popup.error("API Error", msg)
             end
-            on_result({ok = false, error = msg, text = "", metrics = stream_metrics()}, true)
+            on_result({ok = false, error = msg, error_category =
+                transport and type(transport.http_status) == "number" and
+                transport.http_status >= 400 and "http" or "transport",
+                text = "", metrics = stream_metrics()}, true)
             return
         end
         if is_done then
@@ -569,6 +583,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                 on_result({
                     ok = false,
                     error = provider_error,
+                    error_category = "provider",
                     text = accumulated_text,
                     reasoning = accumulated_reasoning ~= "" and accumulated_reasoning or nil,
                     reasoning_details = #accumulated_reasoning_details > 0 and
@@ -596,6 +611,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                 on_result({
                     ok = false,
                     error = protocol_error,
+                    error_category = "protocol",
                     text = "",
                     metrics = stream_metrics(),
                 }, true)

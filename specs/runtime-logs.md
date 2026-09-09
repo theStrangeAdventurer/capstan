@@ -123,29 +123,59 @@ best-effort redactor, but this mode should be treated as sensitive debug output.
 
 ## Native OpenTelemetry boundary
 
-Optional [native OTel](observability.md#native-opentelemetry) is separate from
-persisted runtime logs and disabled by default. `observability.enabled = true`
-is required; `OTEL_SDK_DISABLED=true` forces it off. `CAPSTAN_LOG_LEVEL=trace`
+Optional [native OTLP](observability.md#native-opentelemetry) network export is
+disabled by default and requires `observability.enabled = true`. Independent
+local lifecycle output uses boolean `observability.file_exporter`, default `true`,
+and the existing log configuration. `OTEL_SDK_DISABLED=true` suppresses both
+native sinks but retains offline trace/span/run identity in normal states; it
+does not disable existing free-form runtime logs. `CAPSTAN_LOG_LEVEL=trace`
 does not enable network export or make raw SSE/free-form messages exportable.
 Before-config free-form logs remain local: they are not buffered for export,
 replayed or converted into synthetic startup events by the native exporter.
 
 OTLP logs contain bounded `span.started` / `span.finished` lifecycle
-messages, severity and trace/span IDs, plus one uncorrelated `runtime.started`
-event retained as a timestamp-only slot until configuration enables export. Native lifecycle calls also emit local
+messages, severity and trace/span IDs, plus `span.name` and the span's captured
+allowlisted start attributes. Finish logs additionally carry completion
+measurements, `outcome` and `cancelled`. The same native attribute filter and
+canonical redactor govern spans and logs; no free-form message parsing is used.
+Non-CLI modes emit one uncorrelated `runtime.started` event only to enabled OTLP
+logs; file-only non-CLI operation does not emit this marker. CLI instead consumes
+the startup timestamps into a correlated `operation=startup` interval for either
+sink. When `file_exporter` is enabled, native lifecycle calls also emit local
 `telemetry` category events with additive `trace_id` and `span_id` fields.
 The span captures its session at start and children inherit the explicit
 parent's captured session, so completion after a TUI session switch remains
-locally correlated with the original session. Session IDs and titles are not
-exported. The lifecycle local-write adapter is synchronous; write failure does
-not prevent native span completion or export. Existing runtime content,
-redaction, rotation, `/logs` and `capstan.log.v1` remain compatible.
+correlated with the original session, locally and in OTLP. Captured `session.id`,
+`run.id` and `mode` are exported; `session.name` requires
+`observability.include_session_name = true` and persisted session identity.
+ACP's ephemeral session identifier is not exported as persisted identity.
+`observability.include_tool_details = true` additionally permits `shell.command`
+and whitelisted scalar `tool.target` attributes, using the same native redactor
+and 128-byte bound in both sinks. Default-off, this never exports bulk arguments,
+environment, stdin or output; existing free-form log policy is unchanged.
+See [tool detail policy](observability.md#opt-in-tool-details).
+
+The local structured adapter decodes the already filtered/redacted native
+LogRecord attributes and persists an additive `attributes` array of `{key,value}`
+pairs, preserving strings, numbers, booleans and repeated keys in order. It does
+not reinterpret raw messages or define a second attribute policy. The lifecycle
+local-write adapter is synchronous; write failure does not prevent native span
+completion or export. Existing runtime content, redaction, rotation, `/logs` and
+`capstan.log.v1` remain compatible; the compact `/logs` view is not a structured
+attribute browser. Local lifecycle logging is independent of OTLP enablement.
+Strict isolated states still receive neither contexts nor either sink; isolation
+is sticky, including saved closures.
 
 Exporter polling/shutdown never append local diagnostics or print stderr.
-`capstan.telemetry.diagnostics()` exposes a nonblocking in-memory snapshot of
-loss/error counters and queue/enabled state, including shutdown losses; it does
-no I/O. An asynchronous diagnostic-queue adapter is not provided by the current
-native module. Disabled export discards the startup slot. See
+`capstan.telemetry.diagnostics()` returns an in-memory snapshot of loss/error
+counters and queue/enabled state, including shutdown losses. Each permitted
+explicit pull also attempts a synchronous `exporter.diagnostics` local event
+with numeric/boolean attributes in the current scope, without trace/span IDs.
+Consequently this API can perform log I/O; it is not nonblocking. A recursion
+guard prevents nested writes; log failure leaves the snapshot/counters unchanged.
+Isolated states receive `nil` and do not log a snapshot. There is no autonomous
+asynchronous diagnostic-queue adapter. With both sinks disabled the startup slot
+is discarded. See
 [Config](config.md#native-opentelemetry) for exact environment precedence and
 [Observability](observability.md#diagnostics) for counter semantics.
 
@@ -174,5 +204,13 @@ initialization so provider, tool, permission, and hook events share one file.
 ## Tests
 
 `make test-http-lua` covers provider-level log calls, scoped paths and
-permissions, TUI scope switching, and the `/logs` plugin.
+permissions, TUI scope switching, the `/logs` plugin, and structured attribute
+serialization (types, duplicate keys, escaping and invalid numeric rejection).
+Numeric JSON attributes always use a dot radix regardless of `LC_NUMERIC`;
+`test/test_jsonl.c` checks fractional/exponent values in available C and comma
+locales without changing the caller's locale.
+`make test-telemetry` independently decodes OTLP and checks the native local
+adapter, captured context, redaction, isolation and explicit diagnostics pulls.
+`make test-telemetry-modes` covers real-binary CLI/TUI/ACP context and lifecycle
+export to a loopback receiver, not a production backend UI.
 `make test-build` verifies `/logs` is embedded in the standalone binary.

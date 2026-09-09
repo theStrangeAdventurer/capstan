@@ -2,6 +2,8 @@
 #include "munit.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <locale.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -72,7 +74,34 @@ static MunitResult test_rolls_back_partial_write(
   return MUNIT_OK;
 }
 
+static MunitResult test_numbers(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  char saved[256];
+  snprintf(saved, sizeof(saved), "%s", setlocale(LC_NUMERIC, NULL));
+  const char *locales[] = {"C", "de_DE.UTF-8", "fr_FR.UTF-8", "ru_RU.UTF-8"};
+  for (size_t i = 0; i < sizeof(locales) / sizeof(locales[0]); i++) {
+    if (!setlocale(LC_NUMERIC, locales[i]))
+      continue; /* Minimal Linux images may provide only C. */
+    JsonlBuffer buffer;
+    jsonl_buffer_init(&buffer);
+    munit_assert_true(jsonl_append_number(&buffer, 2.5));
+    munit_assert_true(jsonl_append(&buffer, ","));
+    munit_assert_true(jsonl_append_number(&buffer, 0));
+    munit_assert_true(jsonl_append(&buffer, ","));
+    munit_assert_true(jsonl_append_number(&buffer, 1.25e20));
+    munit_assert_string_equal(buffer.data, "2.5,0,1.25e+20");
+    munit_assert_false(jsonl_append_number(&buffer, INFINITY));
+    munit_assert_false(jsonl_append_number(&buffer, NAN));
+    munit_assert_string_equal(buffer.data, "2.5,0,1.25e+20");
+    munit_assert_string_equal(setlocale(LC_NUMERIC, NULL), locales[i]);
+    jsonl_buffer_free(&buffer);
+  }
+  munit_assert_not_null(setlocale(LC_NUMERIC, saved));
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/numbers", test_numbers, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/escapes_controls_and_truncated_utf8",
      test_escapes_controls_and_truncated_utf8, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

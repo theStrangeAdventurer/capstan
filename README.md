@@ -521,6 +521,51 @@ make test-http-lua
 make test-build
 ```
 
+## Observability
+
+Capstan exports structured logs and traces over OpenTelemetry OTLP/HTTP:
+
+```text
+Capstan → OpenTelemetry Collector → Tempo (traces) + Loki (logs) → Grafana
+                                 → files (optional OTLP JSON exporter)
+```
+
+Start an OTLP-compatible Collector or a local
+[Grafana LGTM stack](https://github.com/grafana/docker-otel-lgtm), then merge this
+section into your existing `~/.config/capstan/config.lua` and restart Capstan:
+
+```lua
+observability = {
+  enabled = true,
+  endpoint = "http://127.0.0.1:4318",
+  include_session_name = true,
+}
+```
+
+The endpoint is the Collector's OTLP/HTTP receiver, not Grafana's web address.
+Session names are opt-in because they may contain private information. New
+runs capture the session context; old traces are not updated retroactively.
+
+In Grafana, import the dashboard below and select a session to find its runs.
+Open a Trace ID for the timeline of model requests, tools, and child agents,
+then follow the linked logs for operation context and outcomes. These are
+structured diagnostic events, not a transcript of prompts and responses.
+
+Examples and setup guides:
+
+- [Local Grafana walkthrough](examples/observability/grafana-capstan.md)
+  (Russian): Docker/OrbStack setup, components, session search, and timelines.
+- [Grafana integration](examples/observability/grafana.md): data sources,
+  queries, and trace-to-log links.
+- [Session diagnostics dashboard](examples/observability/capstan-dashboard.json):
+  import via **Dashboards → New → Import**; requires Tempo and Loki.
+- [OTLP JSON file exporter example](examples/observability/otel-collector-file.yaml)
+  and [run instructions](examples/observability/grafana-capstan.md#10-пример-сохранить-otlp-в-файл-без-grafana):
+  Collector Contrib writes logs and traces to files without Grafana or
+  `--trace-file`; this example uses receiver port **14318**.
+- [Observability specification](specs/observability.md): configuration,
+  exported fields, privacy, and coverage limits.
+
 ## Debugging
 
 Use `/logs` in the TUI or let the model call the `logs` tool. Process logs live

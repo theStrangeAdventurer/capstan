@@ -1,4 +1,5 @@
 #include "acp.h"
+#include "telemetry.h"
 #include "app_config.h"
 #include "embedded_assets.h"
 #include "http.h"
@@ -233,6 +234,9 @@ static int adapter_active(lua_State *l) {
 }
 
 static int handle_line(lua_State *l, const char *line, size_t len) {
+  /* ACP sessions are in-memory protocol identities, not persisted sessions.
+   * Deferred children inherit native snapshots rather than this adapter state. */
+  telemetry_set_context("acp", NULL, NULL);
   lua_getglobal(l, "capstan_acp_handle");
   if (!lua_isfunction(l, -1)) {
     lua_pop(l, 1);

@@ -45,9 +45,12 @@ static uint64_t clock_ns(clockid_t clock) {
   return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
 static uint64_t mono(void) { return clock_ns(CLOCK_MONOTONIC) / 1000000u; }
-static uint64_t startup_time;
+static uint64_t startup_time, startup_tick;
 void telemetry_startup(void) {
-  if (!startup_time) startup_time=clock_ns(CLOCK_REALTIME);
+  if (!startup_time) {
+    startup_time=clock_ns(CLOCK_REALTIME);
+    startup_tick=clock_ns(CLOCK_MONOTONIC);
+  }
 }
 static void field(lua_State *L, int i, const char *key) {
   i = lua_absindex(L, i); lua_pushstring(L, key); lua_rawget(L, i);
@@ -112,24 +115,53 @@ static void attr(lua_State *L, PB *b, unsigned f, const char *key, const char *s
   else num(&av, 2, value != 0);
   nested(&kv, 2, &av); nested(b, f, &kv);
 }
+/* Closed vocabulary, accepted only at failed completion. Never classify text.
+ * Both lifecycle exporters consume this same canonical attribute policy. */
+static void error_attribute(lua_State *L, PB *b, unsigned f, int ok, int cancelled) {
+  if (ok || cancelled || !lua_istable(L,4)) return;
+  static const char *const categories[] = {
+    "transport", "http", "provider", "protocol", "configuration",
+    "request", "guard", "empty_response", "tool_unavailable",
+    "invalid_arguments", "permission", "tool", "exception", "observer", NULL
+  };
+  field(L,4,"error.category");
+  if (lua_type(L,-1)==LUA_TSTRING) {
+    size_t n; const char *s=lua_tolstring(L,-1,&n);
+    for (int i=0;categories[i];i++)
+      if (strlen(categories[i])==n && !memcmp(s,categories[i],n)) {
+        attr(L,b,f,"error.category",categories[i],0,0); break;
+      }
+  }
+  lua_pop(L,1);
+}
+static int include_tool_details;
 static const char *const string_keys[] = {
-  "operation", "provider", "model", "profile", "tool", "purpose", NULL
+  "operation", "provider", "model", "profile", "tool", "purpose", "subagent_id",
+  "shell.command", "tool.target", NULL
 };
 static const char *const number_keys[] = {
-  "depth", "attempt", "count", "duration_ms", "input_tokens", "output_tokens",
+  "depth", "subagent_index", "attempt", "count", "duration_ms", "input_tokens", "output_tokens",
   "cached_tokens", "reasoning_tokens", "total_tokens", "http_status", "curl_code",
   "request_bytes", "response_bytes", "turns", "tool_count", "request_count",
+  "model_ms", "tool_ms", "permission_wait_ms", "subagent_wait_ms", "unattributed_ms", "overlap_ms",
   "turn", "text_bytes", "reasoning_bytes", "tool_calls", "first_output_ms",
   "first_reasoning_ms", "first_text_ms", "first_tool_ms", "events", "raw_bytes",
   "text_chunks", "reasoning_chunks", "tool_delta_chunks", "usage_chunks",
   "usage.prompt_tokens", "usage.completion_tokens", "usage.total_tokens",
   "transport.http_status", "transport.curl_code", "transport.download_bytes",
   "transport.upload_bytes", "transport.chunk_count", "transport.redirect_count",
-  "transport.ttfb_ms", NULL
+  "transport.ttfb_ms", "transport.namelookup_elapsed_ms",
+  "transport.connect_elapsed_ms", "transport.appconnect_elapsed_ms",
+  "transport.pretransfer_elapsed_ms", "transport.starttransfer_elapsed_ms",
+  "transport.total_ms", "transport.dns_ms", "transport.tcp_connect_ms",
+  "transport.tls_handshake_ms", "transport.request_setup_ms",
+  "transport.upload_and_server_wait_ms", "transport.download_ms", NULL
 };
-static void attributes(lua_State *L, int index, PB *b) {
+static void attributes(lua_State *L, int index, PB *b, unsigned field_number) {
   if (!lua_istable(L, index)) return;
   for (int i = 0; string_keys[i]; i++) {
+    if (!include_tool_details && (!strcmp(string_keys[i],"shell.command") ||
+        !strcmp(string_keys[i],"tool.target"))) continue;
     field(L, index, string_keys[i]);
     if (lua_type(L, -1) == LUA_TSTRING) {
       size_t n; const char *s = lua_tolstring(L, -1, &n); char out[129];
@@ -138,7 +170,7 @@ static void attributes(lua_State *L, int index, PB *b) {
       unsigned char kvbuf[384], avbuf[160];
       PB kv={kvbuf,0,sizeof(kvbuf),0}, av={avbuf,0,sizeof(avbuf),0};
       text(L,&kv,1,string_keys[i]); blob(&av,1,out,strlen(out));
-      nested(&kv,2,&av); nested(b,9,&kv);
+      nested(&kv,2,&av); nested(b,field_number,&kv);
     }
     lua_pop(L, 1);
   }
@@ -146,23 +178,62 @@ static void attributes(lua_State *L, int index, PB *b) {
     field(L, index, number_keys[i]);
     if (lua_type(L, -1) == LUA_TNUMBER) {
       double v = lua_tonumber(L, -1);
-      if (isfinite(v) && v >= 0) attr(L,b, 9, number_keys[i], NULL, v, 1);
+      if (isfinite(v) && v >= 0) attr(L,b, field_number, number_keys[i], NULL, v, 1);
     }
     lua_pop(L, 1);
   }
 }
 typedef struct {
+  char session_id[SESSION_ID_SIZE];
+  char session_name[129], run_id[33], mode[8];
+  unsigned char trace[16], span[8];
+} Capture;
+static Capture current_capture;
+static int capture_configured;
+static char captures_key;
+void telemetry_set_context(const char *mode, const char *session_id,
+                           const char *session_name) {
+  capture_configured=1;
+  memset(&current_capture,0,sizeof(current_capture));
+  if (mode && (!strcmp(mode,"cli") || !strcmp(mode,"tui") || !strcmp(mode,"acp")))
+    strcpy(current_capture.mode,mode);
+  if (session_id && session_id_valid(session_id))
+    snprintf(current_capture.session_id,sizeof(current_capture.session_id),"%s",session_id);
+  /* Keep the full name until canonical Lua redaction at root start. */
+  if (session_name && *session_name)
+    snprintf(current_capture.session_name,sizeof(current_capture.session_name),"%s",
+             strlen(session_name)>128 ? "[OVERSIZED]" : session_name);
+}
+static void captures(lua_State *L) {
+  lua_rawgetp(L,LUA_REGISTRYINDEX,&captures_key);
+  if (!lua_isnil(L,-1)) return;
+  lua_pop(L,1); lua_newtable(L); lua_newtable(L);
+  lua_pushliteral(L,"k"); lua_setfield(L,-2,"__mode"); lua_setmetatable(L,-2);
+  lua_pushvalue(L,-1); lua_rawsetp(L,LUA_REGISTRYINDEX,&captures_key);
+}
+static void capture_attributes(lua_State *L, const Capture *c, PB *b, unsigned f) {
+  if (*c->session_id) attr(L,b,f,"session.id",c->session_id,0,0);
+  if (*c->session_name) attr(L,b,f,"session.name",c->session_name,0,0);
+  if (*c->run_id) attr(L,b,f,"run.id",c->run_id,0,0);
+  if (*c->mode) attr(L,b,f,"mode",c->mode,0,0);
+}
+typedef struct {
+  Capture capture;
   lua_State *owner; uint64_t context;
   int used; unsigned char trace[16], span[8], parent[8];
   uint64_t start, tick; char name[32]; unsigned char attrs[T_ATTR]; size_t n;
+  /* Cached start attributes for LogRecord field 6; the same policy owns both
+   * encodings. Never retain a caller-owned Lua table until async completion. */
+  unsigned char log_attrs[T_ATTR]; size_t log_n;
   char session_id[SESSION_ID_SIZE]; /* Local correlation only; never OTLP. */
 } Span;
 typedef struct { unsigned char *p; size_t n; int signal; } Record;
 static struct {
-  int initialized, enabled, flushing, global_curl;
+  int initialized, enabled, file_enabled, flushing, global_curl, include_session_name;
   CURLM *multi; CURL *easy; struct curl_slist *headers[2];
   int signals[2];
   uint64_t configuration_errors;
+  const char *error_category; /* Latest exporter failure, never response text. */
   unsigned char scope[272]; size_t scope_n;
   unsigned char resource[T_RESOURCE]; size_t resource_n;
   char endpoint[2][2048], service[129], version[129];
@@ -188,7 +259,32 @@ static int l_diagnostics(lua_State *L) {
   STAT("failed",t.failed); STAT("malformed",t.malformed);
   STAT("configuration_errors",t.configuration_errors); STAT("queued",t.count);
 #undef STAT
-  lua_pushboolean(L,t.enabled); lua_setfield(L,-2,"enabled"); return 1;
+  lua_pushboolean(L,t.enabled); lua_setfield(L,-2,"enabled");
+  if (t.error_category) {
+    lua_pushstring(L,t.error_category); lua_setfield(L,-2,"error.category");
+  }
+  /* Explicit pull only: no disk I/O, Lua callbacks or recursive telemetry
+   * inside exporter polling/shutdown. Log failures never alter counters. */
+  static int logging;
+  if (!logging && t.file_enabled) {
+    LogAttribute attrs[] = {
+      {"dropped","",(double)t.dropped,1},
+      {"rejected","",(double)t.rejected,1},
+      {"failed","",(double)t.failed,1},
+      {"malformed","",(double)t.malformed,1},
+      {"configuration_errors","",(double)t.configuration_errors,1},
+      {"queued","",(double)t.count,1},
+      {"enabled","",t.enabled,2},
+      {"error.category","",0,0}
+    };
+    if (t.error_category)
+      snprintf(attrs[7].text,sizeof(attrs[7].text),"%s",t.error_category);
+    logging=1;
+    (void)log_event_structured("info","telemetry","exporter.diagnostics",
+                               log_session_id(),NULL,NULL,attrs,t.error_category ? 8 : 7);
+    logging=0;
+  }
+  return 1;
 }
 static int random_id(unsigned char *p, size_t n) {
 #if defined(__APPLE__) || defined(__FreeBSD__)
@@ -223,27 +319,132 @@ static int id(lua_State *L, int index, const char *key, unsigned char *p, size_t
   lua_pop(L, 1); return ok && any;
 }
 static void enqueue(PB *b, int signal) {
-  if (!t.signals[signal]) return;
+  if (!t.enabled || !t.signals[signal]) return;
   if (b->bad || b->n > T_PAYLOAD-T_RESOURCE-256 || t.count == T_RECORDS || b->n > T_BYTES-t.queued) { t.dropped++; return; }
   unsigned char *p = malloc(b->n);
   if (!p) { t.dropped++; return; }
   memcpy(p,b->p,b->n); t.queue[t.count++] = (Record){p,b->n,signal}; t.queued += b->n;
 }
+/* Decode only our bounded, canonical LogRecord encoding. This adapter has no
+ * allowlist/redaction policy of its own and never sees caller payload tables.
+ * Preserve repeated keys as an ordered list, just like OTLP KeyValue fields. */
+static int local_varint(const unsigned char **p, const unsigned char *end,
+                        uint64_t *value) {
+  *value=0;
+  for (unsigned shift=0; shift<64 && *p<end; shift+=7) {
+    unsigned c=*(*p)++;
+    if (shift==63 && c>1) return 0;
+    *value |= (uint64_t)(c&127)<<shift;
+    if (!(c&128)) return 1;
+  }
+  return 0;
+}
+static int local_field(const unsigned char **p, const unsigned char *end,
+                       unsigned *tag, const unsigned char **value, size_t *n,
+                       uint64_t *number) {
+  uint64_t key, length;
+  if (!local_varint(p,end,&key)) return 0;
+  *tag=(unsigned)key; *value=*p; *n=0; *number=0;
+  switch (key&7) {
+    case 0: return local_varint(p,end,number);
+    case 1: *n=8; break;
+    case 2:
+      if (!local_varint(p,end,&length) || length>(uint64_t)(end-*p)) return 0;
+      *n=(size_t)length; *value=*p; break;
+    default: return 0;
+  }
+  if (*n>(size_t)(end-*p)) return 0;
+  *p+=*n; return 1;
+}
+static int local_attributes(const PB *record, LogAttribute attrs[128], size_t *count) {
+  const unsigned char *p=record->p, *end=p+record->n;
+  *count=0;
+  while (p<end) {
+    unsigned tag; const unsigned char *v; size_t n; uint64_t number;
+    if (!local_field(&p,end,&tag,&v,&n,&number)) return 0;
+    if (tag!=50) continue; /* LogRecord.attributes, field 6 */
+    if (*count==128) return 0;
+    LogAttribute *a=&attrs[(*count)++]; memset(a,0,sizeof(*a));
+    const unsigned char *kv=v, *ke=v+n, *av; size_t an;
+    if (!local_field(&kv,ke,&tag,&v,&n,&number) || tag!=10 || n>128) return 0;
+    memcpy(a->key,v,n);
+    if (!local_field(&kv,ke,&tag,&av,&an,&number) || tag!=18 || kv!=ke) return 0;
+    const unsigned char *ae=av+an;
+    if (!local_field(&av,ae,&tag,&v,&n,&number) || av!=ae) return 0;
+    if (tag==10 && n<=128) memcpy(a->text,v,n);
+    else if (tag==16) { a->type=2; a->number=number!=0; }
+    else if (tag==33 && n==8) {
+      uint64_t bits=0;
+      for (unsigned i=0;i<8;i++) bits|=(uint64_t)v[i]<<(8*i);
+      a->type=1; memcpy(&a->number,&bits,8);
+    } else return 0;
+  }
+  return !record->bad;
+}
 static void lifecycle(lua_State *L, Span *s, int ended, int ok, int cancelled) {
-  unsigned char buf[512], avbuf[64]; PB b = {buf,0,sizeof(buf),0}, av = {avbuf,0,sizeof(avbuf),0};
+  unsigned char buf[2*T_ATTR+1024], avbuf[64]; PB b = {buf,0,sizeof(buf),0}, av = {avbuf,0,sizeof(avbuf),0};
   fixed(&b,1,clock_ns(CLOCK_REALTIME)); num(&b,2,ended && !ok && !cancelled ? 17 : 9);
   text(L,&b,3,ended && !ok && !cancelled ? "ERROR" : "INFO");
   text(L,&av,1,ended ? "span.finished" : "span.started"); nested(&b,5,&av);
+  bytes(&b,s->log_attrs,s->log_n);
+  attr(L,&b,6,"span.name",s->name,0,0);
+  unsigned any=0; for (int i=0;i<8;i++) any |= s->parent[i];
+  if (any) {
+    char parent[17]; hex(parent,s->parent,8);
+    attr(L,&b,6,"parent.span_id",parent,0,0);
+  }
+  if (ended) {
+    attributes(L,4,&b,6);
+    error_attribute(L,&b,6,ok,cancelled);
+    attr(L,&b,6,"cancelled",NULL,cancelled,2);
+    attr(L,&b,6,"outcome",cancelled ? "cancelled" : ok ? "success" : "error",0,0);
+  }
   blob(&b,9,s->trace,16); blob(&b,10,s->span,8); enqueue(&b,1);
   char trace[33], span[17]; hex(trace,s->trace,16); hex(span,s->span,8);
   /* Synchronous local lifecycle adapter only; never invoked by poll/shutdown.
    * A local write failure must not prevent span completion or OTLP export. */
-  (void)log_event_correlated(ended && !ok && !cancelled ? "error" : "info",
-      "telemetry", ended ? "span.finished" : "span.started",
-      s->session_id,trace,span);
+  LogAttribute attrs[128]; size_t count;
+  if (t.file_enabled && local_attributes(&b,attrs,&count))
+    (void)log_event_structured(ended && !ok && !cancelled ? "error" : "info",
+        "telemetry", ended ? "span.finished" : "span.started",
+        s->session_id,trace,span,attrs,count);
+}
+static void finish_span(lua_State *L, Span *s, int ok, int cancelled,
+                        uint64_t now);
+static void startup_interval(lua_State *L, const Span *root) {
+  uint64_t start=startup_time, tick=startup_tick;
+  startup_time=startup_tick=0; /* One fixed slot, consumed only by a CLI root. */
+  if (!start || !tick || root->tick<tick) return;
+  uint64_t elapsed=root->tick-tick;
+  /* Anchor to the root's wall clock: clock corrections cannot invert the
+   * interval or overflow its end. Never accept caller-supplied timestamps. */
+  if (elapsed>root->start) return;
+  Span child=*root;
+  if (!random_id(child.span,8)) return;
+  memcpy(child.parent,root->span,8);
+  strcpy(child.name,"operation");
+  child.start=root->start-elapsed; child.tick=tick;
+  int top=lua_gettop(L);
+  lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); lua_newtable(L);
+  lua_rotate(L,1,4);
+  lua_pushnumber(L,(double)elapsed/1000000.0); lua_setfield(L,4,"duration_ms");
+  PB a={child.attrs,0,sizeof(child.attrs),0};
+  PB logs={child.log_attrs,0,sizeof(child.log_attrs),0};
+  attr(L,&a,9,"operation","startup",0,0);
+  attr(L,&logs,6,"operation","startup",0,0);
+  capture_attributes(L,&child.capture,&a,9);
+  capture_attributes(L,&child.capture,&logs,6);
+  child.n=a.n; child.log_n=logs.n;
+  if (!a.bad && !logs.bad) {
+    lifecycle(L,&child,0,1,0);
+    finish_span(L,&child,1,0,root->tick);
+  }
+  lua_rotate(L,1,-4);
+  lua_settop(L,top);
 }
 static int l_start(lua_State *L) {
-  if (!permitted(L) || !t.enabled) { lua_pushnil(L); return 1; }
+  /* Identity belongs to instrumentation, not either exporter. */
+  if (!permitted(L) || t.flushing) { lua_pushnil(L); return 1; }
   Span *s = NULL;
   for (size_t i=0;i<T_RECORDS;i++) if (!t.spans[i].used) { s=&t.spans[i]; break; }
   if (!s) { t.dropped++; lua_pushnil(L); return 1; }
@@ -253,63 +454,86 @@ static int l_start(lua_State *L) {
   const char *session=log_session_id();
   if (session && strlen(session)<sizeof(s->session_id))
     memcpy(s->session_id,session,strlen(session)+1);
-  if (parent) {
-    /* Retained live ownership wins over a caller-mutated context field. */
-    Span *owner=NULL;
-    for (size_t i=0;i<T_RECORDS;i++) {
-      Span *candidate=&t.spans[i];
-      if (candidate->used && candidate->owner==L && candidate->context==s->context &&
-          !memcmp(candidate->trace,s->trace,16) && !memcmp(candidate->span,s->parent,8)) {
-        owner=candidate; break;
-      }
+  s->capture=current_capture;
+  if (capture_configured)
+    memcpy(s->session_id,s->capture.session_id,sizeof(s->session_id));
+  if (!capture_configured && session && session_id_valid(session))
+    snprintf(s->capture.session_id,sizeof(s->capture.session_id),"%s",session);
+  if (!t.include_session_name || !*s->capture.session_id) s->capture.session_name[0]=0;
+  /* Identity-keyed registry snapshots survive completion without trusting
+   * caller-mutated fields; weak keys release them when deferred owners do. */
+  if (lua_istable(L,2)) {
+    captures(L); lua_pushvalue(L,2); lua_rawget(L,-2);
+    if (lua_isuserdata(L,-1)) {
+      const Capture *saved=lua_touserdata(L,-1);
+      s->capture=*saved;
+      memcpy(s->trace,saved->trace,16); memcpy(s->parent,saved->span,8); parent=1;
+      memcpy(s->session_id,saved->session_id,sizeof(s->session_id));
     }
-    if (owner) memcpy(s->session_id,owner->session_id,sizeof(s->session_id));
-    else {
-      /* Completed parents (e.g. title work) carry their local session in the
-       * returned context. Empty is an explicitly unscoped captured parent. */
-      field(L,2,"session_id"); size_t length=0;
-      const char *value=lua_type(L,-1)==LUA_TSTRING ? lua_tolstring(L,-1,&length) : NULL;
-      if (value && length<sizeof(s->session_id) && !memchr(value,0,length) &&
-          (!length || session_id_valid(value))) {
-        memcpy(s->session_id,value,length); s->session_id[length]=0;
-      }
-      lua_pop(L,1);
-    }
+    lua_pop(L,2);
   }
   if ((!parent && !random_id(s->trace,16)) || !random_id(s->span,8)) { lua_pushnil(L); return 1; }
   const char *names[] = {"agent.run","agent.model","agent.tool","run","model","tool","subagent","compaction","title","completion_review",NULL};
   strcpy(s->name,"operation");
   size_t n=0; const char *name = lua_type(L,1)==LUA_TSTRING ? lua_tolstring(L,1,&n) : NULL;
   for (int i=0;name && names[i];i++) if (strlen(names[i])==n && !memcmp(name,names[i],n)) strcpy(s->name,names[i]);
-  PB a={s->attrs,0,sizeof(s->attrs),0}; attributes(L,3,&a);
-  if (a.bad) { t.dropped++; lua_pushnil(L); return 1; }
-  s->n=a.n; s->start=clock_ns(CLOCK_REALTIME); s->tick=clock_ns(CLOCK_MONOTONIC);
+  if (!*s->capture.run_id) hex(s->capture.run_id,s->span,8);
+  memcpy(s->capture.trace,s->trace,16); memcpy(s->capture.span,s->span,8);
+  PB a={s->attrs,0,sizeof(s->attrs),0}; attributes(L,3,&a,9);
+  capture_attributes(L,&s->capture,&a,9);
+  PB logs={s->log_attrs,0,sizeof(s->log_attrs),0}; attributes(L,3,&logs,6);
+  capture_attributes(L,&s->capture,&logs,6);
+  if (a.bad || logs.bad) { t.dropped++; lua_pushnil(L); return 1; }
+  s->n=a.n; s->log_n=logs.n;
+  s->start=clock_ns(CLOCK_REALTIME); s->tick=clock_ns(CLOCK_MONOTONIC);
   char trace[33], span[17]; hex(trace,s->trace,16); hex(span,s->span,8);
   lua_createtable(L,0,3); lua_pushstring(L,trace); lua_setfield(L,-2,"trace_id");
   lua_pushstring(L,span); lua_setfield(L,-2,"span_id");
   lua_pushstring(L,s->session_id); lua_setfield(L,-2,"session_id");
-  s->used=1; lifecycle(L,s,0,1,0); return 1;
+  lua_pushstring(L,s->capture.run_id); lua_setfield(L,-2,"run_id");
+  int result=lua_gettop(L);
+  captures(L); lua_pushvalue(L,result);
+  Capture *saved=lua_newuserdatauv(L,sizeof(*saved),0); *saved=s->capture;
+  lua_rawset(L,-3); lua_pop(L,1);
+  s->used=1; lifecycle(L,s,0,1,0);
+  if (!parent && !strcmp(s->name,"agent.run") &&
+      !strcmp(s->capture.mode,"cli")) startup_interval(L,s);
+  return 1;
 }
 static int l_end(lua_State *L) {
   unsigned char trace[16], span[8]; Span *s=NULL;
-  if (permitted(L) && t.enabled && id(L,1,"trace_id",trace,16) && id(L,1,"span_id",span,8))
+  int valid=id(L,1,"trace_id",trace,16) && id(L,1,"span_id",span,8);
+  if (lua_istable(L,1)) {
+    captures(L); lua_pushvalue(L,1); lua_rawget(L,-2);
+    if (lua_isuserdata(L,-1)) {
+      const Capture *saved=lua_touserdata(L,-1);
+      memcpy(trace,saved->trace,16); memcpy(span,saved->span,8); valid=1;
+    }
+    lua_pop(L,2);
+  }
+  if (permitted(L) && !t.flushing && valid)
     for (size_t i=0;i<T_RECORDS;i++) if (t.spans[i].used && t.spans[i].owner==L &&
         t.spans[i].context==permission(L)->generation &&
         !memcmp(trace,t.spans[i].trace,16) && !memcmp(span,t.spans[i].span,8)) { s=&t.spans[i]; break; }
   if (!s) { lua_pushboolean(L,0); return 1; }
   int ok=lua_isboolean(L,2) && lua_toboolean(L,2), cancelled=lua_isboolean(L,3) && lua_toboolean(L,3);
+  finish_span(L,s,ok,cancelled,clock_ns(CLOCK_MONOTONIC));
+  lua_pushboolean(L,1); return 1;
+}
+static void finish_span(lua_State *L, Span *s, int ok, int cancelled,
+                        uint64_t now) {
   unsigned char buf[2*T_ATTR+512], statusbuf[8]; PB b={buf,0,sizeof(buf),0}, status={statusbuf,0,sizeof(statusbuf),0};
   blob(&b,1,s->trace,16); blob(&b,2,s->span,8);
   unsigned any=0; for (int i=0;i<8;i++) any |= s->parent[i];
   if (any) blob(&b,4,s->parent,8);
   text(L,&b,5,s->name); num(&b,6,1); fixed(&b,7,s->start);
-  uint64_t now=clock_ns(CLOCK_MONOTONIC);
   fixed(&b,8,s->start+(now>=s->tick ? now-s->tick : 0));
-  bytes(&b,s->attrs,s->n); attributes(L,4,&b);
+  bytes(&b,s->attrs,s->n); attributes(L,4,&b,9);
+  error_attribute(L,&b,9,ok,cancelled);
   attr(L,&b,9,"cancelled",NULL,cancelled,2);
   attr(L,&b,9,"outcome",cancelled ? "cancelled" : ok ? "success" : "error",0,0);
   num(&status,3,cancelled ? 0 : ok ? 1 : 2); nested(&b,15,&status);
-  s->used=0; enqueue(&b,0); lifecycle(L,s,1,ok,cancelled); lua_pushboolean(L,1); return 1;
+  s->used=0; enqueue(&b,0); lifecycle(L,s,1,ok,cancelled);
 }
 static size_t receive(char *p,size_t a,size_t b,void *unused) {
   (void)unused; if (a && b>SIZE_MAX/a) return 0; size_t n=a*b;
@@ -337,7 +561,7 @@ static void release_easy(void) {
 }
 static void deliver(void) {
   t.easy=curl_easy_init(); t.attempts++; t.response_n=0; t.retry_after=0;
-  if (!t.easy) { t.failed+=t.batch; t.batch=0; t.payload_n=0; return; }
+  if (!t.easy) { t.error_category="exporter_transport"; t.failed+=t.batch; t.batch=0; t.payload_n=0; return; }
 #define OPT(k,v) do { if (curl_easy_setopt(t.easy,k,v)!=CURLE_OK) goto bad; } while (0)
   OPT(CURLOPT_URL,t.endpoint[t.signal]); OPT(CURLOPT_HTTPHEADER,t.headers[t.signal]);
   OPT(CURLOPT_POST,1L); OPT(CURLOPT_POSTFIELDS,t.payload);
@@ -355,7 +579,7 @@ static void deliver(void) {
   OPT(CURLOPT_WRITEFUNCTION,receive); OPT(CURLOPT_HEADERFUNCTION,header);
   if (curl_multi_add_handle(t.multi,t.easy)==CURLM_OK) return;
 bad:
-  release_easy(); t.failed+=t.batch; t.batch=0; t.payload_n=0;
+  release_easy(); t.error_category="exporter_transport"; t.failed+=t.batch; t.batch=0; t.payload_n=0;
 #undef OPT
 }
 static void batch(void) {
@@ -370,6 +594,14 @@ static void batch(void) {
   }
   PB records={inner,0,T_PAYLOAD,0}, rs={outer,0,T_PAYLOAD,0};
   nested(&records,1,&scope); t.signal=t.queue[0].signal; t.batch=0;
+  /* Shutdown has one shared deadline for both signals. Lifecycle logs usually
+   * lead the queue; a slow logs receiver must not consume the entire budget
+   * before completed spans (especially the last root) get an export attempt.
+   * Preserve in-flight requests/retry backoff and ordering within each signal. */
+  if (t.flushing)
+    for (size_t i=0;i<t.count;i++) if (t.queue[i].signal==0) {
+      t.signal=0; break;
+    }
   /* Gather one signal across interleaved lifecycle/span records, preserving
    * order within each signal and leaving the other signal queued. */
   size_t kept=0;
@@ -387,6 +619,31 @@ static void batch(void) {
   if (request.bad) { t.dropped+=t.batch; return; }
   t.payload_n=request.n; t.attempts=0; deliver();
 }
+/* Pure result policy: transport errors outrank HTTP status; never inspect text.
+ * Success leaves the latest failure untouched in the diagnostics adapter. */
+const char *telemetry_exporter_result_category(int curl_code, long http_status) {
+  switch (curl_code) {
+    case CURLE_OK: break;
+    case CURLE_COULDNT_RESOLVE_HOST:
+    case CURLE_COULDNT_RESOLVE_PROXY: return "exporter_dns";
+    case CURLE_COULDNT_CONNECT: return "exporter_connect";
+    case CURLE_SSL_CONNECT_ERROR:
+    case CURLE_PEER_FAILED_VERIFICATION:
+    case CURLE_SSL_CERTPROBLEM:
+    case CURLE_SSL_CIPHER:
+    case CURLE_SSL_CACERT_BADFILE:
+    case CURLE_SSL_CRL_BADFILE:
+    case CURLE_SSL_ISSUER_ERROR:
+    case CURLE_USE_SSL_FAILED:
+    case CURLE_SSL_PINNEDPUBKEYNOTMATCH:
+    case CURLE_SSL_INVALIDCERTSTATUS: return "exporter_tls";
+    case CURLE_LOGIN_DENIED: return "exporter_auth";
+    default: return "exporter_transport";
+  }
+  if (http_status==401 || http_status==403 || http_status==407)
+    return "exporter_auth";
+  return http_status==200 ? NULL : "exporter_http";
+}
 /* Diagnostics are read explicitly through Lua; polling never writes logs. */
 void telemetry_poll(void) {
   if (!t.enabled) return;
@@ -398,7 +655,7 @@ void telemetry_poll(void) {
   }
   int running;
   if (curl_multi_perform(t.multi,&running)!=CURLM_OK) {
-    release_easy(); t.failed+=t.batch; t.batch=0; t.payload_n=0; t.due=now+1000; return;
+    release_easy(); t.error_category="exporter_transport"; t.failed+=t.batch; t.batch=0; t.payload_n=0; t.due=now+1000; return;
   }
   int left; CURLMsg *msg;
   while ((msg=curl_multi_info_read(t.multi,&left))) {
@@ -414,9 +671,16 @@ void telemetry_poll(void) {
     } else {
       if (code==CURLE_OK && status==200) {
         uint64_t rejected=0;
-        if (!otlp_wire_response(t.response,t.response_n,&rejected)) t.malformed++;
-        else t.rejected+=rejected>t.batch ? t.batch : rejected;
-      } else t.failed+=t.batch;
+        if (!otlp_wire_response(t.response,t.response_n,&rejected)) {
+          t.malformed++; t.error_category="exporter_protocol";
+        } else {
+          t.rejected+=rejected>t.batch ? t.batch : rejected;
+          if (rejected) t.error_category="exporter_rejected";
+        }
+      } else {
+        t.failed+=t.batch;
+        t.error_category=telemetry_exporter_result_category(code,status);
+      }
       t.payload_n=0; t.batch=0; t.due=t.count ? now : now+1000;
     }
   }
@@ -619,11 +883,27 @@ void telemetry_init(lua_State *L,int isolated) {
   lua_pushvalue(L,capstan); lua_setglobal(L,"capstan");
   if (!c->allowed || t.initialized) { lua_settop(L,top); return; }
   t.initialized=1;
+  include_tool_details=0;
   const char *disabled=getenv("OTEL_SDK_DISABLED");
   if (disabled && !strcasecmp(disabled,"true")) goto done;
   field(L,capstan,"config"); int config=0;
   if (lua_istable(L,-1)) { field(L,-1,"observability"); if (lua_istable(L,-1)) config=lua_gettop(L); }
+  /* The local adapter follows the existing log destination/level policy.
+   * SDK disable suppresses both sinks, but never revokes local identity. */
+  t.file_enabled=1;
   if (!config) goto done;
+  field(L,config,"file_exporter");
+  if (!lua_isnil(L,-1) && !lua_isboolean(L,-1)) {
+    lua_pop(L,1); t.file_enabled=0; goto invalid;
+  }
+  if (lua_isboolean(L,-1)) t.file_enabled=lua_toboolean(L,-1);
+  lua_pop(L,1);
+  field(L,config,"include_tool_details");
+  if (!lua_isnil(L,-1) && !lua_isboolean(L,-1)) { lua_pop(L,1); goto invalid; }
+  include_tool_details=lua_isboolean(L,-1) && lua_toboolean(L,-1); lua_pop(L,1);
+  field(L,config,"include_session_name");
+  if (!lua_isnil(L,-1) && !lua_isboolean(L,-1)) { lua_pop(L,1); goto invalid; }
+  t.include_session_name=lua_toboolean(L,-1); lua_pop(L,1);
   field(L,config,"enabled"); int enabled=lua_isboolean(L,-1) && lua_toboolean(L,-1); lua_pop(L,1);
   if (!enabled) goto done;
   char base[2048], fallback[2048], raw[129];
@@ -672,19 +952,21 @@ invalid:
   if (t.multi) { curl_multi_cleanup(t.multi); t.multi=NULL; }
   for (int i=0;i<2;i++) { curl_slist_free_all(t.headers[i]); t.headers[i]=NULL; t.signals[i]=0; }
   if (t.global_curl) { curl_global_cleanup(); t.global_curl=0; }
-  t.configuration_errors++;
+  t.configuration_errors++; t.error_category="exporter_configuration";
 done:
-  if (t.enabled && !isolated && startup_time) {
+  if (t.enabled && !isolated && startup_time &&
+      strcmp(current_capture.mode,"cli")) {
     unsigned char storage[256], body_storage[128];
     PB record={storage,0,sizeof(storage),0}, body={body_storage,0,sizeof(body_storage),0};
     fixed(&record,1,startup_time); num(&record,2,9);
     text(L,&record,3,"INFO"); text(L,&body,1,"runtime.started");
     nested(&record,5,&body); enqueue(&record,1);
   }
-  startup_time=0;
+  if (strcmp(current_capture.mode,"cli")) startup_time=startup_tick=0;
   lua_settop(L,top);
 }
 void telemetry_cleanup(void) {
+  startup_time=startup_tick=0;
   t.flushing=1; uint64_t deadline=mono()+2000;
   if (!t.payload_n) t.due=0;
   while (t.enabled && (t.count || t.payload_n || t.easy) && mono()<deadline) {

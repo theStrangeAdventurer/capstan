@@ -19,6 +19,20 @@ const char *log_session_id(void);
 int log_event_correlated(const char *level, const char *category,
                          const char *message, const char *session_id,
                          const char *trace_id, const char *span_id);
+/* Internal adapter for already policy-filtered attributes, never raw payloads.
+ * type: 0 string, 1 finite nonnegative number, 2 boolean. Borrowed values.
+ * No redaction is reapplied: the telemetry encoder owns that policy.
+ * NULL correlation IDs are allowed for explicit exporter diagnostics.
+ * Synchronous local I/O; never call from exporter polling or shutdown. */
+typedef struct {
+  char key[129], text[129];
+  double number;
+  int type;
+} LogAttribute;
+int log_event_structured(const char *level, const char *category,
+                         const char *message, const char *session_id,
+                         const char *trace_id, const char *span_id,
+                         const LogAttribute *attrs, size_t count);
 int log_event(const char *category, const char *message);
 int log_event_level(const char *level, const char *category,
                     const char *message);

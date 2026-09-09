@@ -59,6 +59,7 @@ typedef struct {
 static HeadlessRun g_headless_run = {0};
 static TraceWriter g_headless_trace = TRACE_WRITER_INIT;
 static int g_mouse_selecting_messages = 0;
+static int g_headless_context = LUA_NOREF;
 
 #define ACTIVE_RENDER_INTERVAL_MS 16
 #define IDLE_RENDER_INTERVAL_MS 50
@@ -146,13 +147,13 @@ static int message_pane_geometry(int *out_y, int *out_x, int *out_h,
   int queue_h = (!popup_is_active() && !popup_is_message_active())
                     ? dispatch_queue_visible_size()
                     : 0;
-  int msg_h = rows - INPUT_WIN_HEIGHT - 2 * MARGIN - badge_h - queue_h - tui_tasks_height();
+  int msg_h = rows - INPUT_WIN_HEIGHT - 2 * MARGIN - badge_h - queue_h - tui_tasks_height() - tui_session_height();
   int inner_w = cols - 2 * MARGIN;
   if (msg_h < 1 || inner_w < 1)
     return 0;
 
   if (out_y)
-    *out_y = MARGIN;
+    *out_y = MARGIN + tui_session_height();
   if (out_x)
     *out_x = MARGIN;
   if (out_h)
@@ -267,6 +268,10 @@ static int stop_active_stream(void) {
 }
 
 static void handle_mouse_event(MEVENT *event) {
+  if (tui_handle_session_mouse(event->y, event->x, event->bstate)) {
+    g_mouse_selecting_messages = 0;
+    return;
+  }
   if (tui_handle_tasks_mouse(event->y, event->x, event->bstate)) {
     g_mouse_selecting_messages = 0;
     return;
@@ -480,8 +485,6 @@ static int l_headless_on_model_done(lua_State *l) {
   int text_bytes = (int)luaL_optinteger(l, 5, 0);
   int reasoning_bytes = (int)luaL_optinteger(l, 6, 0);
   int tool_calls = (int)luaL_optinteger(l, 7, 0);
-  g_headless_run.model_requests++;
-  g_headless_run.model_ms += duration;
 
   JsonlBuffer data;
   jsonl_buffer_init(&data);
@@ -558,13 +561,7 @@ static int l_headless_on_tool_done(lua_State *l) {
   int ok = lua_toboolean(l, 3);
   int duration = (int)luaL_optinteger(l, 4, 0);
   int permission_wait = (int)luaL_optinteger(l, 5, 0);
-  if (permission_wait < 0) permission_wait = 0;
-  if (permission_wait > duration) permission_wait = duration;
-  g_headless_run.tool_calls++;
-  trace_accumulate_tool_breakdown(
-      strcmp(name, "subagents") == 0, duration, permission_wait,
-      &g_headless_run.tool_ms, &g_headless_run.permission_wait_ms,
-      &g_headless_run.subagent_wait_ms);
+  /* Runtime supplies the same clipped measurement to every export adapter. */
   int written = trace_tool_event(&g_headless_trace, "tool.finished", name,
                                  1, ok, duration, permission_wait,
                                  result_size);
@@ -572,6 +569,54 @@ static int l_headless_on_tool_done(lua_State *l) {
   if (!written)
     return luaL_error(l, "failed to write tool.finished trace event");
   return 0;
+}
+
+/* Legacy JSONL is an export adapter: use the root identity supplied by the
+ * common lifecycle, never synthesize a second native run/trace identity.
+ * Disabled/isolated native telemetry supplies no context. Publication remains
+ * fail-closed if this requested trace event cannot be written. */
+static int headless_trace_context(lua_State *l, int index) {
+  if (!lua_istable(l, index))
+    return 1;
+  JsonlBuffer data;
+  jsonl_buffer_init(&data);
+  jsonl_append(&data, "{\"run_id\":");
+  jsonl_append_lua_string(&data, l, index, "run_id");
+  jsonl_append(&data, ",\"trace_id\":");
+  jsonl_append_lua_string(&data, l, index, "trace_id");
+  jsonl_append(&data, ",\"span_id\":");
+  jsonl_append_lua_string(&data, l, index, "span_id");
+  lua_getfield(l, index, "session_id");
+  const char *session_id = lua_tostring(l, -1);
+  if (session_id && session_id[0]) {
+    jsonl_append(&data, ",\"session_id\":");
+    jsonl_append_string(&data, session_id);
+  }
+  lua_pop(l, 1);
+  jsonl_append(&data, "}");
+  int written = !data.failed &&
+                trace_event(&g_headless_trace, "run.context", data.data);
+  jsonl_buffer_free(&data);
+  return written;
+}
+
+static int l_headless_on_run_start(lua_State *l) {
+  if (lua_istable(l, 1)) {
+    luaL_unref(l, LUA_REGISTRYINDEX, g_headless_context);
+    lua_pushvalue(l, 1);
+    g_headless_context = luaL_ref(l, LUA_REGISTRYINDEX);
+  }
+  if (!headless_trace_context(l, 1))
+    return luaL_error(l, "failed to write run.context trace event");
+  return 0;
+}
+
+/* Copy the canonical runtime snapshot; event callbacks only export events. */
+static long long headless_measurement(lua_State *l, const char *field) {
+  lua_getfield(l, -1, field);
+  long long value = (long long)luaL_optinteger(l, -1, 0);
+  lua_pop(l, 1);
+  return value;
 }
 
 static int l_headless_on_done(lua_State *l) {
@@ -594,6 +639,17 @@ static int l_headless_on_done(lua_State *l) {
     if (error)
       snprintf(g_headless_run.error, sizeof(g_headless_run.error), "%s",
                error);
+    lua_pop(l, 1);
+
+    lua_getfield(l, 1, "measurements");
+    if (lua_istable(l, -1)) {
+      g_headless_run.model_requests = (int)headless_measurement(l, "request_count");
+      g_headless_run.tool_calls = (int)headless_measurement(l, "tool_count");
+      g_headless_run.model_ms = headless_measurement(l, "model_ms");
+      g_headless_run.tool_ms = headless_measurement(l, "tool_ms");
+      g_headless_run.permission_wait_ms = headless_measurement(l, "permission_wait_ms");
+      g_headless_run.subagent_wait_ms = headless_measurement(l, "subagent_wait_ms");
+    }
     lua_pop(l, 1);
 
     lua_getfield(l, 1, "turns");
@@ -1035,6 +1091,10 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   if (!opts->benchmark &&
       app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
     load_plugins_from(global_plugins);
+  /* --session-id is the canonical explicit harness correlation path. Keep
+   * benchmark isolation intact: native OTLP supplies no run.context in that
+   * mode; the harness retains attempt/session identity in local artifacts. */
+  telemetry_set_context("cli", headless_session.id, headless_session.title);
   session_manager_tasks_session(&headless_session);
   if (headless_session.id[0])
     log_event("session", "headless session started");
@@ -1088,6 +1148,8 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   lua_setfield(L, -2, "on_error");
   lua_pushcfunction(L, l_headless_on_done);
   lua_setfield(L, -2, "on_done");
+  lua_pushcfunction(L, l_headless_on_run_start);
+  lua_setfield(L, -2, "on_run_start");
   lua_pushcfunction(L, l_headless_on_model_start);
   lua_setfield(L, -2, "on_model_start");
   lua_pushcfunction(L, l_headless_on_model_done);
@@ -1145,10 +1207,21 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   }
   g_headless_run.agent_finished_ms = trace_monotonic_ms();
 
+  int persistence_top = lua_gettop(L);
+  int persistence_span = LUA_NOREF;
+  if (headless_session.id[0] && g_headless_context != LUA_NOREF) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, g_headless_context);
+    persistence_span = session_manager_persistence_begin(L, -1);
+    lua_settop(L, persistence_top);
+  }
+  luaL_unref(L, LUA_REGISTRYINDEX, g_headless_context);
+  g_headless_context = LUA_NOREF;
   long long session_started_ms = trace_monotonic_ms();
   int session_saved = headless_session_finish(&headless_session,
                                                &g_headless_run);
   g_headless_run.session_save_ms = trace_monotonic_ms() - session_started_ms;
+  session_manager_persistence_end(L, persistence_span, session_saved,
+                                  g_headless_run.session_save_ms);
   if (!session_saved && g_headless_run.ok) {
     snprintf(g_headless_run.error, sizeof(g_headless_run.error),
              "agent completed but session could not be saved");
@@ -1446,6 +1519,7 @@ static void cycle_agent_profile(lua_State *l) {
 }
 
 int main(int argc, char *argv[]) {
+  telemetry_startup();
   CliOptions cli = cli_parse(argc, argv);
 
   if (cli.mode == CLI_MODE_ERROR) {
@@ -1465,8 +1539,10 @@ int main(int argc, char *argv[]) {
     return run_embedded_self_test();
   }
 
-  if (cli.mode == CLI_MODE_RUN)
+  if (cli.mode == CLI_MODE_RUN) {
+    telemetry_set_context("cli", NULL, NULL);
     return run_headless(&cli, argv[0]);
+  }
 
   if (cli.mode == CLI_MODE_ACP)
     return acp_run(argv[0], cli.yolo);

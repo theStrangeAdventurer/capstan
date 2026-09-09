@@ -66,6 +66,7 @@ HTTP_LUA_TARGET = build/test_http_stack
 test-http-lua: $(HTTP_LUA_TARGET)
 	./$(HTTP_LUA_TARGET)
 	$(LUA_DIR)/src/lua test/test_telemetry.lua
+	$(LUA_DIR)/src/lua test/test_runtime_timeline.lua
 
 .PHONY: test-telemetry
 test-telemetry: build/test_telemetry_native

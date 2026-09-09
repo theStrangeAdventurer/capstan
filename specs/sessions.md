@@ -42,6 +42,24 @@ headless runs.
 - Headless runs without `--session-id` remain one-shot and do not read or write
   sessions.
 
+## Session header
+
+The TUI reserves two rows above chat for the active title and ID, right-aligned
+in purple. Each row ends in an overlapping-squares copy mark (`⧉`, ASCII `[]`
+in non-Unicode locales). Clicking either the text or mark copies the complete
+raw value, not its display truncation. Successful copies blink with the existing
+70 ms selection-copy rhythm and show `Copied`; clipboard failures show an error
+without a success blink. Message selection and header actions share the native
+clipboard writer (`pbcopy`, or `wl-copy`/`xclip`/`xsel`).
+
+Rendering reads the session manager on each frame, so switching, `/new`, and
+background title completion cannot leave a cached title or ID. Display text is
+cell-bounded, preserves UTF-8, and flattens terminal controls. The header is
+hidden below 7 columns or 9 rows rather than overlapping input. Chat, shell
+controls, queued input, and mouse selection account for the reserved rows.
+`make test` covers narrow/Unicode layout; `make test-tui-input` covers actual
+clipboard-command delivery, `/new`, resize, and shell mouse geometry.
+
 ## Storage
 
 Sessions are stored under the XDG state directory:

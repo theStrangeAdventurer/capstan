@@ -302,7 +302,27 @@ static MunitResult test_selected_session_create_and_resume(
   shell_message->shell_output.blocks[0].expanded = 1;
   munit_assert_not_null(strstr(shell_output_build(&shell_message->shell_output,
                                                  shell_message->text), "[-]"));
-  munit_assert_true(session_manager_save());
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  luaL_openlibs(L);
+  agent_init(L);
+  munit_assert_int(luaL_dostring(L,
+      "local context = {}\n"
+      "local starts, finishes = 0, 0\n"
+      "package.loaded['agent.telemetry'] = {\n"
+      " start = function(name, parent, attrs)\n"
+      "  assert(name == 'operation' and parent == context)\n"
+      "  assert(attrs.operation == 'session_save')\n"
+      "  starts = starts + 1; return context end,\n"
+      " finish = function(span, ok, cancelled, attrs)\n"
+      "  assert(span == context and ok and not cancelled)\n"
+      "  assert(attrs.duration_ms >= 0); finishes = finishes + 1 end }\n"
+      "assert(agent.finish_run(context, 'other session'))\n"
+      "assert(starts == 0 and finishes == 0)\n"
+      "assert(agent.finish_run(context, 'custom key'))\n"
+      "assert(starts == 1 and finishes == 1)\n"), ==, LUA_OK);
+  munit_assert_false(agent_is_running());
+  lua_close(L);
   session_manager_shutdown();
   clear_messages();
 

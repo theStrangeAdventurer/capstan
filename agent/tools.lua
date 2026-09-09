@@ -312,14 +312,26 @@ local function guard_duration_error(guard)
     return nil
 end
 
+local prompt_decision_allows
+
 local function permission_prompt(run_ctx, permission_tool, target, details)
     local guard = run_ctx and run_ctx.guard or nil
     if guard and type(guard.pause) == "function" then guard.pause() end
     local prompt_started_at = now_ms()
+    local prompt_span = telemetry.start("operation", run_ctx and run_ctx.telemetry_tool, {
+        operation = "permission_wait", tool = permission_tool,
+    })
     local callbacks = run_ctx and run_ctx.callbacks or nil
     local prompt = callbacks and callbacks.on_permission_request or permit.prompt
     local ok, decision = pcall(prompt, permission_tool, target, details)
     local paused_ms = math.max(0, now_ms() - prompt_started_at)
+    local allowed = ok and prompt_decision_allows(decision)
+    telemetry.finish(prompt_span, allowed, false, {
+        ["error.category"] = not ok and "exception" or nil,
+        duration_ms = paused_ms,
+        purpose = not ok and "error" or (allowed and "allow" or
+            (decision == "deny" and "deny" or "invalid_decision")),
+    })
     if guard and type(guard.resume) == "function" then
         paused_ms = guard.resume()
     end
@@ -566,8 +578,21 @@ local function run_subagents(args, run_ctx)
     end
     ui.append("\n", "agent")
 
+    local queued = {}
+    for index in ipairs(args.tasks) do
+        queued[index] = {started_at = now_ms(), span = telemetry.start("operation", telemetry_parent, {
+            operation = "subagent_queue", depth = depth + 1,
+        })}
+    end
+
     local function start_one(index, attempt)
         if cancelled() then return end
+        if queued[index] then
+            telemetry.finish(queued[index].span, true, false, {
+                duration_ms = math.max(0, now_ms() - queued[index].started_at),
+            })
+            queued[index] = nil
+        end
         attempt = attempt or 1
         local task = args.tasks[index]
         local started_at = now_ms()
@@ -612,6 +637,10 @@ local function run_subagents(args, run_ctx)
             if cancelled() or attempt >= max_attempts or not subagent_retryable_error(safe_error) then
                 return false
             end
+            queued[index] = {started_at = now_ms(), span = telemetry.start("operation", telemetry_parent, {
+                operation = "retry", purpose = "subagent_transient_error",
+                attempt = attempt + 1, depth = depth + 1,
+            })}
             logging.runtime_log("subagents", string.format(
                 "retry index=%d id=%s next_attempt=%d/%d error=%s",
                 index,
@@ -637,6 +666,9 @@ local function run_subagents(args, run_ctx)
             max_turns = child_max_turns,
             depth = depth + 1,
             telemetry_parent = telemetry_parent,
+            subagent_index = index,
+            subagent_id = state.result.id,
+            subagent_attempt = attempt,
             is_cancelled = run_ctx and run_ctx.is_cancelled,
             tools = child_tools,
             silent_tools = true,
@@ -1240,7 +1272,7 @@ local function apply_prompt_decision(decision, scope, permission_tool, target)
     return decision == "allow"
 end
 
-local function prompt_decision_allows(decision)
+prompt_decision_allows = function(decision)
     return decision == "allow" or decision == "allow_session" or
         decision == "allow_tool_run" or decision == "allow_run" or
         decision == "always"
@@ -1388,6 +1420,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         end
         local result_content
         local event_ok = false
+        local error_category
         local permission_wait_ms = 0
         local tool_started_at = nil
         local callbacks = run_ctx and run_ctx.callbacks or nil
@@ -1404,13 +1437,13 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
 
         local tool_span
         local function observer_failed(name, observer_error)
-            telemetry.finish(tool_span, false, false)
+            telemetry.finish(tool_span, false, false, {["error.category"] = "observer"})
             local message = "observability callback " .. name ..
                 " failed: " .. tostring(observer_error)
             logging.runtime_log("tool_event", message, "error")
             observer_aborted = true
             if run_ctx and type(run_ctx.stop_run) == "function" then
-                run_ctx.stop_run(message, current_msgs)
+                run_ctx.stop_run(message, current_msgs, "observer")
             end
             return false
         end
@@ -1425,10 +1458,11 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 event_tool_call.effective_arguments = arguments
             end
             tool_started_at = now_ms()
-            tool_span = telemetry.start("agent.tool", run_ctx and run_ctx.telemetry_context, {
-                operation = "tool", tool = event_tool_call.name,
-                depth = run_ctx and run_ctx.depth,
-            })
+            tool_span = telemetry.start("agent.tool", run_ctx and run_ctx.telemetry_context,
+                telemetry.tool_attributes(event_tool_call.name, arguments, {
+                    operation = "tool", tool = event_tool_call.name,
+                    depth = run_ctx and run_ctx.depth,
+                }))
             if run_ctx then run_ctx.telemetry_tool = tool_span end
             if callbacks and type(callbacks.on_tool_start) == "function" then
                 local ok, observer_error = pcall(
@@ -1448,15 +1482,17 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
             end
             event_finished = true
             local cancelled = run_ctx and run_ctx.is_cancelled and run_ctx.is_cancelled() or false
+            local tool_duration_ms = math.max(0, math.floor(now_ms() - tool_started_at))
             telemetry.finish(tool_span, event_ok and not cancelled, cancelled, {
-                duration_ms = math.max(0, math.floor(now_ms() - tool_started_at)),
+                ["error.category"] = error_category,
+                duration_ms = tool_duration_ms,
             })
             if run_ctx then run_ctx.telemetry_tool = nil end
             if callbacks and type(callbacks.on_tool_done) == "function" then
                 local ok, observer_error = pcall(
                     callbacks.on_tool_done,
                     event_tool_call, tool_result_text(result_content), event_ok,
-                    math.max(0, math.floor(now_ms() - tool_started_at)),
+                    tool_duration_ms,
                     permission_wait_ms)
                 if not ok then
                     return observer_failed("on_tool_done", observer_error)
@@ -1468,6 +1504,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         local body_ok, body_error = xpcall(function()
         if not tool_available(combined_tools, tc.name) then
             if not start_tool_event(tc.name) then return end
+            error_category = "tool_unavailable"
             result_content = "Tool " .. tostring(tc.name) .. " is not available in the active profile"
             logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tc.name)))
             append_status(string.format("\n\n⚙ %s: unavailable — denied\n\n", tostring(tc.name)))
@@ -1476,6 +1513,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
 
             if decode_err then
                 if not start_tool_event(tc.name) then return end
+                error_category = "invalid_arguments"
                 result_content = decode_err
                 logging.runtime_log("tool", string.format("invalid_args name=%s error=%s", tc.name, logging.compact(decode_err, 240)))
                 append_status(string.format("\n\n⚙ %s: invalid arguments — error: %s\n\n", tc.name, logging.compact(decode_err, 160)))
@@ -1505,6 +1543,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 if not start_tool_event(tool_name, args) then return end
 
                 if not tool_available(combined_tools, tool_name) then
+                    error_category = "tool_unavailable"
                     result_content = "Tool " .. tostring(tool_name) .. " is not available in the active profile"
                     logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tool_name)))
                     append_status(string.format("\n\n⚙ %s: unavailable — denied\n\n", tostring(tool_name)))
@@ -1517,6 +1556,11 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                     end
                     local guard_error = guard_before_tool(tool_name, args, run_ctx)
                     if guard_error then
+                        local guard_span = telemetry.start("operation", tool_span, {
+                            operation = "guard_stop", tool = tool_name,
+                        })
+                        error_category = "guard"
+                        telemetry.finish(guard_span, false, false, {["error.category"] = error_category})
                         result_content = guard_error
                         stop_after_event = true
                         return
@@ -1573,7 +1617,15 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                 end
                             end
 
+                            if perm ~= "ask" then
+                                local decision_span = telemetry.start("operation", tool_span, {
+                                    operation = "permission_decision", tool = permission_tool,
+                                    purpose = perm == "allow" and "allow" or "deny",
+                                })
+                                telemetry.finish(decision_span, perm == "allow", false)
+                            end
                             if perm == "deny" then
+                                error_category = "permission"
                                 authorized = false
                                 result_content = shell_scope_reason or ("Permission denied for " .. tool_name .. " " .. target)
                                 if show_generic_status then append_status(tool_status_suffix("— denied", display_command)) end
@@ -1587,6 +1639,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                 if prompt_error ~= nil then error(prompt_error, 0) end
                                 logging.runtime_log("permit", string.format("tool=%s call=%s target=%s prompt=%s", permission_tool, tool_name, target, decision))
                                 if decision == "deny" then
+                                    error_category = "permission"
                                     authorized = false
                                     result_content = "User denied " .. tool_name .. " " .. target
                                     if show_generic_status then append_status(tool_status_suffix("— denied by user", display_command)) end
@@ -1597,6 +1650,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                     end
                                     authorized = apply_prompt_decision(decision, permission_scope, permission_tool, target)
                                     if not authorized then
+                                        error_category = "permission"
                                         result_content = "Unknown permission decision for " .. tool_name .. ": " .. tostring(decision)
                                         if show_generic_status then append_status(tool_error_status(result_content, display_command), tool_name == "shell" and "shell" or nil) end
                                     end
@@ -1611,6 +1665,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                                         tool_permission_context(permission_tool, target, tool_name, args),
                                         display_command)
                             event_ok = tool_ok == true
+                            if not event_ok then error_category = "tool" end
                             mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
                             mark_validation(run_ctx, tool_name, args, tool_ok)
                             if tool_ok then
@@ -1642,6 +1697,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         if observer_aborted then return end
         if not body_ok then
             event_ok = false
+            error_category = "exception"
             result_content = "Tool " .. tostring(event_tool_call.name) ..
                 " failed: " .. tostring(body_error)
         end
