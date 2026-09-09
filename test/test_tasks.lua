@@ -131,4 +131,50 @@ assert(ok == false)
 ctx.tool_args = {operation='read'}
 local _, encoded = plugin.handler(ctx)
 assert(json.decode(encoded).revision == 1)
+-- Clear uses the same revision/storage policy and never drops unfinished work.
+local clear_store = {json=''}
+tasks.use_store(clear_store)
+for _, status in ipairs({'pending','in_progress','blocked'}) do
+    clear_store.json = ''
+    assert(tasks.update({revision=0,tasks={item('open',status,'reason')}}))
+    local unchanged = clear_store.json
+    assert(not tasks.clear({revision=1}))
+    assert(clear_store.json == unchanged)
+end
+assert(tasks.update({revision=1,tasks={item('open','cancelled','User abandoned work'),item('done','completed','Tests passed')}}))
+local closed = clear_store.json
+assert(not tasks.clear({revision=1}))
+assert(not tasks.clear({}))
+assert(clear_store.json == closed)
+messages = {{role='user',content='next task'}}
+injected = tasks.refresh(messages)
+ctx.tool_args = {operation='clear',revision=2}
+local _, cleared = plugin.handler(ctx)
+assert(json.decode(cleared).revision == 3 and #json.decode(cleared).tasks == 0)
+assert(clear_store.json:find('"tasks":[]',1,true))
+assert(tasks.summary() == '' and #tasks.view().items == 0)
+assert(tasks.refresh(messages,injected) == nil and #messages == 1)
+assert(not tasks.update({revision=2,tasks={item('stale')}}))
+assert(tasks.update({revision=3,tasks={item('new','completed','Done')}}))
+ctx.tool_args, ctx.args = nil, {'clear','extra'}
+assert(plugin.handler(ctx):find('Usage:',1,true))
+assert(tasks.read().revision == 4)
+ctx.args = {'clear'}
+local cleared_ui, cleared_llm = plugin.handler(ctx)
+assert(cleared_ui == 'Task plan cleared.' and cleared_llm == '')
+assert(tasks.read().revision == 5 and #tasks.read().tasks == 0)
+assert(tasks.clear({revision=5}).revision == 6)
+tasks.use_store(store)
+assert(store.json == saved) -- another session was untouched
+clear_store.json = '{broken'
+tasks.use_store(clear_store)
+assert(not tasks.clear({revision=0}) and clear_store.json == '{broken')
+-- A valid closed plan still survives a failing persistence adapter.
+tasks.use_store(nil)
+agent.tasks_get = function() return closed end
+agent.tasks_set = function() return false end
+local failed, failure = tasks.clear({revision=2})
+assert(not failed and failure:find('Could not save',1,true))
+assert(agent.tasks_get() == closed)
+agent.tasks_get, agent.tasks_set = original_get, original
 tasks.use_store(nil)

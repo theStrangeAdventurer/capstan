@@ -3,7 +3,7 @@
 ## Behavior
 
 A task plan is a session artifact, not a checklist inferred from chat history.
-The built-in `tasks` model tool supports `read` and `update`. The Plan profile
+The built-in `tasks` model tool supports `read`, `update` and `clear`. The Plan profile
 natively creates/refines plans; Implement creates one only when the user requests
 planning. With an existing plan, Implement consults it, records meaningful status
 transitions, and accounts for relevant unfinished work before finalizing. These
@@ -57,6 +57,25 @@ or reason. Updates supply the current revision and complete records to upsert;
 omitted IDs are retained. Cancel abandoned tasks rather than deleting them.
 Reading returns the complete current revision. Stale revisions, duplicate IDs,
 invalid fields and excessive size are errors with no state changes.
+
+### Starting another task in the same session
+
+`/tasks clear` explicitly clears a plan without an LLM call or model history.
+The model tool accepts `{operation="clear", revision=<current>}`. Only plans
+whose tasks are all `completed` or `cancelled` can be cleared; pending,
+in-progress and blocked work must first be completed or explicitly cancelled
+with a reason. There is no force bypass. Clear closed plans before unrelated
+work or on user request, not automatically after every response.
+
+The canonical Lua policy validates the revision and saves an empty JSON task
+array with an incremented revision through the same persistence adapter as
+update. Even an empty-plan clear advances revision, preventing stale writes.
+Corrupt state, revision conflicts/overflow and save failures preserve old state.
+The panel disappears and the runtime-owned context message is removed on the
+next refresh; historical tool results are not rewritten. Other sessions and
+view preferences are unchanged. Lua tests cover both command/tool adapters,
+unfinished statuses, stale writes, empty clears, persistence failure, corrupt
+state, UI/context cleanup, new-plan creation and session isolation.
 
 ## Ownership and paths
 

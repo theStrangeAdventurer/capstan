@@ -41,6 +41,34 @@ function M.read()
     return plan
 end
 
+local function save(plan)
+    if not valid_plan(plan) then return nil, 'Task plan limit exceeded (100 tasks or revision limit).' end
+    local raw = json.encode(plan)
+    if #raw > 128 * 1024 then return nil, 'Task plan exceeds 128 KiB.' end
+    if scoped_store then
+        scoped_store.json = raw
+    elseif not (agent and agent.tasks_set and agent.tasks_set(raw)) then
+        return nil, 'Could not save task plan; previous state was preserved.'
+    end
+    return plan
+end
+
+-- Only explicitly closed plans can be discarded. Cancel unfinished work with a
+-- reason first; clearing is never an automatic consequence of completion.
+function M.clear(args)
+    local plan, err = M.read()
+    if not plan then return nil, err end
+    if type(args) ~= 'table' or args.revision ~= plan.revision then
+        return nil, 'Task revision conflict: read the current plan before clearing.'
+    end
+    for _, task in ipairs(plan.tasks) do
+        if task.status ~= 'completed' and task.status ~= 'cancelled' then
+            return nil, 'Cannot clear unfinished tasks; complete or cancel them with a result/reason first.'
+        end
+    end
+    return save({revision=plan.revision + 1, tasks=json.array({})})
+end
+
 -- Upsert preserves omitted tasks and their stable IDs. Cancel rather than delete
 -- abandoned work; a stale revision never overwrites a newer plan.
 function M.update(args)
@@ -68,15 +96,7 @@ function M.update(args)
         if index then plan.tasks[index] = item else table.insert(plan.tasks, item) end
     end
     plan.revision = plan.revision + 1
-    if not valid_plan(plan) then return nil, 'Task plan limit exceeded (100 tasks).' end
-    local raw = json.encode(plan)
-    if #raw > 128 * 1024 then return nil, 'Task plan exceeds 128 KiB.' end
-    if scoped_store then
-        scoped_store.json = raw
-    elseif not (agent and agent.tasks_set and agent.tasks_set(raw)) then
-        return nil, 'Could not save task plan; previous state was preserved.'
-    end
-    return plan
+    return save(plan)
 end
 
 function M.summary()
