@@ -22,13 +22,12 @@ typedef struct {
   char reasoning_effort[32];
   char profile[64];
   char workdir[160];
-  char ready[128];
   char shortcuts[128];
 } StartScreenStatusLines;
 
 typedef struct {
   int x, y, width, height;
-  int version_y, status_y, ready_y;
+  int version_y, status_y, shortcuts_y;
 } StartScreenContent;
 
 StartScreenLayout start_screen_layout_for_size(int height, int width);
@@ -40,6 +39,7 @@ void start_screen_build_status(const StartScreenStatus *status,
                                StartScreenStatusLines *out);
 
 #define START_SCREEN_WORDMARK_ROWS 8
+#define START_SCREEN_WAVE_PERIOD_MS 2500
 #define START_SCREEN_WORDMARK_DISPLAY_ROWS (START_SCREEN_WORDMARK_ROWS / 2)
 #define START_SCREEN_WORDMARK_LETTERS 7
 #define START_SCREEN_WORDMARK_LETTER_COLUMNS 6
@@ -59,6 +59,7 @@ typedef struct {
 } StartScreenAnimation;
 int start_screen_animation_frame(StartScreenAnimation *animation, int visible,
                                  long long now_ms);
-int start_screen_gradient_level(int row, int column, int tick);
+/* Masked silk wave: 0 = outside letters, 1..6 = increasing brightness. */
+int start_screen_wave_level(int row, int column, int tick);
 
 #endif

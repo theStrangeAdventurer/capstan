@@ -30,26 +30,13 @@ int start_screen_wordmark_cell(int row, int column) {
 }
 
 int start_screen_animation_tick(long long elapsed_ms) {
-  const int sweep_ms = 900;
-  const int pause_ms = 2700;
-  const int travel = START_SCREEN_WORDMARK_COLUMNS + START_SCREEN_WORDMARK_ROWS + 24;
-  long long cycle_ms = sweep_ms + pause_ms;
-  long long phase = elapsed_ms % cycle_ms;
-  if (phase < 0)
-    phase += cycle_ms;
-  if (phase >= sweep_ms)
-    return travel - 1;
-
-  long long accelerated = phase * phase * phase;
-  long long duration = (long long)sweep_ms * sweep_ms * sweep_ms;
-  /* Start at the visible leading edge, without a hidden off-screen run-up. */
-  return 8 + (int)(accelerated * (travel - 9) / duration);
+  int phase = (int)(elapsed_ms % START_SCREEN_WAVE_PERIOD_MS);
+  return phase < 0 ? phase + START_SCREEN_WAVE_PERIOD_MS : phase;
 }
 
 int start_screen_animation_frame(StartScreenAnimation *animation, int visible,
                                  long long now_ms) {
-  const int resting_tick = START_SCREEN_WORDMARK_COLUMNS +
-                           START_SCREEN_WORDMARK_ROWS + 23;
+  const int resting_tick = 0;
   if (!visible) {
     animation->visible = 0;
     return resting_tick;
@@ -64,31 +51,27 @@ int start_screen_animation_frame(StartScreenAnimation *animation, int visible,
   return start_screen_animation_tick(elapsed_ms - 500);
 }
 
-int start_screen_gradient_level(int row, int column, int tick) {
-  if (row < 0 || row >= START_SCREEN_WORDMARK_ROWS || column < 0 ||
-      column >= START_SCREEN_WORDMARK_COLUMNS)
-    return 0;
-
-  int cycle = START_SCREEN_WORDMARK_COLUMNS + START_SCREEN_WORDMARK_ROWS + 24;
-  int highlight = tick % cycle;
-  if (highlight < 0)
-    highlight += cycle;
-  highlight -= 14;
-
-  int distance = column + row - highlight;
-  if (distance < 0)
-    distance = -distance;
-  if (distance == 0)
-    return 6;
-  if (distance == 1)
-    return 5;
-  if (distance <= 3)
-    return 4;
-  if (distance <= 5)
-    return 3;
-  if (distance <= 7)
-    return 2;
-  return 1;
+int start_screen_wave_level(int row, int column, int tick) {
+  if (!start_screen_wordmark_pixel(row, column)) return 0;
+  /* A broad ribbon accelerates left to right, then slows off-screen.
+   * Cubic Bezier (0,0), (1/3,0), (2/3,1), (1,1): linear time,
+   * eased distance, with zero velocity at the seamless loop boundary.
+   * No particles, dithering or isolated highlights. */
+  int phase = start_screen_animation_tick(tick);
+  double span = 2.0 * START_SCREEN_WORDMARK_COLUMNS;
+  double t_phase = (double)phase / START_SCREEN_WAVE_PERIOD_MS;
+  double travel = t_phase * t_phase * (3.0 - 2.0 * t_phase);
+  /* One shade per terminal cell avoids speckled half-pixel highlights. */
+  double y = (row / 2) * 2 + 0.5 - (START_SCREEN_WORDMARK_ROWS - 1) / 2.0;
+  double bend = 0.9 * y + 0.10 * y * y;
+  double distance = column - (span * travel + bend);
+  if (distance < -span / 2) distance += span;
+  if (distance > span / 2) distance -= span;
+  if (distance < 0) distance = -distance;
+  if (distance >= 22) return 1;
+  double t = distance / 22.0;
+  double light = 1 - t * t * (3 - 2 * t);
+  return 1 + (int)(5 * light + 0.5);
 }
 
 StartScreenLayout start_screen_layout_for_size(int height, int width) {
@@ -109,14 +92,14 @@ StartScreenContent start_screen_content_for_size(int height, int width) {
   if (content.width > 56)
     content.width = 56;
   content.height = layout == START_SCREEN_WIDE
-                       ? START_SCREEN_WORDMARK_DISPLAY_ROWS + 11 : 10;
+                       ? START_SCREEN_WORDMARK_DISPLAY_ROWS + 10 : 9;
   content.x = (width - content.width) / 2;
   content.y = (height - content.height) / 2;
   content.version_y = layout == START_SCREEN_WIDE
                           ? content.y + START_SCREEN_WORDMARK_DISPLAY_ROWS + 2
                           : content.y;
-  content.status_y = content.y + content.height - 7;
-  content.ready_y = content.y + content.height - 2;
+  content.status_y = content.y + content.height - 6;
+  content.shortcuts_y = content.y + content.height - 1;
   return content;
 }
 
@@ -183,7 +166,6 @@ void start_screen_build_status(const StartScreenStatus *status,
   start_screen_truncate(collapsed[0] ? collapsed : ".", out->workdir,
                         sizeof(out->workdir), 32);
 
-  snprintf(out->ready, sizeof(out->ready), "Type a message to begin");
   snprintf(out->shortcuts, sizeof(out->shortcuts),
-           "/models choose model · Shift+Tab profiles");
+           "/ commands · Shift+Tab profiles");
 }

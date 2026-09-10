@@ -90,16 +90,19 @@ void init_tui(void) {
     init_pair(9, COLORS >= 216 ? 208 : COLOR_YELLOW, -1);
     init_pair(10, COLOR_BLUE, -1);
     init_pair(11, COLOR_BLACK, COLOR_WHITE);
-    /* The only brand accent is the runtime status indicator. */
+    /* Quiet secondary text/borders; retain attribute fallback without 256 colors. */
+    init_pair(15, COLORS >= 256 ? 245 : -1, -1);
+    init_pair(16, COLORS >= 256 ? 240 : -1, -1);
+    /* Brand accent for status, active profile and shortcut keys. */
     init_pair(14, COLORS >= 256 ? 141 : COLOR_MAGENTA, -1);
     if (COLORS >= 256) {
       init_pair(12, 65, -1);
       init_pair(13, 95, -1);
       init_pair(20, 179, -1);
-      /* Six neutral shades: visible reflection without a brand tint. */
-      static const short logo_grays[] = {245, 248, 250, 252, 254, 231};
+      /* Shade the original block glyphs, never their background. */
+      static const short logo_colors[] = {245, 246, 247, 248, 249, 250};
       for (int i = 0; i < 6; i++)
-        init_pair(22 + i, logo_grays[i], -1);
+        init_pair(22 + i, logo_colors[i], -1);
     } else {
       init_pair(12, COLOR_GREEN, -1);
       init_pair(13, COLOR_RED, -1);
@@ -250,6 +253,10 @@ static int dim_gray_attr(void) {
   return A_DIM;
 }
 
+static int start_secondary_attr(void) {
+  return has_colors() && COLORS >= 256 ? COLOR_PAIR(15) : A_DIM;
+}
+
 static void mvwadd_clipped(WINDOW *win, int y, int x, const char *text,
                            int max_chars) {
   if (max_chars <= 0)
@@ -330,7 +337,7 @@ static int update_diff_state(int state, const char *line, int len) {
 
 static void render_status_pair(WINDOW *win, int y, int x, const char *label,
                                const char *value, int value_width) {
-  int dim = dim_gray_attr();
+  int dim = start_secondary_attr();
   wattron(win, dim);
   mvwaddstr(win, y, x, label);
   wattroff(win, dim);
@@ -339,14 +346,14 @@ static void render_status_pair(WINDOW *win, int y, int x, const char *label,
 
 static void render_profile_pair(WINDOW *win, int y, int x, const char *profile,
                                 int value_width) {
-  int dim = dim_gray_attr();
+  int dim = start_secondary_attr();
   wattron(win, dim);
   mvwaddstr(win, y, x, "profile");
   wattroff(win, dim);
 
-  wattron(win, A_BOLD);
+  wattron(win, A_BOLD | COLOR_PAIR(14));
   mvwadd_clipped(win, y, x + 9, profile, value_width);
-  wattroff(win, A_BOLD);
+  wattroff(win, A_BOLD | COLOR_PAIR(14));
 }
 
 static void render_start_screen_minimal(WINDOW *win, int height, int width) {
@@ -379,11 +386,14 @@ static void render_start_screen_wordmark(WINDOW *win, int y, int x) {
       int cell = start_screen_wordmark_cell(row, column);
       if (!cell)
         continue;
-      int level = start_screen_gradient_level(row * 2, column, tick);
-      /* Keep the attribute fallback for terminals without 256 colors. */
-      int attrs = has_colors() && COLORS >= 256
-                      ? COLOR_PAIR(21 + level)
-                      : level == 1 ? A_DIM : level >= 5 ? A_BOLD : A_NORMAL;
+      int top = start_screen_wave_level(row * 2, column, tick);
+      int bottom = start_screen_wave_level(row * 2 + 1, column, tick);
+      int colored = has_colors() && COLORS >= 256;
+      /* Attribute-only terminals retain the silhouette, at cell resolution. */
+      int level = top > bottom ? top : bottom;
+      int attrs = colored ? COLOR_PAIR(21 + level)
+                          : level <= 2 ? A_DIM :
+                            level >= 5 ? A_BOLD : A_NORMAL;
       wattron(win, attrs);
       mvwaddstr(win, y + row, x + column, cells[cell]);
       wattroff(win, attrs);
@@ -395,7 +405,7 @@ static void render_start_screen_content(WINDOW *win, int height, int width,
                                          const StartScreenStatusLines *lines) {
   StartScreenContent content = start_screen_content_for_size(height, width);
   int wide = start_screen_layout_for_size(height, width) == START_SCREEN_WIDE;
-  int dim = dim_gray_attr();
+  int dim = start_secondary_attr();
   int x = content.x;
   int value_w = content.width - 9;
 
@@ -410,7 +420,9 @@ static void render_start_screen_content(WINDOW *win, int height, int width,
   /* Keep the version with the brand, not floating at the window's edge. */
   wattron(win, dim);
   int version_offset = wide ? 0 : 9;
-  mvwadd_clipped(win, content.version_y, x + version_offset, APP_VERSION,
+  char version[512];
+  snprintf(version, sizeof(version), "version: %s", APP_VERSION);
+  mvwadd_clipped(win, content.version_y, x + version_offset, version,
                  content.width - version_offset);
   wattroff(win, dim);
 
@@ -421,14 +433,16 @@ static void render_start_screen_content(WINDOW *win, int height, int width,
   render_status_pair(win, content.status_y + 3, x, "workdir", lines->workdir,
                      value_w);
 
-  wattron(win, COLOR_PAIR(14));
-  mvwaddstr(win, content.ready_y, x, "●");
-  wattroff(win, COLOR_PAIR(14));
-  waddstr(win, " ready");
-  mvwadd_clipped(win, content.ready_y, x + 9, lines->ready, value_w);
   wattron(win, dim);
-  mvwadd_clipped(win, content.ready_y + 1, x, lines->shortcuts, content.width);
+  mvwadd_clipped(win, content.shortcuts_y, x, lines->shortcuts, content.width);
   wattroff(win, dim);
+  mvwchgat(win, content.shortcuts_y, x, 1, A_NORMAL, 14, NULL);
+  const char *key = strstr(lines->shortcuts, "Shift+Tab");
+  if (key) {
+    int offset = text_columns(lines->shortcuts, (size_t)(key - lines->shortcuts));
+    if (offset + 9 <= content.width)
+      mvwchgat(win, content.shortcuts_y, x + offset, 9, A_NORMAL, 14, NULL);
+  }
 }
 
 /* Descriptor lookup only: all process I/O stays in the nonblocking collector.
@@ -667,7 +681,7 @@ static void render_workspace_footer(WINDOW *win, int y, int width) {
   }
   if (footer.summary_width) {
     int x = width - footer.summary_width - 4;
-    wattrset(win, A_NORMAL);
+    wattrset(win, start_secondary_attr());
     mvwaddch(win, y, x++, ' ');
     mvwaddstr(win, y, x, footer.files);
     x += text_columns(footer.files, strlen(footer.files));
@@ -981,8 +995,13 @@ void render_all(void) {
           mvwhline(msg_win, win_row, 0, ' ', inner_w);
         }
 
-        if (is_user)
+        if (is_user) {
           mvwhline(msg_win, win_row, 0, ' ', inner_w);
+          /* Gutter only: no inserted text, wrapping or copy/source offsets. */
+          wattron(msg_win, start_secondary_attr());
+          mvwaddstr(msg_win, win_row, 0, "│");
+          wattroff(msg_win, start_secondary_attr());
+        }
         if (is_shell_output)
           wattrset(msg_win, dim_gray_attr());
         wmove(msg_win, win_row, MSG_PAD_H);
@@ -1188,19 +1207,20 @@ void render_all(void) {
   }
 
   werase(input_win);
-  wattron(input_win, dim_gray_attr());
+  int border_attr = has_colors() && COLORS >= 256 ? COLOR_PAIR(16) : A_DIM;
+  wattron(input_win, border_attr);
   box(input_win, 0, 0);
   mvwaddstr(input_win, 0, 0, "╭");
   mvwaddstr(input_win, 0, inner_w - 1, "╮");
   mvwaddstr(input_win, input_h - 1, 0, "╰");
   mvwaddstr(input_win, input_h - 1, inner_w - 1, "╯");
-  wattroff(input_win, dim_gray_attr());
+  wattroff(input_win, border_attr);
 
   {
     const char *label = mode_label();
     int label_len = (int)strlen(label);
     int label_x = 2;
-    int label_attr = dim_gray_attr();
+    int label_attr = start_secondary_attr();
 
     wattron(input_win, label_attr);
     if (label_x + label_len < inner_w - 1)
@@ -1246,6 +1266,12 @@ void render_all(void) {
   int dim_content = mode_get() == FOCUS_MESSAGES;
   if (dim_content)
     wattron(input_win, dim_gray_attr());
+
+  if (!msgs->size && !input[0]) {
+    wattron(input_win, start_secondary_attr());
+    mvwadd_clipped(input_win, 1, 1, "Type a message to begin", content_w);
+    wattroff(input_win, start_secondary_attr());
+  }
 
   int line1_bytes = 0;
   if (input_lines > skip_lines) {
@@ -1301,9 +1327,13 @@ void render_all(void) {
                          agent_reasoning_effort(), &status_row);
   wattrset(stdscr, A_NORMAL);
   mvaddstr(rows - 1, MARGIN + 3, status_row.activity);
-  wattrset(stdscr, dim_gray_attr());
-  if (status_row.metadata[0])
-    mvaddstr(rows - 1, MARGIN + 3 + status_row.metadata_x, status_row.metadata);
+  wattrset(stdscr, start_secondary_attr());
+  if (status_row.metadata[0]) {
+    int x = MARGIN + 3 + status_row.metadata_x;
+    mvaddstr(rows - 1, x, status_row.metadata);
+    if (status_row.profile_width)
+      mvchgat(rows - 1, x, status_row.profile_width, A_BOLD, 14, NULL);
+  }
   wattrset(stdscr, A_NORMAL);
   spinner_tick = (spinner_tick + 1) % 32;
   curs_set(mode_get() == FOCUS_MESSAGES ? 0 : 1);

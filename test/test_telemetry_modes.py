@@ -413,7 +413,7 @@ class ModeTests(unittest.TestCase):
                 self.fail('TUI timeout/early exit: ' + repr(bytes(screen[-2000:])) + '\n' + logs)
 
             try:
-                until(lambda: b'ready' in screen)
+                until(lambda: b'Shift+Tab' in screen)
                 os.write(master, (PROMPT + '\r').encode())
                 until(lambda: ANSWER.encode() in screen)
                 # Match the existing PTY harness: terminate only after idle export.

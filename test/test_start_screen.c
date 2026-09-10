@@ -63,8 +63,8 @@ static MunitResult test_content_geometry(const MunitParameter params[],
       } else {
         munit_assert_int(content.version_y, ==, content.y);
       }
-      munit_assert_int(content.ready_y, ==, content.status_y + 5);
-      munit_assert_int(content.ready_y + 1, ==,
+      munit_assert_int(content.shortcuts_y, ==, content.status_y + 5);
+      munit_assert_int(content.shortcuts_y, ==,
                        content.y + content.height - 1);
       if (layout == START_SCREEN_WIDE)
         munit_assert_int(content.width, >=, START_SCREEN_WORDMARK_COLUMNS);
@@ -141,7 +141,22 @@ static MunitResult test_wordmark_shape(const MunitParameter params[],
   munit_assert_int(start_screen_wordmark_pixel(3, 11), ==, 0);
   munit_assert_int(start_screen_wordmark_pixel(3, 12), ==, 1);
   munit_assert_int(start_screen_wordmark_pixel(3, 13), ==, 1);
-  munit_assert_int(start_screen_wordmark_pixel(4, 10), ==, 1);
+  munit_assert_int(start_screen_wordmark_pixel(5, 10), ==, 1);
+  /* Original 6x8 proportions retain two-row A crossbars. */
+  for (int letter = 1; letter <= 5; letter += 4) {
+    int x = letter * 8;
+    int crossbar_rows = 0;
+    for (int row = 2; row < START_SCREEN_WORDMARK_ROWS; row++) {
+      munit_assert_int(start_screen_wordmark_pixel(row, x), ==, 1);
+      munit_assert_int(start_screen_wordmark_pixel(row, x + 1), ==, 1);
+      munit_assert_int(start_screen_wordmark_pixel(row, x + 4), ==, 1);
+      munit_assert_int(start_screen_wordmark_pixel(row, x + 5), ==, 1);
+      crossbar_rows += start_screen_wordmark_pixel(row, x + 2);
+    }
+    munit_assert_int(crossbar_rows, ==, 2);
+    munit_assert_int(start_screen_wordmark_pixel(7, x + 2), ==, 0);
+    munit_assert_int(start_screen_wordmark_pixel(7, x + 3), ==, 0);
+  }
   munit_assert_int(start_screen_wordmark_pixel(START_SCREEN_WORDMARK_ROWS, 0),
                    ==, 0);
   for (int letter = 0; letter < START_SCREEN_WORDMARK_LETTERS - 1; letter++) {
@@ -195,15 +210,10 @@ static MunitResult test_animation_opening(const MunitParameter params[], void *d
   munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 499), ==, resting);
   int first = start_screen_animation_frame(&animation, 1, opened + 500);
   munit_assert_int(first, ==, start_screen_animation_tick(0));
-  /* The first highlight is already visible on an actual wordmark cell. */
-  munit_assert_int(start_screen_wordmark_cell(0, 1), !=, 0);
-  munit_assert_int(start_screen_gradient_level(0, 1, first), >, 1);
-  for (int row = 0; row < START_SCREEN_WORDMARK_ROWS; row++)
-    for (int col = 0; col < START_SCREEN_WORDMARK_COLUMNS; col++)
-      munit_assert_int(start_screen_gradient_level(row, col, resting), ==, 1);
-  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 1400), ==, resting);
-  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 4099), ==, resting);
-  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 4100), ==, first);
+  munit_assert_int(resting, ==, 0);
+  /* Redraws (including resize) keep the same opening timestamp. */
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 1700), ==, 1200);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 500 + START_SCREEN_WAVE_PERIOD_MS), ==, first);
   start_screen_animation_frame(&animation, 0, opened + 4200);
   munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 8000), ==, resting);
   munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 8499), ==, resting);
@@ -211,51 +221,70 @@ static MunitResult test_animation_opening(const MunitParameter params[], void *d
   return MUNIT_OK;
 }
 
-static MunitResult test_animation_accelerates_then_pauses(
+static MunitResult test_wave_motion(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
-  int first_step = start_screen_animation_tick(300) -
-                   start_screen_animation_tick(0);
-  int second_step = start_screen_animation_tick(600) -
-                    start_screen_animation_tick(300);
-  int third_step = start_screen_animation_tick(899) -
-                   start_screen_animation_tick(600);
-  munit_assert_int(first_step, <, second_step);
-  munit_assert_int(second_step, <, third_step);
-  munit_assert_int(start_screen_animation_tick(900), ==,
-                   start_screen_animation_tick(1200));
-  munit_assert_int(start_screen_animation_tick(900), ==,
-                   start_screen_animation_tick(3599));
-  munit_assert_int(start_screen_animation_tick(3600), ==,
-                   start_screen_animation_tick(0));
-  munit_assert_int(start_screen_animation_tick(-1), ==,
-                   start_screen_animation_tick(3599));
-  /* The longer pause must leave every pixel at its resting color. */
+  munit_assert_int(START_SCREEN_WAVE_PERIOD_MS, ==, 2500);
+  munit_assert_int(start_screen_animation_tick(2500), ==, 0);
+  munit_assert_int(start_screen_animation_tick(-1), ==, 2499);
+  munit_assert_int(start_screen_wave_level(4, 0, 0), ==, 6);
+  munit_assert_int(start_screen_wave_level(4, 27, 0), ==, 1);
+  /* Bezier easing: 16.875 px at 625 ms, 54 px at 1250 ms.
+   * Equal time intervals cover increasing distances, unlike linear travel. */
+  munit_assert_int(start_screen_wave_level(4, 17, 625), ==, 6);
+  munit_assert_int(start_screen_wave_level(4, 27, 625), <, 6);
+  munit_assert_int(start_screen_wave_level(4, 27, 816), ==, 6);
+  munit_assert_int(start_screen_wave_level(4, 0, 816), ==, 1);
+  munit_assert_int(start_screen_wave_level(4, 53, 1250), ==, 6);
+  munit_assert_int(start_screen_wave_level(4, 0, 1250), ==, 1);
+  /* No reverse pass through the center in the second half-cycle. */
+  munit_assert_int(start_screen_wave_level(4, 27, 1875), ==, 1);
   for (int row = 0; row < START_SCREEN_WORDMARK_ROWS; row++) {
-    for (int column = 0; column < START_SCREEN_WORDMARK_COLUMNS; column++)
-      munit_assert_int(start_screen_gradient_level(
-                           row, column, start_screen_animation_tick(3599)),
-                       ==, 1);
+    for (int col = 0; col < START_SCREEN_WORDMARK_COLUMNS; col++) {
+      if (!start_screen_wordmark_pixel(row, col)) continue;
+      int low = 6, high = 1;
+      for (int tick = 0; tick < START_SCREEN_WAVE_PERIOD_MS; tick += 20) {
+        int level = start_screen_wave_level(row, col, tick);
+        int next = start_screen_wave_level(row, col, tick + 20);
+        munit_assert_int(abs(level - next), <=, 1);
+        munit_assert_int(level, ==, start_screen_wave_level(row, col, tick + START_SCREEN_WAVE_PERIOD_MS));
+        munit_assert_int(level, ==, start_screen_wave_level(row, col, tick - START_SCREEN_WAVE_PERIOD_MS));
+        if (level < low) low = level;
+        if (level > high) high = level;
+      }
+      munit_assert_int(low, ==, 1);
+      munit_assert_int(high, ==, 6);
+    }
   }
   return MUNIT_OK;
 }
 
-static MunitResult test_gradient_sweeps_diagonally(
+static MunitResult test_wave_mask_and_palette(
     const MunitParameter params[], void *data) {
   (void)params;
   (void)data;
-  munit_assert_int(start_screen_gradient_level(0, 12, 26), ==, 6);
-  munit_assert_int(start_screen_gradient_level(1, 11, 26), ==, 6);
-  munit_assert_int(start_screen_gradient_level(0, 11, 26), ==, 5);
-  munit_assert_int(start_screen_gradient_level(0, 10, 26), ==, 4);
-  munit_assert_int(start_screen_gradient_level(0, 9, 26), ==, 4);
-  munit_assert_int(start_screen_gradient_level(0, 8, 26), ==, 3);
-  munit_assert_int(start_screen_gradient_level(0, 6, 26), ==, 2);
-  munit_assert_int(start_screen_gradient_level(0, 4, 26), ==, 1);
-  munit_assert_int(start_screen_gradient_level(0, 12, 28), !=,
-                   start_screen_gradient_level(0, 12, 26));
-  munit_assert_int(start_screen_gradient_level(-1, 0, 0), ==, 0);
+  int seen[7] = {0};
+  for (int tick = 0; tick < START_SCREEN_WAVE_PERIOD_MS; tick += 20) {
+    for (int row = -1; row <= START_SCREEN_WORDMARK_ROWS; row++) {
+      for (int col = -1; col <= START_SCREEN_WORDMARK_COLUMNS; col++) {
+        int level = start_screen_wave_level(row, col, tick);
+        munit_assert_int(level, >=, 0);
+        munit_assert_int(level, <=, 6);
+        seen[level]++;
+        munit_assert_int(level != 0, ==, start_screen_wordmark_pixel(row, col));
+        if (!level) continue;
+        /* Adjacent stroke pixels cannot become isolated bright dots. */
+        int right = start_screen_wave_level(row, col + 1, tick);
+        int below = start_screen_wave_level(row + 1, col, tick);
+        if (right) munit_assert_int(abs(level - right), <=, 1);
+        if (below) munit_assert_int(abs(level - below), <=, 1);
+        if (below && row % 2 == 0)
+          munit_assert_int(level, ==, below);
+      }
+    }
+  }
+  for (int level = 0; level <= 6; level++) munit_assert_int(seen[level], >, 0);
   return MUNIT_OK;
 }
 
@@ -279,9 +308,8 @@ static MunitResult test_build_status_values(const MunitParameter params[],
   munit_assert_string_equal(lines.reasoning_effort, "high");
   munit_assert_string_equal(lines.profile, "plan");
   munit_assert_string_equal(lines.workdir, "~/narnia/tui-agent");
-  munit_assert_string_equal(lines.ready, "Type a message to begin");
   munit_assert_string_equal(lines.shortcuts,
-                            "/models choose model · Shift+Tab profiles");
+                            "/ commands · Shift+Tab profiles");
   return MUNIT_OK;
 }
 
@@ -326,10 +354,10 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/animation_opening", test_animation_opening, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/animation_accelerates_then_pauses",
-     test_animation_accelerates_then_pauses, NULL, NULL,
+    {"/wave_motion",
+     test_wave_motion, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
-    {"/gradient_sweeps_diagonally", test_gradient_sweeps_diagonally, NULL,
+    {"/wave_mask_and_palette", test_wave_mask_and_palette, NULL,
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/build_status_values", test_build_status_values, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

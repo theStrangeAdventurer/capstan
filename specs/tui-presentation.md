@@ -4,9 +4,14 @@
 
 Assistant prose uses the terminal's normal foreground, not blanket dimming.
 Tool headers and shell bodies use dimmed terminal-default foreground, not a
-fixed gray/white palette. Task borders, controls, profiles and session IDs are
+fixed gray/white palette. Task borders, controls and session IDs are
 neutral; bold identifies emphasized values. User messages and the session overlay
-use the terminal's default background. Purple is reserved for status dots; error,
+use the terminal's default background. Each visible user text row (including
+wrapped continuations) has a quiet `│` in the existing left padding: gray 245
+on 256-color terminals, dim default foreground otherwise. Assistant rows have
+no gutter marker. This renderer-only decoration does not enter copied text,
+model context, logs or persistence, or change wrapping/selection coordinates.
+Purple marks status dots and start-screen profile/shortcut keys; error,
 warning and diff colors retain their semantic roles. Technical
 headers have no automatic italic styling; Markdown emphasis still does.
 Queue previews use this same neutral secondary color, not warning yellow.
@@ -34,7 +39,23 @@ Unknown context limits use explicit `tok in N out N` labels instead of an
 ambiguous ratio. Known context limits keep their existing usage/limit percentage.
 Workspace statistics say `Changes: N files · +N −N` and describe the whole
 workspace, not just the active session. They retain existing narrow-screen
-fallbacks and do not consume another row.
+fallbacks and do not consume another row. Their label and separator use muted
+secondary text; addition/deletion counts retain their semantic colors. Bottom-row
+metadata and the input mode label also use secondary text (gray 245 or dim
+fallback), with the active profile bold purple, matching the start screen.
+`TuiStatusRow.profile_width` identifies the sanitized profile span for coloring;
+absent or hidden profiles do not color adjacent model metadata.
+
+The input border stays quiet and uninterrupted, without a decorative prompt
+marker. Input uses the native terminal cursor through ncurses; its color, shape
+and blinking follow the terminal's behavior/settings. Capstan does not emulate
+blinking/fading with redraw timers or override cursor styling with terminal-specific
+escape sequences. Cursor visibility still follows the existing focus handling.
+These are renderer-only changes; input contents, wrapping/cursor offsets, model
+context, logs, persisted state, CLI output and plugin APIs are unchanged.
+PTY palette tests cover the absence of the marker, native cursor visibility,
+mode label, profile color in both locations and removal of the unconditional
+start-screen `ready` line.
 
 ## Existing disclosure mechanisms
 

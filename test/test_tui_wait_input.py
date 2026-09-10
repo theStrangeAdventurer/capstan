@@ -90,7 +90,7 @@ return {id = "wait_input_test", command = "/wait", history = false,
 '''
 
 
-def sgr_attributes(prefix):
+def sgr_attributes(prefix, background=False):
     foreground = None
     bold = dim = False
     for match in re.finditer(rb"\x1b\[([0-9;]*)m", prefix):
@@ -104,11 +104,14 @@ def sgr_attributes(prefix):
             elif code == 1: bold = True
             elif code == 2: dim = True
             elif code == 22: bold = dim = False
-            elif code == 39: foreground = None
-            elif 30 <= code <= 37: foreground = code - 30
-            elif 90 <= code <= 97: foreground = code - 90 + 8
-            elif code == 38 and codes[i + 1:i + 2] == [5]:
-                foreground = codes[i + 2]
+            elif code == (49 if background else 39): foreground = None
+            elif (40 if background else 30) <= code <= (47 if background else 37):
+                foreground = code - (40 if background else 30)
+            elif (100 if background else 90) <= code <= (107 if background else 97):
+                foreground = code - (100 if background else 90) + 8
+            elif code in (38, 48) and codes[i + 1:i + 2] == [5]:
+                if code == (48 if background else 38):
+                    foreground = codes[i + 2]
                 i += 2
             i += 1
     return foreground, bold, dim
@@ -269,20 +272,37 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
         try:
             until(lambda: b"\x1b[?2004h" in screen, "terminal startup")
             # Wait for initial rendering after plugin and session initialization.
-            until(lambda: b"ready" in screen, "initial screen")
+            until(lambda: b"Shift+Tab" in screen, "initial screen")
             if case.startswith("palette"):
-                pause(3.8)  # Observe a whole reflection cycle, including its pause.
+                pause(7.0)  # Opening delay plus a whole silk-wave cycle.
                 output = bytes(screen)
-                styles = {sgr_attributes(output[:m.start()])
-                          for m in re.finditer('▀|▄|█'.encode(), output)}
+                prefixes = [output[:m.start()] for m in re.finditer('▀|▄|█'.encode(), output)]
+                styles = {sgr_attributes(prefix) for prefix in prefixes}
                 expected = ({(None, False, True), (None, False, False),
                              (None, True, False)} if case == 'palette_16' else
-                            {(color, False, False) for color in (245, 248, 250, 252, 254, 231)})
+                            {(color, False, False) for color in (245, 246, 247, 248, 249, 250)})
                 assert styles == expected, styles
-                assert sgr_attributes(output.split(b" ready", 1)[0])[0] is None
-                assert sgr_attributes(output.split(b"implement", 1)[0]) == (None, True, False)
-                dot = output.index('●'.encode())
-                assert sgr_attributes(output[:dot])[0] == (5 if case == 'palette_16' else 141)
+                if case != 'palette_16':
+                    lower = {sgr_attributes(prefix, background=True) for prefix in prefixes}
+                    assert lower == {(None, False, False)}, lower
+                    assert all(glyph.encode() in output for glyph in ('▀', '▄', '█')), \
+                        'preserve original glyphs, including lower-only edges'
+                assert b' ready' not in output
+                accent = 5 if case == 'palette_16' else 141
+                assert sgr_attributes(output.split(b"implement", 1)[0]) == (accent, True, False)
+                assert b'version: ' in output
+                assert sgr_attributes(output.split(b'Shift+Tab', 1)[0])[0] == accent
+                assert sgr_attributes(output.split(b' commands', 1)[0])[0] != accent
+                corner = output.index('╭'.encode())
+                assert sgr_attributes(output[:corner])[0] == (None if case == 'palette_16' else 240)
+                assert b'Type a message to begin' in output
+                assert '›'.encode() not in output  # Keep the input border uninterrupted.
+                assert b'\x1b[?25h' in output  # Native terminal cursor remains visible.
+                profiles = [sgr_attributes(output[:m.start()])
+                            for m in re.finditer(b'implement', output)]
+                assert len(profiles) >= 2 and all(style == (accent, True, False) for style in profiles)
+                assert sgr_attributes(output.split(b' INSERT ', 1)[0]) == (
+                    (None, False, True) if case == 'palette_16' else (245, False, False))
                 before = len(screen)
                 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 20, 60, 0, 0))
                 proc.send_signal(signal.SIGWINCH)
@@ -291,7 +311,10 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 send('tasks\r')
                 until(lambda: b'[ Tasks 0/12 ' in screen, 'neutral task control')
                 assert sgr_attributes(bytes(screen).split(b'[ Tasks 0/12 ', 1)[0])[0] is None
-                print(f'TUI {case}: neutral logo, reflection, profile, tasks and status accent: ok')
+                history = bytes(screen[before:])
+                marker = history.index('│'.encode())
+                assert sgr_attributes(history[:marker])[0] == (None if case == 'palette_16' else 245)
+                print(f'TUI {case}: silk wave, half-pixel palette, profile, tasks and status accent: ok')
                 return
 
             if case == "session_copy":
@@ -466,7 +489,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 output = bytes(screen)
                 assert sgr_attributes(output.split(b"+128", 1)[0])[0] == 65
                 assert sgr_attributes(output.split("−34".encode(), 1)[0])[0] == 95
-                assert sgr_attributes(output.split(b"1 file", 1)[0]) == (None, False, False)
+                assert sgr_attributes(output.split(b"1 file", 1)[0]) == (245, False, False)
                 assert root.name.encode() in output, "working directory missing"
                 send("hello\r")
                 until(lambda: (root / "captured").exists(), "message with footer visible")

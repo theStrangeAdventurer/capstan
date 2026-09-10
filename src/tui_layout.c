@@ -100,6 +100,7 @@ void tui_layout_status_row(int width, const char *activity, const char *profile,
   if (columns(candidate) > room) return;
   snprintf(row->metadata, sizeof(row->metadata), "%s", candidate);
   row->metadata_x = width - columns(row->metadata);
+  row->profile_width = columns(p);
 }
 
 static void footer_path(const char *workdir, const char *home, int width,

@@ -114,6 +114,7 @@ static MunitResult test_status_row(const MunitParameter params[], void *data) {
   tui_layout_status_row(100, "Thinking · 12s", "implement", "provider/model", "low", &row);
   munit_assert_string_equal(row.activity, "Thinking · 12s");
   munit_assert_string_equal(row.metadata, "implement · model · effort low");
+  munit_assert_int(row.profile_width, ==, 9);
   tui_layout_status_row(40, "Thinking · 12s", "implement", "provider/model", "low", &row);
   munit_assert_string_equal(row.metadata, "implement · model");
   tui_layout_status_row(28, "Thinking · 12s", "implement", "provider/model", "low", &row);
@@ -141,6 +142,13 @@ static MunitResult test_status_row(const MunitParameter params[], void *data) {
   tui_layout_status_row(80, NULL, NULL, NULL, NULL, &row);
   munit_assert_string_equal(row.activity, "");
   munit_assert_string_equal(row.metadata, "");
+  munit_assert_int(row.profile_width, ==, 0);
+  tui_layout_status_row(80, NULL, "目录", "model", NULL, &row);
+  munit_assert_int(row.profile_width, ==, 4);
+  tui_layout_status_row(2, NULL, "implement", "model", NULL, &row);
+  munit_assert_int(row.profile_width, ==, 0);
+  tui_layout_status_row(80, NULL, NULL, "model", NULL, &row);
+  munit_assert_int(row.profile_width, ==, 0);
   return MUNIT_OK;
 }
 

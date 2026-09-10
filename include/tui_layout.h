@@ -18,7 +18,7 @@ void tui_layout_session_id_row(int cols, const char *id, const char *icon,
 
 typedef struct {
   char activity[512], metadata[512];
-  int metadata_x;
+  int metadata_x, profile_width;
 } TuiStatusRow;
 
 /* Activity has priority; drop effort/model before clipping the activity. */
