@@ -44,8 +44,15 @@ headless runs.
 
 ## Session header
 
-The TUI reserves two rows above chat for the active title and ID, right-aligned
-in purple. Each row ends in an overlapping-squares copy mark (`⧉`, ASCII `[]`
+The TUI paints the active title and ID in a top-right overlay, without reserving
+chat rows. Its two lines have a user-message background, a dim border and an
+bottom-only shadow and two cells of left inner padding. The ID line uses
+`session.id: <id>` (the exact OpenTelemetry attribute name); the value and copy
+mark use brand purple (141, magenta fallback) on the overlay background, while
+the label stays neutral. Copying still delivers only the raw ID. The `[x]` button closes it; embedded `/show-session` opens it
+without arguments, adding history or calling the model. The command is available
+in slash-command autocomplete. It starts hidden on each application
+launch; visibility is transient application state, unchanged by session switches. Each row ends in an overlapping-squares copy mark (`⧉`, ASCII `[]`
 in non-Unicode locales). Clicking either the text or mark copies the complete
 raw value, not its display truncation. Successful copies blink with the existing
 70 ms selection-copy rhythm and show `Copied`; clipboard failures show an error
@@ -55,8 +62,9 @@ clipboard writer (`pbcopy`, or `wl-copy`/`xclip`/`xsel`).
 Rendering reads the session manager on each frame, so switching, `/new`, and
 background title completion cannot leave a cached title or ID. Display text is
 cell-bounded, preserves UTF-8, and flattens terminal controls. The header is
-hidden below 7 columns or 9 rows rather than overlapping input. Chat, shell
-controls, queued input, and mouse selection account for the reserved rows.
+hidden below 11 columns or 9 rows rather than overlapping input. Chat, shell
+controls, queued input, and mouse selection use the full conversation viewport.
+The overlay is painted above chat and below modal popups; closing restores chat.
 `make test` covers narrow/Unicode layout; `make test-tui-input` covers actual
 clipboard-command delivery, `/new`, resize, and shell mouse geometry.
 

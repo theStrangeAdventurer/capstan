@@ -26,7 +26,7 @@ static MunitResult test_workspace_footer(const MunitParameter params[], void *da
                             .added = 128, .deleted = 34};
   tui_layout_workspace_footer(80, "/home/me/project/src", "/home/me", &status, &footer);
   munit_assert_string_equal(footer.path, "~/project/src");
-  munit_assert_string_equal(footer.files, "3 files · ");
+  munit_assert_string_equal(footer.files, "Changes: 3 files · ");
   munit_assert_string_equal(footer.added, "+128");
   munit_assert_string_equal(footer.deleted, " −34");
   tui_layout_workspace_footer(30, "/home/me/long/project/src", "/home/me", &status, &footer);
@@ -91,12 +91,61 @@ static MunitResult test_session_header(const MunitParameter params[], void *data
   }
   tui_layout_session_row(80, "raw\nname\033", "[]", &row);
   munit_assert_string_equal(row.text, "raw name  []");
+  tui_layout_session_id_row(80, "0123456789abcdef", "[]", &row);
+  munit_assert_string_equal(row.text, "session.id: 0123456789abcdef []");
+  for (int cols = 7; cols < 120; cols++) {
+    tui_layout_session_id_row(cols, "0123456789abcdef0123456789abcdef", "[]", &row);
+    munit_assert_int(row.x, >=, 1);
+    munit_assert_int(row.x + row.width, ==, cols - 1);
+    munit_assert_int(row.width, <=, 60);
+    munit_assert_int(row.width, ==, text_columns(row.text, strlen(row.text)));
+  }
+  tui_layout_session_id_row(80, NULL, "[]", &row);
+  munit_assert_int(row.width, ==, 0);
   tui_layout_session_row(80, NULL, "[]", &row);
   munit_assert_int(row.width, ==, 0);
   return MUNIT_OK;
 }
 
+static MunitResult test_status_row(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  setlocale(LC_CTYPE, "");
+  TuiStatusRow row;
+  tui_layout_status_row(100, "Thinking · 12s", "implement", "provider/model", "low", &row);
+  munit_assert_string_equal(row.activity, "Thinking · 12s");
+  munit_assert_string_equal(row.metadata, "implement · model · effort low");
+  tui_layout_status_row(40, "Thinking · 12s", "implement", "provider/model", "low", &row);
+  munit_assert_string_equal(row.metadata, "implement · model");
+  tui_layout_status_row(28, "Thinking · 12s", "implement", "provider/model", "low", &row);
+  munit_assert_string_equal(row.metadata, "implement");
+  for (int width = 0; width < 110; width++) {
+    tui_layout_status_row(width, "Проверяю 目录 é · 12s", "implement", "目录/模型", "low", &row);
+    int left = text_columns(row.activity, strlen(row.activity));
+    int right = text_columns(row.metadata, strlen(row.metadata));
+    munit_assert_int(left, <=, width);
+    if (right) {
+      munit_assert_int(row.metadata_x, >=, left + 3);
+      munit_assert_int(row.metadata_x + right, ==, width);
+    }
+  }
+  const char *fitting[] = {"é", "界́", "ab́"};
+  for (size_t i = 0; i < sizeof(fitting) / sizeof(fitting[0]); i++) {
+    int width = text_columns(fitting[i], strlen(fitting[i]));
+    tui_layout_status_row(width, fitting[i], NULL, NULL, NULL, &row);
+    munit_assert_string_equal(row.activity, fitting[i]);
+  }
+  tui_layout_status_row(2, "éxy", NULL, NULL, NULL, &row);
+  munit_assert_string_equal(row.activity, "é…");
+  tui_layout_status_row(80, "name\n\033", NULL, NULL, NULL, &row);
+  munit_assert_string_equal(row.activity, "name  ");
+  tui_layout_status_row(80, NULL, NULL, NULL, NULL, &row);
+  munit_assert_string_equal(row.activity, "");
+  munit_assert_string_equal(row.metadata, "");
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/status_row", test_status_row, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/session_header", test_session_header, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/tasks_viewport", test_tasks_viewport, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/workspace_footer", test_workspace_footer, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

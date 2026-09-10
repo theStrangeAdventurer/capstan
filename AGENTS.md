@@ -308,6 +308,7 @@ Feature specs:
 - [Start screen](specs/start-screen.md)
 - [Subagents](specs/subagents.md)
 - [Terminal runtime](specs/terminal-runtime.md)
+- [TUI presentation](specs/tui-presentation.md)
 - [Markdown rendering](specs/markdown-rendering.md)
 - [Workspace directory](specs/workspace-directory.md)
 - [Workspace footer](specs/workspace-footer.md)

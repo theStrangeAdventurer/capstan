@@ -19,8 +19,8 @@ static MunitResult test_usage_format_small(const MunitParameter params[], void *
   char buf[32];
   UsageStats usage = {123, 45, 168, 0};
   int n = usage_format(usage, buf, sizeof(buf));
-  munit_assert_int(n, ==, (int)strlen("tok 123/45"));
-  munit_assert_string_equal(buf, "tok 123/45");
+  munit_assert_int(n, ==, (int)strlen("tok in 123 out 45"));
+  munit_assert_string_equal(buf, "tok in 123 out 45");
   return MUNIT_OK;
 }
 
@@ -30,7 +30,7 @@ static MunitResult test_usage_format_compact(const MunitParameter params[], void
   char buf[32];
   UsageStats usage = {1234, 12890, 14124, 0};
   usage_format(usage, buf, sizeof(buf));
-  munit_assert_string_equal(buf, "tok 1.2k/12k");
+  munit_assert_string_equal(buf, "tok in 1.2k out 12k");
   return MUNIT_OK;
 }
 

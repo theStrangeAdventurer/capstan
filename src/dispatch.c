@@ -247,8 +247,8 @@ static void add_plugin_result(Plugin *p, PluginResult *r) {
 }
 
 static void show_plugin_result(Plugin *p, PluginResult *r) {
-  popup_show_message(p->name ? p->name : "Command",
-                     r->ui_result ? r->ui_result : "", 0);
+  if (r->ui_result && r->ui_result[0])
+    popup_show_message(p->name ? p->name : "Command", r->ui_result, 0);
   free(r->ui_result);
   free(r->raw_result);
   message_images_free(r->images, r->image_count);

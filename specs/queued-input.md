@@ -10,6 +10,7 @@ run.
 - Up to three queued messages are shown as pinned one-line previews above the
   input editor. Each preview is clipped to the available width; additional
   queued messages remain in FIFO order but do not consume screen rows.
+- Previews use neutral secondary gray rather than warning yellow.
 - Each preview row is cleared before repainting, so a shorter item cannot leave
   stale characters from a longer item previously drawn on the same row.
 - A full queue leaves the sixth message in the editor and reports that the

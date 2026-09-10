@@ -31,25 +31,29 @@ static MunitResult test_threshold(const MunitParameter params[], void *data) {
                       (size_t)(strstr(view, "[exit 1]") - view));
     munit_assert_size(shell_output_offset(&output, status - 1), ==,
                       strlen("command — done"));
-    if (lines <= 20) {
+    if (lines == 0) {
       munit_assert_string_equal(view + strlen(header),
                                 text + output.blocks[0].body_start);
       munit_assert_int(shell_output_control(&output, start), ==, -1);
     } else {
-      munit_assert_string_equal(view + strlen(header), "[+] 21 lines\n");
-      munit_assert_null(strstr(view, "строка"));
+      char control_text[64];
+      snprintf(control_text, sizeof(control_text), "[-] %zu lines\n", lines);
+      munit_assert_int(strncmp(view + strlen(header), control_text,
+                               strlen(control_text)), ==, 0);
+      munit_assert_true(output.blocks[0].expanded);
+      munit_assert_not_null(strstr(view, "строка"));
       size_t control = output.blocks[0].control_start;
       for (size_t p = control; p < control + 3; p++)
         munit_assert_int(shell_output_control(&output, p), ==, 0);
       munit_assert_int(shell_output_control(&output, control + 3), ==, -1);
       munit_assert_int(shell_output_control(&output, control - 1), ==, -1);
-      output.blocks[0].expanded = 1;
-      view = shell_output_build(&output, text);
-      munit_assert_not_null(strstr(view, "[-] 21 lines\nстрока 1\t界"));
-      munit_assert_not_null(strstr(view, "строка 21\t界"));
       output.blocks[0].expanded = 0;
       view = shell_output_build(&output, text);
       munit_assert_null(strstr(view, "строка"));
+      output.blocks[0].expanded = 1;
+      view = shell_output_build(&output, text);
+      munit_assert_string_equal(view + output.blocks[0].control_end + 1,
+                                text + output.blocks[0].body_start);
     }
     munit_assert_string_equal(text, original);
     shell_output_free(&output);
@@ -72,7 +76,7 @@ static MunitResult test_multiple_ranges(const MunitParameter params[], void *dat
   strcat(text, "final answer");
   const char *view = shell_output_build(&output, text);
   size_t mapped = shell_output_offset(&output, next);
-  munit_assert_string_equal(view + mapped, text + next);
+  munit_assert_string_equal(view + mapped, "[exit 0]\n[+] 1 lines\nfinal answer");
   munit_assert_size(shell_output_offset(&output, next_end), ==,
                     (size_t)(strstr(view, "final answer") - view));
   munit_assert_true(shell_output_contains(&output, mapped, mapped + 8));
@@ -94,9 +98,12 @@ static MunitResult test_multiple_ranges(const MunitParameter params[], void *dat
   }
   munit_assert_true(found);
   linemap_free();
-  output.blocks[0].expanded = 1;
+  output.blocks[0].expanded = 0;
+  output.blocks[1].expanded = 1;
   view = shell_output_build(&output, text);
-  munit_assert_string_equal(view + shell_output_offset(&output, next), text + next);
+  munit_assert_null(strstr(view, "строка"));
+  munit_assert_string_equal(view + shell_output_offset(&output, next),
+                            "[exit 0]\n[-] 1 lines\nsmall result\nfinal answer");
   shell_output_free(&output);
   return MUNIT_OK;
 }
@@ -128,9 +135,9 @@ static MunitResult test_status_projection(const MunitParameter params[], void *d
   };
   const char *expected[] = {
     "Shell: true [exit 0]",
-    "Shell: false [exit 1]\nstderr:\nfailed\n",
-    "[exit 0]\nstandalone\n",
-    "ordinary [+] prose\nno status\n",
+    "Shell: false [exit 1]\n[-] 2 lines\nstderr:\nfailed\n",
+    "[exit 0]\n[+] 1 lines\n",
+    "[-] 2 lines\nordinary [+] prose\nno status\n",
   };
   for (size_t i = 0; i < sizeof(texts) / sizeof(texts[0]); i++) {
     ShellOutput output = {0};
@@ -141,7 +148,10 @@ static MunitResult test_status_projection(const MunitParameter params[], void *d
     for (size_t p = 0; p <= strlen(texts[i]); p++) {
       size_t mapped = shell_output_offset(&output, p);
       munit_assert_size(mapped, <=, strlen(view));
-      if (texts[i][p] != '\n')
+      if (!output.blocks[0].expanded && p >= output.blocks[0].body_start &&
+          p < output.blocks[0].body_end)
+        munit_assert_size(mapped, ==, output.blocks[0].control_start);
+      else if (texts[i][p] != '\n')
         munit_assert_char(view[mapped], ==, texts[i][p]);
     }
     shell_output_free(&output);
@@ -160,16 +170,67 @@ static MunitResult test_multiline_command_boundary(
   ShellOutput output = {0};
   munit_assert_true(shell_output_add(&output, text, strlen(header), strlen(text)));
   const char *view = shell_output_build(&output, text);
-  munit_assert_not_null(strstr(view, "[exit 0]\nEND\nfalse [exit 1] TIMED OUT\n[+] 21 lines"));
-  munit_assert_null(strstr(view, "body"));
-  output.blocks[0].expanded = 1;
+  munit_assert_not_null(strstr(view, "[exit 0]\nEND\nfalse [exit 1] TIMED OUT\n[-] 21 lines\nbody"));
+  output.blocks[0].expanded = 0;
   view = shell_output_build(&output, text);
-  munit_assert_not_null(strstr(view, "[exit 1] TIMED OUT\n[-] 21 lines\nbody"));
+  munit_assert_not_null(strstr(view, "[exit 1] TIMED OUT\n[+] 21 lines"));
+  munit_assert_null(strstr(view, "body"));
   shell_output_free(&output);
   return MUNIT_OK;
 }
 
+static MunitResult test_default_folding(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  const char *statuses[] = {"[exit 0]", "[exit 1]", "[exit ?]",
+                            "[exit 0] TIMED OUT", "[exit 0oops]"};
+  for (size_t s = 0; s < sizeof(statuses) / sizeof(statuses[0]); s++) {
+    for (size_t lines = 0; lines <= 21; lines++) {
+      char text[8192], original[8192];
+      snprintf(text, sizeof(text), "%s\n", statuses[s]);
+      size_t body = strlen(text);
+      for (size_t i = 0; i < lines; i++) strcat(text, "value\n");
+      if (lines == 1) {
+        /* A large JSON value still has only one logical line. */
+        strcpy(text + body, "{\"value\":\"");
+        size_t end = strlen(text);
+        memset(text + end, 'x', 4096);
+        strcpy(text + end + 4096, "\"}");
+      }
+      strcpy(original, text);
+      ShellOutput output = {0};
+      munit_assert_true(shell_output_add(&output, text, 0, strlen(text)));
+      const char *view = shell_output_build(&output, text);
+      munit_assert_int(output.blocks[0].expanded, ==, s != 0);
+      munit_assert_size(output.blocks[0].lines, ==, lines);
+      if (!lines) {
+        munit_assert_string_equal(view, text);
+        munit_assert_int(shell_output_control(&output, body), ==, -1);
+      } else {
+        munit_assert_int(shell_output_control(&output,
+            output.blocks[0].control_start), ==, 0);
+        for (int expanded = 0; expanded <= 1; expanded++) {
+          output.blocks[0].expanded = expanded;
+          view = shell_output_build(&output, text);
+          for (size_t p = body; p < output.blocks[0].body_end; p++) {
+            size_t mapped = shell_output_offset(&output, p);
+            if (expanded)
+              munit_assert_char(view[mapped], ==, text[p]);
+            else
+              munit_assert_size(mapped, ==, output.blocks[0].control_start);
+          }
+          munit_assert_size(shell_output_offset(&output, strlen(text)), ==,
+                            strlen(view));
+        }
+      }
+      munit_assert_string_equal(text, original);
+      shell_output_free(&output);
+    }
+  }
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+  {"/default_folding", test_default_folding, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/multiline_command_boundary", test_multiline_command_boundary, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/status_projection", test_status_projection, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/threshold", test_threshold, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

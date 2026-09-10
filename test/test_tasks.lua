@@ -1,3 +1,5 @@
+-- Standalone Lua has no C task adapter; preserve it when run by the host.
+agent = agent or {}
 local tasks = require('agent.tasks')
 local json = require('vendor.rxi.json')
 local store = {json=''}
@@ -59,6 +61,38 @@ assert(store.json == before_view)
 local view_store = {json=''}
 tasks.use_store(view_store)
 assert(#tasks.view().items == 0 and tasks.view().summary == '')
+-- Closure affects only the default view, never persisted data or context.
+for _, default in ipairs({'unset', true, false}) do
+    capstan = default ~= 'unset' and {config={tasks={expanded_by_default=default}}} or nil
+    for _, statuses in ipairs({
+        {'completed', 'completed'}, {'completed', 'cancelled'},
+        {'cancelled', 'cancelled'}, {'completed', 'blocked'},
+        {'cancelled', 'pending'}, {'completed', 'in_progress'},
+    }) do
+        view_store.json = ''
+        assert(tasks.view().expanded == (default ~= false))
+        assert(tasks.update({revision=0, tasks={
+            item('a', statuses[1], 'reason'), item('b', statuses[2], 'reason'),
+        }}))
+        local before = view_store.json
+        local context = tasks.refresh({}).content
+        local closed = statuses[2] == 'completed' or statuses[2] == 'cancelled'
+        local done = statuses[1] == 'completed' and 1 or 0
+        if statuses[2] == 'completed' then done = done + 1 end
+        local prefix = string.format('Tasks %d/2', done)
+        view = tasks.view()
+        assert(view.expanded == (not closed and default ~= false))
+        assert(view.summary == prefix .. (closed and
+            (done == 2 and ' · completed' or ' · closed with cancellations') or ''))
+        assert(#view.items == 2 and tasks.summary() == prefix)
+        assert(view_store.json == before and tasks.refresh({}).content == context)
+        -- Reopening a closed plan restores the configured default.
+        assert(tasks.update({revision=1, tasks={item('b', 'blocked', 'Needs input')}}))
+        assert(tasks.view().expanded == (default ~= false))
+    end
+end
+capstan = {config={tasks={expanded_by_default=true}}}
+view_store.json = ''
 local updates = {}
 for i, status in ipairs({'pending','in_progress','completed','blocked','cancelled'}) do
     updates[i] = item('view'..i, status, 'reason')

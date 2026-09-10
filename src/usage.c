@@ -48,7 +48,7 @@ int usage_format(UsageStats usage, char *buf, size_t buf_size) {
   format_count(usage.prompt_tokens, prompt, sizeof(prompt));
   format_count(usage.completion_tokens, completion, sizeof(completion));
 
-  int n = snprintf(buf, buf_size, "tok %s/%s", prompt, completion);
+  int n = snprintf(buf, buf_size, "tok in %s out %s", prompt, completion);
   if (n < 0 || (size_t)n >= buf_size) {
     buf[buf_size - 1] = '\0';
     return 0;

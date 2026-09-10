@@ -12,7 +12,7 @@ An unrelated request does not authorize executing old tasks. Creating a plan doe
 not approve its execution.
 
 `/tasks` displays the current plan without an LLM call or adding model history.
-Nonempty plans expand by default into a framed block directly above input,
+Nonempty unfinished plans expand by default into a framed block directly above input,
 with rounded top corners, the same outer width and horizontal inset, and the
 terminal's default background (no hardcoded black fill). The panel border and
 its toggle use the logo's purple (palette index 141, magenta on 8-color terminals). The input's top edge
@@ -43,9 +43,18 @@ very small terminals fall back to the collapsed control, clipping the summary
 without displacing usage. Empty plans do not reserve space.
 
 `tasks.expanded_by_default = true` in unified config controls the initial view.
-Manual choices override config per session and persist as optional `tasks_view`
-metadata (0: config, 1: collapsed, 2: expanded), independently of the task plan.
-Legacy or invalid view values use config. Save failures preserve the old view
+In `agent/tasks.lua`'s view adapter only, nonempty plans containing exclusively
+`completed`/`cancelled` tasks default to collapsed, even when config defaults to
+expanded. Blocked tasks are unfinished and do not trigger autocollapse. Reopening
+a task restores the configured default. Empty/error views retain existing behavior.
+Closed view summaries preserve `Tasks completed/total` and append ` · completed`
+when every task completed, or ` · closed with cancellations` when any cancelled.
+The completion count excludes cancellations; the non-view summary is unchanged.
+No task data, revision, results, model context or persisted preferences change.
+Manual choices override both config and autocollapse per session through the
+existing C `prepare_tasks` override and persist as optional `tasks_view`
+metadata (0: automatic default, 1: collapsed, 2: expanded), independently of the task plan.
+Legacy or invalid view values use the automatic default. Save failures preserve the old view
 and show an error. Scroll offsets are transient and reset on session reload.
 Users can ask the agent to revise the plan. There is no background reviewer in
 this version and `completed` means executor-finished, never independently reviewed.
@@ -110,6 +119,11 @@ state, UI/context cleanup, new-plan creation and session isolation.
   automatic reviewer, background request or new configuration path is added.
 
 ## Tests
+
+`vendor/lua-5.5.0/src/lua test/test_tasks.lua`: view autocollapse for all-completed,
+mixed closed and all-cancelled plans; pending/in-progress/blocked regressions;
+unset/true/false config defaults, reopening, empty/error views, summary distinction,
+and preservation of stored data and model context. Manual overrides remain C-owned.
 
 `make test`: session serialization, view preference round trips, transient scroll,
 legacy empty state, bounds, viewport sizing/clamping and preservation.

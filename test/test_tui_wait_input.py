@@ -274,6 +274,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                     identity = (directory / 'active').read_text().strip()
                     return json.loads((directory / (identity + '.jsonl')).read_text().splitlines()[0])
                 def copy_row(row, width, expected):
+                    width -= 2  # Copy mark is inside the overlay border.
                     pause(0.6)
                     copied = root / 'copied'
                     copied.unlink(missing_ok=True)
@@ -284,7 +285,25 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                                  b'\x1b[M' + bytes((35, width + 31, row + 32)))
                     until(lambda: copied.exists() and copied.read_text() == expected, 'full session copy')
                 header = active_header()
+                assert b'session.id:' not in screen and b'[x]' not in screen, 'session overlay starts visible'
+                send('/show-s')
+                until(lambda: b'/show-session' in screen, 'session command autocomplete')
+                send('\t')
+                pause()
+                send('\r')
+                until(lambda: b'[x]' in screen, 'session overlay opened from autocomplete')
+                assert not (root / 'captured').exists(), 'show-session called the model'
                 copy_row(2, 110, header['title'])
+                copy_row(3, 110, header['id'])
+                if b'\x1b[?1006h' in screen:
+                    send('\x1b[<0;107;1M\x1b[<0;107;1m')
+                else:
+                    os.write(master, b'\x1b[M' + bytes((32, 139, 33)) +
+                                     b'\x1b[M' + bytes((35, 139, 33)))
+                pause(0.7)
+                before = len(screen)
+                send(' /show-session\r')
+                until(lambda: b'[x]' in screen[before:], 'reopened session overlay')
                 copy_row(3, 110, header['id'])
                 send(' /new\r')
                 pause(0.7)
@@ -318,7 +337,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                     assert result["info"].get("reasoning_effort") == (None if expected == "default" else expected)
                     return result
                 step_key("\x1b[1;2A", "high")
-                until(lambda: b"reasoning:high" in screen, "reasoning footer")
+                until(lambda: b"effort high" in screen, "reasoning footer")
                 step_key("\x1b[1;2A", "high")
                 step_key("\x1b[1;2B", "medium")
                 step_key("\x1b[1;2B", "low")
@@ -474,7 +493,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 output = bytes(screen)
                 assert b"**MD_BOLD**" not in output and b"*MD_ITALIC*" not in output
                 assert sgr_attributes(output.split(b"MD_BOLD", 1)[0])[1:] == (True, False)
-                assert sgr_attributes(output.split(b"MD_PLAIN", 1)[0])[1:] == (False, True)
+                assert sgr_attributes(output.split(b"MD_PLAIN", 1)[0])[1:] == (False, False)
                 italic = False
                 for match in re.finditer(rb"\x1b\[([0-9;]*)m", output.split(b"MD_ITALIC", 1)[0]):
                     for value in match[1].split(b";"):
@@ -589,17 +608,19 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                     send("fold_wait\r" if case == "shell_wait" else "fold\r")
                 until(lambda: b"[+]" in screen and b"21 lines" in screen,
                       "collapsed shell output")
-                assert sgr_attributes(bytes(screen).split(b"[+]", 1)[0]) == (8, True, False), \
+                assert sgr_attributes(bytes(screen).split(b"[+]", 1)[0]) == (245, True, False), \
                     (case, "expand marker is not bold gray")
-                assert sgr_attributes(bytes(screen).split(b"21 lines", 1)[0]) == (8, False, False), \
+                assert sgr_attributes(bytes(screen).split(b"21 lines", 1)[0]) == (245, False, False), \
                     (case, "line count should stay gray, not bold")
                 assert b"BODY_01" not in screen, "folded body was painted"
-                send("draft")
+                # Paste atomically: per-key paints can split 'draft' with
+                # cursor moves and unrelated footer updates in the PTY stream.
+                send("\x1b[200~draft\x1b[201~")
                 until(lambda: b"draft" in screen, "input draft")
 
                 # Fixed fixture layout: first manual message, or user + agent.
                 # Status shares the command row; the fold marker is next.
-                row = 6 if manual else 9  # Two reserved session-header rows.
+                row = 4 if manual else 7  # Session overlay reserves no chat rows.
                 def click():
                     if b"\x1b[?1006h" in screen:
                         send(f"\x1b[<0;3;{row}M\x1b[<0;3;{row}m")
@@ -613,10 +634,10 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 until(lambda: b"BODY_01" in screen[before:], "expanded shell output")
                 # Check the first paint, without waiting for an effect to settle.
                 prefix = bytes(screen).split(b"BODY_01", 1)[0]
-                assert sgr_attributes(prefix) == (8, False, False), \
+                assert sgr_attributes(prefix) == (245, False, False), \
                     (case, "shell body is not immediately plain gray")
                 minus = bytes(screen).find(b"-", before)
-                assert minus >= 0 and sgr_attributes(bytes(screen[:minus])) == (8, True, False), \
+                assert minus >= 0 and sgr_attributes(bytes(screen[:minus])) == (245, True, False), \
                     (case, "collapse marker is not bold gray")
                 before = len(screen)
                 click()

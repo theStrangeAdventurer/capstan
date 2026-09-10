@@ -4923,6 +4923,45 @@ static MunitResult test_chunked_tool_call_arguments_continue_with_tool_result(
   return MUNIT_OK;
 }
 
+static MunitResult test_stream_tool_activity(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_provider_state();
+  int rc = luaL_dostring(L,
+      "local stream = require('agent.stream')\n"
+      "local activity, thinking, updates\n"
+      "agent.set_activity = function(v) activity = v; updates = updates + 1 end\n"
+      "agent.set_thinking = function(v) thinking = v end\n"
+      "local function run(suppressed, ending)\n"
+      "  activity, thinking, updates = nil, false, 0\n"
+      "  local cb = stream.stream({suppress_agent_state=suppressed,\n"
+      "    parse_sse_event=function(s)\n"
+      "      if s == 'tool' then return {type='tool_calls', tool_calls={\n"
+      "        {index=0,id='call', ['function']={name='fetch',arguments='{}'}}}} end\n"
+      "      return {type=s,content='hello'}\n"
+      "    end}, function() end)\n"
+      "  cb('reasoning\\n\\n', false)\n"
+      "  cb('tool\\n\\n', false)\n"
+      "  assert(activity == (not suppressed and 'Tool calling' or nil))\n"
+      "  assert(not thinking)\n"
+      "  cb('tool\\n\\n', false)\n"
+      "  assert(updates == (suppressed and 0 or 1))\n"
+      "  if ending == 'error' then cb('', true, 'failure')\n"
+      "  elseif ending == 'done' then cb('', true)\n"
+      "  else cb(ending .. '\\n\\n', false) end\n"
+      "  assert(activity == nil)\n"
+      "  assert(thinking == (not suppressed and ending == 'reasoning'))\n"
+      "end\n"
+      "for _, ending in ipairs({'text','reasoning','done','error'}) do\n"
+      "  run(false, ending); run(true, ending)\n"
+      "end\n");
+  if (rc != LUA_OK) munit_logf(MUNIT_LOG_ERROR, "%s", lua_tostring(L, -1));
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_stream_tool_delta_logs_only_at_debug(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -5032,6 +5071,8 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
   munit_assert_true(strstr(captured_body, "--- a/file.txt") != NULL);
   munit_assert_true(strstr(captured_body, "-beta") != NULL);
   munit_assert_true(strstr(captured_body, "+BETA") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "⚙ file_edit\nEditing: ") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "\nEdited ") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "--- a/file.txt") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "-beta") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "+BETA") != NULL);
@@ -6171,7 +6212,7 @@ static MunitResult test_shell_always_allow_is_session_scoped(
   munit_assert_int(permit_save_calls, ==, 0);
   munit_assert_int(permit_prompt_calls, ==, 1);
   munit_assert_true(strstr(captured_agent_appends, "⚙ shell") != NULL);
-  munit_assert_true(strstr(captured_agent_appends, "  $ pwd") != NULL);
+  munit_assert_true(strstr(captured_agent_appends, "⚙ shell\nRunning command\n$ pwd") != NULL);
 
   call_agent_entry(L);
   munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
@@ -6938,7 +6979,7 @@ static MunitResult test_shell_tool_display_shows_redacted_command(
                             "/Users/tester/narnia/tui-agent");
   munit_assert_true(strstr(captured_agent_appends, "⚙ shell") != NULL);
   munit_assert_true(strstr(captured_agent_appends,
-                           "  $ make test") != NULL);
+                           "⚙ shell\nValidating\n$ make test") != NULL);
   munit_assert_true(strstr(captured_logs, "display=shell") != NULL);
   munit_assert_true(strstr(captured_logs,
                            "args={\"command\":\"make test\"}") != NULL);
@@ -8023,6 +8064,8 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/chunked_tool_call_arguments_continue_with_tool_result",
      test_chunked_tool_call_arguments_continue_with_tool_result, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/stream_tool_activity", test_stream_tool_activity, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/stream_tool_delta_logs_only_at_debug",
      test_stream_tool_delta_logs_only_at_debug, NULL, NULL,

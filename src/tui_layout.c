@@ -35,8 +35,71 @@ void tui_layout_session_row(int cols, const char *value, const char *icon,
   row->x = cols - MARGIN - row->width;
 }
 
+void tui_layout_session_id_row(int cols, const char *id, const char *icon,
+                               TuiSessionRow *row) {
+  char labeled[512];
+  snprintf(labeled, sizeof(labeled), "session.id: %s", id ? id : "");
+  tui_layout_session_row(cols, id && *id ? labeled : NULL, icon, row);
+}
+
 static int columns(const char *text) {
   return text_columns(text, strlen(text));
+}
+
+/* Shared cell-safe clipping for the status row; never emit controls. */
+static void status_clip(const char *text, int width, char *out, size_t size) {
+  size_t len = strlen(text ? text : ""), used = 0, i = 0;
+  int cells_used = 0;
+  if (width < 1) { out[0] = '\0'; return; }
+  /* Reserve an ellipsis only when the complete sanitized text cannot fit.
+     Remaining bytes may be zero-width combining marks. */
+  int total_cells = 0;
+  for (size_t p = 0; p < len;) {
+    int cells;
+    size_t n = text_character(text + p, len - p, &cells);
+    if ((unsigned char)text[p] < 32 || text[p] == 127) cells = 1;
+    total_cells += cells;
+    p += n;
+  }
+  int clipped = total_cells > width || len >= size;
+  while (i < len) {
+    int cells;
+    size_t n = text_character(text + i, len - i, &cells);
+    int control = (unsigned char)text[i] < 32 || text[i] == 127;
+    if (control) cells = 1;
+    if (cells_used + cells > width - clipped ||
+        used + n + (clipped ? 3 : 0) >= size) break;
+    if (control) out[used++] = ' ';
+    else { memcpy(out + used, text + i, n); used += n; }
+    cells_used += cells;
+    i += n;
+  }
+  if (i < len && used + 3 < size) { memcpy(out + used, "…", 3); used += 3; }
+  out[used] = '\0';
+}
+
+void tui_layout_status_row(int width, const char *activity, const char *profile,
+                           const char *model, const char *effort, TuiStatusRow *row) {
+  memset(row, 0, sizeof(*row));
+  if (width < 1) return;
+  status_clip(activity, width, row->activity, sizeof(row->activity));
+  int left = columns(row->activity);
+  int room = width - left - (left ? 3 : 0);
+  if (room < 1) return;
+  char p[128], m[256], e[64], candidate[512];
+  status_clip(profile, 100, p, sizeof(p));
+  /* The provider remains available in /info; model namespace is metadata. */
+  const char *short_model = model ? strrchr(model, '/') : NULL;
+  status_clip(short_model ? short_model + 1 : model, 200, m, sizeof(m));
+  status_clip(effort, 40, e, sizeof(e));
+  snprintf(candidate, sizeof(candidate), "%s%s%s%s%s", p, p[0] && m[0] ? " · " : "",
+           m, e[0] ? " · effort " : "", e);
+  if (columns(candidate) > room)
+    snprintf(candidate, sizeof(candidate), "%s%s%s", p, p[0] && m[0] ? " · " : "", m);
+  if (columns(candidate) > room) snprintf(candidate, sizeof(candidate), "%s", p);
+  if (columns(candidate) > room) return;
+  snprintf(row->metadata, sizeof(row->metadata), "%s", candidate);
+  row->metadata_x = width - columns(row->metadata);
 }
 
 static void footer_path(const char *workdir, const char *home, int width,
@@ -83,7 +146,7 @@ void tui_layout_workspace_footer(int width, const char *workdir,
   if (width < 7) return;
   if (status && status->state == WORKSPACE_STATUS_READY) {
     if (status->files || status->added || status->deleted) {
-      snprintf(footer->files, sizeof(footer->files), "%llu %s · ",
+      snprintf(footer->files, sizeof(footer->files), "Changes: %llu %s · ",
                status->files, status->files == 1 ? "file" : "files");
       snprintf(footer->added, sizeof(footer->added), "+%llu", status->added);
       snprintf(footer->deleted, sizeof(footer->deleted), " −%llu", status->deleted);

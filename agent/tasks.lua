@@ -118,11 +118,19 @@ function M.view()
     local expanded = not (type(settings) == 'table' and settings.expanded_by_default == false)
     local marks = {pending='○', in_progress='◐', completed='✓', blocked='!', cancelled='−'}
     local items = {}
+    local completed, cancelled = 0, 0
     -- Explicit ASCII controls: locale-sensitive %c can match UTF-8 bytes.
     for _, task in ipairs(plan and plan.tasks or {}) do
         items[#items+1] = {title=task.title:gsub('[%z\1-\31\127]', ' '), mark=marks[task.status]}
+        if task.status == 'completed' then completed = completed + 1 end
+        if task.status == 'cancelled' then cancelled = cancelled + 1 end
     end
-    return {summary=err and 'Tasks: error' or M.summary(), items=items, expanded=expanded}
+    local summary = err and 'Tasks: error' or M.summary()
+    if #items > 0 and completed + cancelled == #items then
+        expanded = false
+        summary = summary .. (cancelled == 0 and ' · completed' or ' · closed with cancellations')
+    end
+    return {summary=summary, items=items, expanded=expanded}
 end
 
 function M.display()

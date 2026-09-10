@@ -86,6 +86,8 @@ void init_tui(void) {
     init_pair(3, COLOR_YELLOW, -1);
     init_pair(4, COLOR_BLACK, COLOR_YELLOW);
     init_pair(5, -1, COLOR_BLACK);
+    init_pair(21, COLOR_BLACK, COLORS >= 256 ? 234 : COLOR_BLACK);
+    init_pair(22, COLORS >= 256 ? 141 : COLOR_MAGENTA, COLOR_BLACK);
     init_pair(6, COLOR_RED, COLOR_BLACK);
     init_pair(8, COLOR_RED, -1);
     init_pair(9, COLORS >= 216 ? 208 : COLOR_YELLOW, -1);
@@ -118,7 +120,7 @@ void init_tui(void) {
     g_diff_add_color_pair = 12;
     g_diff_del_color_pair = 13;
     if (COLORS > 8) {
-      init_pair(7, 8, -1);
+      init_pair(7, COLORS >= 256 ? 245 : COLOR_WHITE, -1);
       g_tool_status_color_pair = 7;
       g_dim_color_pair = 7;
     }
@@ -129,10 +131,12 @@ void init_tui(void) {
 static int spinner_tick = 0;
 static int g_session_flash = -1;
 
-int tui_session_height(void) {
-  int rows, cols;
-  getmaxyx(stdscr, rows, cols);
-  return tui_layout_session_height(rows, cols);
+/* Overlay never reserves conversation rows. */
+int tui_session_height(void) { return 0; }
+
+static int session_overlay_visible(void) {
+  return agent_session_visible() &&
+         tui_layout_session_height(getmaxy(stdscr), getmaxx(stdscr) - 4);
 }
 
 static const char *session_value(int row) {
@@ -142,26 +146,75 @@ static const char *session_value(int row) {
 static void session_row(int cols, int row, TuiSessionRow *layout) {
   /* Non-Unicode locales cannot display U+29C9; use an ASCII copy mark. */
   const char *icon = MB_CUR_MAX > 1 && text_columns("⧉", strlen("⧉")) == 1 ? "⧉" : "[]";
-  tui_layout_session_row(cols, session_value(row), icon, layout);
+  if (row == 1)
+    tui_layout_session_id_row(cols - 4, session_value(row), icon, layout);
+  else
+    tui_layout_session_row(cols - 4, session_value(row), icon, layout);
+  layout->x += 2; /* Reserve two extra cells for the left inset. */
+}
+
+static int session_overlay_left(int cols) {
+  TuiSessionRow title, id;
+  session_row(cols, 0, &title);
+  session_row(cols, 1, &id);
+  return (title.x < id.x ? title.x : id.x) - 3;
 }
 
 static void render_session_header(int cols) {
-  for (int row = 0; row < tui_session_height(); row++) {
-    move(MARGIN + row, 0);
-    clrtoeol();
+  if (!session_overlay_visible()) return;
+  int x = session_overlay_left(cols), width = cols - 1 - x;
+  WINDOW *shadow = newwin(1, width - 1, 4, x + 1);
+  if (shadow) {
+    wbkgd(shadow, COLOR_PAIR(21));
+    werase(shadow);
+    leaveok(shadow, TRUE);
+    wnoutrefresh(shadow);
+    delwin(shadow);
+  }
+  WINDOW *win = newwin(4, width, 0, x);
+  if (!win) return;
+  wbkgd(win, COLOR_PAIR(5));
+  werase(win);
+  wattron(win, A_DIM);
+  box(win, 0, 0);
+  wattroff(win, A_DIM);
+  mvwaddstr(win, 0, width - 4, "[x]");
+  for (int row = 0; row < 2; row++) {
     TuiSessionRow layout;
     session_row(cols, row, &layout);
-    attron(COLOR_PAIR(14) | (g_session_flash == row ? A_REVERSE : 0));
-    if (layout.width) mvaddstr(MARGIN + row, layout.x, layout.text);
-    attroff(COLOR_PAIR(14) | A_REVERSE);
+    if (g_session_flash == row) wattron(win, A_REVERSE);
+    if (layout.width) {
+      const char *prefix = "session.id: ";
+      size_t prefix_len = strlen(prefix);
+      if (row == 1 && strncmp(layout.text, prefix, prefix_len) == 0) {
+        mvwaddnstr(win, 1 + row, layout.x - x, layout.text, (int)prefix_len);
+        wattron(win, COLOR_PAIR(22));
+        waddstr(win, layout.text + prefix_len);
+        wattron(win, COLOR_PAIR(5));
+      } else {
+        mvwaddstr(win, 1 + row, layout.x - x, layout.text);
+      }
+    }
+    wattroff(win, A_REVERSE);
   }
+  leaveok(win, TRUE);
+  wnoutrefresh(win);
+  delwin(win);
 }
 
 int tui_handle_session_mouse(int y, int x, unsigned long buttons) {
   if (popup_is_active() || popup_is_message_active() ||
       !(buttons & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED))) return 0;
-  int row = y - MARGIN;
-  if (row < 0 || row >= tui_session_height()) return 0;
+  int cols = getmaxx(stdscr);
+  if (!session_overlay_visible() || y < 0 || y > 4 ||
+      x < session_overlay_left(cols) || x >= cols) return 0;
+  if (y == 0 && x >= cols - 5 && x < cols - 2) {
+    if (buttons & (BUTTON1_CLICKED | BUTTON1_RELEASED))
+      agent_set_session_visible(0);
+    return 1;
+  }
+  int row = y - 1;
+  if (row < 0 || row >= 2) return 1;
   TuiSessionRow layout;
   session_row(getmaxx(stdscr), row, &layout);
   if (!layout.width || x < layout.x || x >= layout.x + layout.width) return 0;
@@ -779,6 +832,7 @@ int tui_handle_shell_mouse(int y, int x, int activate) {
 }
 
 void render_all(void) {
+  erase(); /* Also clear overlay borders/shadow outside the chat window. */
   const char *input = input_get_display_text();
   int input_pos = input_get_display_cursor();
   int rows, cols;
@@ -905,7 +959,7 @@ void render_all(void) {
     if (is_user)
       wattron(msg_win, COLOR_PAIR(5));
     else
-      wattron(msg_win, A_DIM);
+      wattrset(msg_win, A_NORMAL);
 
     const char *display_text = msgs_texts[i];
     const char *p = display_text;
@@ -941,7 +995,7 @@ void render_all(void) {
             (current_diff_state == 3 || current_diff_state == 4)
                 ? diff_line_color_pair(logical_line_start)
                 : 0;
-        int tool_status_attrs = A_ITALIC;
+        int tool_status_attrs = A_NORMAL;
         if (g_tool_status_color_pair)
           tool_status_attrs |= COLOR_PAIR(g_tool_status_color_pair);
         if (is_tool_status) {
@@ -989,12 +1043,12 @@ void render_all(void) {
         }
 
         if (is_shell_output)
-          wattrset(msg_win, is_user ? COLOR_PAIR(5) : A_DIM);
+          wattrset(msg_win, is_user ? COLOR_PAIR(5) : A_NORMAL);
         if (diff_pair)
           wattroff(msg_win, COLOR_PAIR(diff_pair));
         if (is_tool_status) {
           wattroff(msg_win, tool_status_attrs);
-          wattron(msg_win, A_DIM);
+          wattrset(msg_win, A_NORMAL);
         }
 
         if (visual_is_active() && global_line >= sel_sl &&
@@ -1144,10 +1198,10 @@ void render_all(void) {
       mvprintw(queue_y + i, margin, "queued %d/%d", i + 1,
                dispatch_queue_size());
       wattroff(stdscr, dim_gray_attr());
-      wattron(stdscr, COLOR_PAIR(3));
+      wattron(stdscr, dim_gray_attr());
       mvwadd_clipped(stdscr, queue_y + i, margin + 12, preview,
                      inner_w - 12);
-      wattroff(stdscr, COLOR_PAIR(3));
+      wattroff(stdscr, dim_gray_attr());
     }
   }
 
@@ -1163,6 +1217,10 @@ void render_all(void) {
   werase(input_win);
   wattron(input_win, dim_gray_attr());
   box(input_win, 0, 0);
+  mvwaddstr(input_win, 0, 0, "╭");
+  mvwaddstr(input_win, 0, inner_w - 1, "╮");
+  mvwaddstr(input_win, input_h - 1, 0, "╰");
+  mvwaddstr(input_win, input_h - 1, inner_w - 1, "╯");
   wattroff(input_win, dim_gray_attr());
 
   {
@@ -1249,129 +1307,39 @@ void render_all(void) {
 
   int loading = http_is_loading();
   const char *activity = agent_activity();
+  char activity_label[512] = "";
   if (loading || (activity && activity[0])) {
-    int thinking = agent_is_thinking();
-    int phase = (spinner_tick / 8) % 8;
-    const char *dots[] = {" ", "·", "•", "●", "●", "•", "·", " "};
-    int dot_attrs[] = {0, A_DIM, 0, A_BOLD, A_BOLD, 0, A_DIM, 0};
-
-    wattrset(stdscr, dot_attrs[phase]);
-    if (thinking)
-      wattron(stdscr, COLOR_PAIR(6));
-    mvaddstr(rows - 1, MARGIN + 1, dots[phase]);
-    if (thinking)
-      wattroff(stdscr, COLOR_PAIR(6));
-
-    const char *label = NULL;
-    char activity_label[512];
-    int label_attr = A_ITALIC | A_DIM;
-
+    const char *label = activity && activity[0] ? activity :
+                        agent_is_thinking() ? "Thinking" :
+                        msgs->size ? "Answering" : "Connecting";
     if (activity && activity[0]) {
       long long elapsed = agent_activity_elapsed_seconds();
-      if (elapsed >= 60) {
-        snprintf(activity_label, sizeof(activity_label), "%s · %lldm %02llds",
-                 activity, elapsed / 60, elapsed % 60);
-      } else {
-        snprintf(activity_label, sizeof(activity_label), "%s · %llds",
-                 activity, elapsed);
-      }
-      label = activity_label;
-    } else if (thinking)
-      label = "Thinking";
-    else {
-      /* No explicit activity label. If no user prompt has been submitted yet
-         (empty history), don't say "Answering" — we're likely in startup
-         (e.g. MCP init). Show a neutral label or nothing. */
-      Messages *msgs = get_messages();
-      int has_user = 0;
-      for (size_t i = 0; i < msgs->size; i++) {
-        if (msgs->items[i]->role == MSG_USER &&
-            msgs->items[i]->text && msgs->items[i]->text[0]) {
-          has_user = 1;
-          break;
-        }
-      }
-      if (has_user)
-        label = "Answering";
-    }
-
-    if (label) {
-      if (thinking)
-        label_attr |= COLOR_PAIR(6);
-      wattrset(stdscr, label_attr);
-      mvaddstr(rows - 1, MARGIN + 1 + 5, label);
-      wattrset(stdscr, A_NORMAL);
-    }
-  }
-
-  spinner_tick = (spinner_tick + 1) % 64;
-
-  if (mode_get() == FOCUS_MESSAGES)
-    curs_set(0);
-  else
-    curs_set(1);
-
-  const char *prov = agent_provider_name();
-  const char *model = agent_provider_model();
-  const char *effort = agent_reasoning_effort();
-  const char *profile = agent_profile_name();
-  if (prov && model) {
-    char info[256];
-    int n;
-    if (effort && effort[0])
-      n = snprintf(info, sizeof(info), "%s/%s reasoning:%s", prov, model,
-                   effort);
-    else
-      n = snprintf(info, sizeof(info), "%s/%s", prov, model);
-    if (n < 0)
-      n = 0;
-    info[sizeof(info) - 1] = '\0';
-    const char *display = info;
-    int info_len = (int)strlen(display);
-    int max_width = cols > 4 ? cols - 4 : 0;
-    int profile_len = profile && profile[0] ? (int)strlen(profile) : 0;
-    int total_len = profile_len ? profile_len + 1 + info_len : info_len;
-    if (total_len > max_width) {
-      int info_max = max_width - (profile_len ? profile_len + 1 : 0);
-      if (info_max < 0)
-        info_max = 0;
-      if (info_len > info_max) {
-        display += info_len - info_max;
-        info_len = info_max;
-      }
-      total_len = profile_len ? profile_len + 1 + info_len : info_len;
-    }
-    int x = cols - total_len - 2;
-    if (x < 0)
-      x = 0;
-    if (profile_len) {
-      int pair = profile_color_pair(profile);
-      if (pair)
-        attron(A_BOLD | COLOR_PAIR(pair));
-      else
-        attron(A_BOLD);
-      mvaddstr(rows - 1, x, profile);
-      if (pair)
-        attroff(A_BOLD | COLOR_PAIR(pair));
-      else
-        attroff(A_BOLD);
-      x += profile_len;
-      attron(dim_gray_attr());
-      mvaddstr(rows - 1, x, " ");
-      x += 1;
-      mvaddstr(rows - 1, x, display);
-      attroff(dim_gray_attr());
+      snprintf(activity_label, sizeof(activity_label), "%s · %llds", label, elapsed);
     } else {
-      attron(dim_gray_attr());
-      mvaddstr(rows - 1, x, display);
-      attroff(dim_gray_attr());
+      snprintf(activity_label, sizeof(activity_label), "%s", label);
     }
+    const char *dots[] = {"·", "•", "●", "•"};
+    wattrset(stdscr, COLOR_PAIR(14));
+    mvaddstr(rows - 1, MARGIN + 1, dots[(spinner_tick / 8) % 4]);
   }
+  TuiStatusRow status_row;
+  tui_layout_status_row(cols - 2 * MARGIN - 4, activity_label,
+                         agent_profile_name(), agent_provider_model(),
+                         agent_reasoning_effort(), &status_row);
+  wattrset(stdscr, A_NORMAL);
+  mvaddstr(rows - 1, MARGIN + 3, status_row.activity);
+  wattrset(stdscr, dim_gray_attr());
+  if (status_row.metadata[0])
+    mvaddstr(rows - 1, MARGIN + 3 + status_row.metadata_x, status_row.metadata);
+  wattrset(stdscr, A_NORMAL);
+  spinner_tick = (spinner_tick + 1) % 32;
+  curs_set(mode_get() == FOCUS_MESSAGES ? 0 : 1);
 
-  render_session_header(cols);
+  mvhline(0, 0, ' ', cols);
   wnoutrefresh(stdscr);
   wnoutrefresh(msg_win);
   render_tasks(input_y, inner_w);
+  render_session_header(cols);
   wnoutrefresh(input_win);
   popup_render_message();
   popup_render();

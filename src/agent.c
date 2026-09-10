@@ -14,6 +14,14 @@
 static Messages messages = {0};
 static unsigned long g_messages_revision = 0;
 static int g_shell_output_enabled = 0;
+static int g_session_visible = 0;
+int agent_session_visible(void) { return g_session_visible; }
+void agent_set_session_visible(int visible) { g_session_visible = !!visible; }
+static int l_agent_show_session(lua_State *L) {
+  (void)L;
+  agent_set_session_visible(1);
+  return 0;
+}
 
 void agent_enable_shell_output(int enabled) { g_shell_output_enabled = enabled; }
 
@@ -424,6 +432,8 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "set_thinking");
   lua_pushcfunction(L, l_agent_finish_run);
   lua_setfield(L, -2, "finish_run");
+  lua_pushcfunction(L, l_agent_show_session);
+  lua_setfield(L, -2, "show_session");
   lua_pushcfunction(L, l_agent_tasks_get);
   lua_setfield(L, -2, "tasks_get");
   lua_pushcfunction(L, l_agent_tasks_set);

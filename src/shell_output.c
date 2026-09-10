@@ -17,7 +17,7 @@ int shell_output_add(ShellOutput *output, const char *text, size_t start,
     output->capacity = capacity;
   }
   ShellOutputBlock block = {.start = start, .end = end, .body_start = start,
-                             .body_end = end};
+                             .body_end = end, .expanded = 1};
   /* Interpret the status only inside an explicitly tagged shell result.
      Model results also include a completion suffix before [exit N]. */
   for (size_t p = start; p < end;) {
@@ -25,6 +25,11 @@ int shell_output_add(ShellOutput *output, const char *text, size_t start,
     size_t next = newline ? (size_t)(newline - text) + 1 : end;
     if (end - p >= 6 && memcmp(text + p, "[exit ", 6) == 0) {
       block.body_start = next;
+      /* Only an unambiguous successful status folds by default. Unknown
+         statuses and timeout/error suffixes fail open, with controls intact. */
+      size_t status_end = newline ? next - 1 : next;
+      block.expanded = !(status_end - p == 8 &&
+                         memcmp(text + p, "[exit 0]", 8) == 0);
       size_t previous_end = output->count ? output->blocks[output->count - 1].end : 0;
       size_t join = p;
       while (join > previous_end && text[join - 1] == '\n') join--;
@@ -80,7 +85,7 @@ const char *shell_output_build(ShellOutput *output, const char *text) {
     size_t prefix = block->body_start - prefix_start;
     memcpy(view + dst, text + prefix_start, prefix);
     dst += prefix;
-    if (block->lines > SHELL_OUTPUT_FOLD_LINES) {
+    if (block->lines > 0) {
       block->control_start = dst;
       dst += (size_t)sprintf(view + dst, "[%c] %zu lines",
                             block->expanded ? '-' : '+', block->lines);
@@ -113,7 +118,7 @@ size_t shell_output_offset(const ShellOutput *output, size_t original) {
     const ShellOutputBlock *b = &output->blocks[i];
     if (original < b->start) return dst + original - src;
     if (original < b->end) {
-      if (b->lines <= SHELL_OUTPUT_FOLD_LINES || original < b->body_start) {
+      if (b->lines == 0 || original < b->body_start) {
         size_t mapped = original;
         if (b->join_end > b->join_start && original >= b->join_start) {
           if (original < b->join_end)

@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+/* Legacy threshold retained for source compatibility; folding now applies
+   to every nonempty tagged body, independent of line count or wrapping. */
 #define SHELL_OUTPUT_FOLD_LINES 20
 
 typedef struct {

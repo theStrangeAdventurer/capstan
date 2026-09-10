@@ -33,6 +33,8 @@ typedef struct {
 
 void add_message(char *text, char *raw_text, MessageRole role);
 void agent_enable_shell_output(int enabled);
+int agent_session_visible(void);
+void agent_set_session_visible(int visible);
 void message_tag_shell_output(Message *message, size_t start);
 int message_add_image(Message *message, const char *mime_type,
                       const char *base64_data);

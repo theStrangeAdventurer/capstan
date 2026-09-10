@@ -195,6 +195,14 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local accumulated_reasoning_details = {}
     local reasoning_detail_positions = {}
     local reasoning_active = false
+    local tool_activity_active = false
+
+    local function set_tool_activity(active)
+        if provider.suppress_agent_state or not agent.set_activity then return end
+        if active == tool_activity_active then return end
+        tool_activity_active = active
+        agent.set_activity(active and "Tool calling" or nil)
+    end
     local leaked_think_pending = ""
     local leaked_think_active = false
     local tool_calls_accum = {}
@@ -328,6 +336,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             provider_error = provider_error or logging.safe_error(chunk.error, 500)
             logging.runtime_log("stream", "provider_error=" .. provider_error, "error")
         elseif chunk.type == "reasoning" then
+            set_tool_activity(false)
             local reasoning_content = chunk.content or ""
             if reasoning_content ~= "" or
                (type(chunk.reasoning_details) == "table" and
@@ -360,6 +369,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                 return
             end
             mark_output("text", not buffer_text_until_done)
+            set_tool_activity(false)
             if reasoning_active then
                 reasoning_active = false
                 if not provider.suppress_agent_state then agent.set_thinking(false) end
@@ -381,6 +391,11 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             on_result({type = "text", content = content}, false)
         elseif chunk.type == "tool_calls" and type(chunk.tool_calls) == "table" and
                next(chunk.tool_calls) ~= nil then
+            set_tool_activity(true)
+            if reasoning_active then
+                reasoning_active = false
+                if not provider.suppress_agent_state then agent.set_thinking(false) end
+            end
             mark_output("tool")
             tool_delta_chunks = tool_delta_chunks + 1
             for _, tc in ipairs(chunk.tool_calls) do
@@ -462,6 +477,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
         if err then
             finished = true
             request_outcome = "transport_error"
+            set_tool_activity(false)
             if reasoning_active and not provider.suppress_agent_state then agent.set_thinking(false) end
             local msg = logging.safe_error(err, 240)
             local detail = error_detail_from_body(body)
@@ -519,6 +535,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
                 end
                 if chunk then process_chunk(chunk) end
             end
+            set_tool_activity(false)
             local remaining_text = filter_leaked_think("", true)
             if remaining_text ~= "" then
                 mark_output("text", not buffer_text_until_done)

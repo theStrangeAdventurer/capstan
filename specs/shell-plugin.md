@@ -56,8 +56,13 @@ Tagged shell results use the TUI's gray text color (dim on monochrome terminals)
 for manual and model calls alike. Shell output is literal: diff-like text does
 not override this color. Results appear immediately, without animation.
 
-Results with **more than 20 logical output lines** start collapsed. Command and
-exit/timeout status stay visible; a `[+] N lines` control replaces the body.
+Every nonempty tagged result with an exact `[exit 0]` status starts collapsed,
+including short output and long single-line JSON. Nonzero, missing, malformed,
+or otherwise unknown statuses (including timeout notices) start expanded so
+errors remain visible. All nonempty bodies have the same expandable/collapsible
+controls; empty bodies have none. Command and exit/timeout status stay visible;
+a `[+] N lines` control replaces the collapsed body, while `[-] N lines`
+precedes an expanded body.
 The display projection places `[exit N]` and any timeout notice on the command's
 line, with the fold control immediately on the next line (no blank separator).
 This also applies to short or empty results, for both manual commands and model
@@ -66,7 +71,7 @@ The `[+]` and `[-]` markers are bold, retaining the same gray color as the
 output (dim on monochrome terminals); the line count stays gray and non-bold. Click the three-character marker to expand; `[-]`
 collapses it again. Internal
 blank lines count, trailing separator newlines and command/status lines do not;
-terminal wrapping does not affect the threshold. Each result toggles separately.
+terminal wrapping does not affect folding or line counts. Each result toggles separately.
 Clicks work in both the main event loop and nested blocking waits, without
 submitting or changing the input draft. Toggling is immediate and preserves the
 viewport top where content bounds allow.

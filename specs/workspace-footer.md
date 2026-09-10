@@ -6,7 +6,8 @@ No extra terminal row is consumed. The path uses the existing dim border color;
 file count uses the normal terminal foreground, additions and deletions use the
 existing soft green/red diff colors (65/95 on 256-color terminals).
 
-Example: `~/project/src` on the left, `3 files · +128 −34` on the right.
+Example: `~/project/src` on the left, `Changes: 3 files · +128 −34` on the right.
+`Changes` describes workspace state, not edits attributable to the active session.
 
 ## Semantics and ownership
 

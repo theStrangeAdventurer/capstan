@@ -1164,9 +1164,9 @@ end
 local function tool_status_prefix(tool_name, display_target, display_command)
     local phase = tool_phase(tool_name, display_command)
     if display_command then
-        return string.format("\n\n⚙ %s\n  %s\n  $ %s ", tool_name, phase, display_command)
+        return string.format("\n\n⚙ %s\n%s\n$ %s ", tool_name, phase, display_command)
     end
-    return string.format("\n\n⚙ %s\n  %s: %s ", tool_name, phase, display_target)
+    return string.format("\n\n⚙ %s\n%s: %s ", tool_name, phase, display_target)
 end
 
 local function tool_status_suffix(status, _display_command)
