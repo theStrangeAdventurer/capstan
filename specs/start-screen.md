@@ -10,14 +10,25 @@ The wide `CAPSTAN` wordmark uses bold geometric 6×8 letters with two-pixel
 strokes, chamfered corners, and two blank columns between letters (54 columns
 total). Pairs of pixel rows are packed into `▀`, `▄`, and `█`, producing four
 terminal rows: pixels are approximately square rather than tall terminal cells.
-The resting wordmark is uniformly lavender (141), without grain or pink flecks.
-A cool reflection uses 147, 153, 189, 195, and 231, with no bold attribute changes.
+On 256-color terminals the wordmark uses six neutral gray-to-white shades
+(indices 245, 248, 250, 252, 254, 231), from gray at rest to a white highlight
+core, with the terminal's default background. This deliberate logo-only exception
+keeps the reflection visible without a purple tint; white can lose contrast on
+light backgrounds. Other terminals retain default-foreground dim/normal/bold
+reflection; its contrast depends on theme and attribute support.
 The diagonal fifteen-pixel highlight accelerates across the word in 900 ms,
-then pauses fully off-screen for 2700 ms. No Braille glyphs are used.
+then pauses fully off-screen for 2700 ms. The first visible highlight begins
+500 ms after the start screen is first rendered, without an off-screen run-up.
+The TUI supplies monotonic timestamps; the pure animation state owns the opening
+time and delay, resetting when conversation messages replace the screen.
+Ordinary redraws and layout changes do not restart it. Clock failure leaves the
+logo at rest. Unit tests cover the delay boundary, visible first highlight,
+repeat cycle, and reopening. No Braille glyphs are used.
 
 Two blank rows separate the wide wordmark from the dim version, with one blank
 row before the settings. Values use normal weight, with the active profile
-remaining a colored bold accent. One blank row separates settings from the
+remaining bold in the default foreground. Only the ready dot is purple; its
+label uses normal foreground. One blank row separates settings from the
 ready line and keyboard hints. The input box below the message window is
 unchanged.
 
@@ -70,6 +81,9 @@ and `app_workdir()`.
 `make test` covers layout selection, centered content bounds across terminal
 sizes, wordmark bounds and letter spacing, gradient movement and the off-screen
 pause, `$HOME` path collapse, UTF-8-safe truncation, and status/hint formatting.
+`make test-tui-input` checks all six logo shades across a full reflection cycle
+and the attribute fallback on 16-color terminals, compact layout, neutral
+profiles/tasks and the purple status dot. Light/dark contrast needs visual review.
 `make` checks the ncurses renderer compiles. Visual review should check wide and
 compact terminals, the retained reflection sweep, and the transition to chat.
 `make test-build` verifies standalone embedded runtime assets.

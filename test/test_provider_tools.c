@@ -3327,7 +3327,7 @@ static MunitResult test_auto_compact_threshold_uses_launch_overrides(
       "assert(trigger and limit == 2000)\n"
       "assert(capstan.agent.configure_interactive({model = 'launch/unknown'}))\n"
       "trigger, estimate, limit = should_auto_compact(messages, '')\n"
-      "assert(not trigger and limit == 0)\n"
+      "assert(not trigger and limit == 1000000)\n"
       "assert(runtime.providers.openrouter.model == 'config/model')\n");
   if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
   reset_captures(L);

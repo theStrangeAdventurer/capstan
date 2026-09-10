@@ -186,6 +186,31 @@ static MunitResult test_wordmark_half_cells(
   return MUNIT_OK;
 }
 
+static MunitResult test_animation_opening(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  StartScreenAnimation animation = {0};
+  long long opened = 1234567;
+  int resting = start_screen_animation_frame(&animation, 1, opened);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 499), ==, resting);
+  int first = start_screen_animation_frame(&animation, 1, opened + 500);
+  munit_assert_int(first, ==, start_screen_animation_tick(0));
+  /* The first highlight is already visible on an actual wordmark cell. */
+  munit_assert_int(start_screen_wordmark_cell(0, 1), !=, 0);
+  munit_assert_int(start_screen_gradient_level(0, 1, first), >, 1);
+  for (int row = 0; row < START_SCREEN_WORDMARK_ROWS; row++)
+    for (int col = 0; col < START_SCREEN_WORDMARK_COLUMNS; col++)
+      munit_assert_int(start_screen_gradient_level(row, col, resting), ==, 1);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 1400), ==, resting);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 4099), ==, resting);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 4100), ==, first);
+  start_screen_animation_frame(&animation, 0, opened + 4200);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 8000), ==, resting);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 8499), ==, resting);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 8500), ==, first);
+  return MUNIT_OK;
+}
+
 static MunitResult test_animation_accelerates_then_pauses(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -298,6 +323,8 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/wordmark_half_cells",
      test_wordmark_half_cells, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/animation_opening", test_animation_opening, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/animation_accelerates_then_pauses",
      test_animation_accelerates_then_pauses, NULL, NULL,

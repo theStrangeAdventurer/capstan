@@ -42,7 +42,26 @@ int start_screen_animation_tick(long long elapsed_ms) {
 
   long long accelerated = phase * phase * phase;
   long long duration = (long long)sweep_ms * sweep_ms * sweep_ms;
-  return (int)(accelerated * (travel - 1) / duration);
+  /* Start at the visible leading edge, without a hidden off-screen run-up. */
+  return 8 + (int)(accelerated * (travel - 9) / duration);
+}
+
+int start_screen_animation_frame(StartScreenAnimation *animation, int visible,
+                                 long long now_ms) {
+  const int resting_tick = START_SCREEN_WORDMARK_COLUMNS +
+                           START_SCREEN_WORDMARK_ROWS + 23;
+  if (!visible) {
+    animation->visible = 0;
+    return resting_tick;
+  }
+  if (!animation->visible) {
+    animation->visible = 1;
+    animation->opened_ms = now_ms;
+  }
+  long long elapsed_ms = now_ms - animation->opened_ms;
+  if (elapsed_ms < 500)
+    return resting_tick;
+  return start_screen_animation_tick(elapsed_ms - 500);
 }
 
 int start_screen_gradient_level(int row, int column, int tick) {

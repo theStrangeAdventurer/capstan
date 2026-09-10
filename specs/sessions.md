@@ -11,8 +11,18 @@ headless runs.
 - `/sessions` opens a filterable list sorted by most recent update. The active
   session is marked with `*`; Enter switches to the selected conversation.
 - Switching clears transient input, queued submissions, buffered plugin results,
-  scroll state, message cursor state, and token usage. Those values never cross
-  session boundaries.
+  scroll state and message cursor state. Token usage is restored from the selected
+  session; new sessions start at zero. Those values never cross session boundaries.
+- Sessions persist the last displayed prompt/completion/total token counts and
+  context limit as a `type: "usage"` JSONL row. These are the latest request's
+  statistics (or streaming estimate), not cumulative billing. Usage-only changes
+  trigger the same debounced save and shutdown/switch flush as message changes.
+  Headless named runs also save their final displayed usage. Old sessions without
+  usage remain readable with zero counters until the next request; no historical
+  API statistics are fabricated. Malformed or out-of-range counters fail closed.
+  The saved context limit is a display snapshot, not a configuration override;
+  the next request resolves its limit from current model/provider configuration.
+  Tests cover disk round trips, usage-only shutdown saves, restart, and switching.
 - Switching commits the durable `active` pointer before replacing the live
   session. If that atomic write fails, the loaded candidate is discarded and
   both the current messages and in-memory active session remain unchanged.

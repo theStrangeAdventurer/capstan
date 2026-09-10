@@ -3,8 +3,11 @@
 ## Visual hierarchy
 
 Assistant prose uses the terminal's normal foreground, not blanket dimming.
-Tool headers and shell bodies use secondary gray (245 on 256-color terminals,
-white on 16-color terminals; dim fallback without a dedicated pair). Technical
+Tool headers and shell bodies use dimmed terminal-default foreground, not a
+fixed gray/white palette. Task borders, controls, profiles and session IDs are
+neutral; bold identifies emphasized values. User messages and the session overlay
+use the terminal's default background. Purple is reserved for status dots; error,
+warning and diff colors retain their semantic roles. Technical
 headers have no automatic italic styling; Markdown emphasis still does.
 Queue previews use this same neutral secondary color, not warning yellow.
 Input corners match the rounded task panel corners.

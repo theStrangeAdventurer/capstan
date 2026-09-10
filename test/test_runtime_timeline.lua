@@ -129,6 +129,45 @@ assert(measured.cached_tokens == nil and measured.reasoning_tokens == nil)
 measured = usage({cached_tokens = -1, reasoning_tokens = 'private'})
 assert(measured.cached_tokens == nil and measured.reasoning_tokens == nil)
 
+-- UI output estimates work without model capacity or terminal provider usage.
+do
+    local saved = agent.set_usage
+    for _, capacity in ipairs({false, 0, 4096}) do
+        for _, delta in ipairs({{content = 'hello world'},
+            {reasoning_content = 'consider the answer'},
+            {tool_calls = {{index = 0, id = 'call', ['function'] = {
+                name = 'probe', arguments = '{"value":"hello"}'}}}}}) do
+            local latest, result
+            agent.set_usage = function(...) latest = {...} end
+            local callback = stream.stream({context_limit = capacity or nil}, function(r, done)
+                if done then result = r end
+            end, 48000)
+            callback('data: ' .. json.encode({choices = {{delta = delta}}}) .. '\n\n', false)
+            assert(latest[1] == 48000 and latest[2] > 0)
+            assert(latest[3] == latest[1] + latest[2] and latest[4] == (capacity or 0))
+            local estimate = latest[2]
+            callback('data: {"usage":{"prompt_tokens":47000}}\n\n', false)
+            assert(latest[1] == 47000 and latest[2] == estimate)
+            callback('data: {"usage":{"prompt_tokens":47000,"completion_tokens":0,"total_tokens":47000}}\n\n', false)
+            assert(latest[2] == 0) -- Measured zero must not become an estimate.
+            callback(nil, true)
+            assert(result.metrics.usage.completion_tokens == 0)
+        end
+    end
+    local latest, result
+    agent.set_usage = function(...) latest = {...} end
+    local callback = stream.stream({}, function(r, done) if done then result = r end end, 10)
+    callback('data: {"choices":[{"delta":{"content":"hello"}}]}\n\n', false)
+    callback(nil, true)
+    assert(latest[2] > 0 and result.metrics.usage == nil) -- Never export estimates as measurements.
+    latest = nil
+    callback = stream.stream({suppress_agent_state = true}, noop, 10)
+    callback('data: {"choices":[{"delta":{"content":"hello"}}]}\n\n', false)
+    callback(nil, true)
+    assert(latest == nil)
+    agent.set_usage = saved
+end
+
 -- Actual run loop, mocked provider/config and transport only.
 package.loaded['agent.provider_config'] = {build = function() return {
     provider = 'fixture', providers = {fixture = {model = 'fixture',

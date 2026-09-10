@@ -55,6 +55,7 @@ const char *agent_reasoning_effort(void);
 const char *agent_profile_name(void);
 UsageStats agent_usage(void);
 void agent_reset_usage(void);
+void agent_restore_usage(UsageStats usage);
 
 void agent_set_thinking(int active);
 int  agent_is_thinking(void);

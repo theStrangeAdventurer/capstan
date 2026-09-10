@@ -273,7 +273,6 @@ static int try_builtin_or_plugin_command(const char *input, size_t cmd_end) {
     http_cancel_streams(L);
     agent_set_thinking(0);
     agent_finish_run();
-    agent_reset_usage();
     buffered_results_clear();
     dispatch_queue_clear();
     if (!session_manager_new())
@@ -521,7 +520,6 @@ void dispatch_popup_result(void) {
           buffered_results_clear();
           dispatch_queue_clear();
           input_clear();
-          agent_reset_usage();
           scroll_reset();
           visual_reset();
         }

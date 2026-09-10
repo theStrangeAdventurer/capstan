@@ -493,6 +493,12 @@ int session_save(const Session *session) {
                    (long long)session->created_at,
                    (long long)session->updated_at, session->tasks_view,
                    tasks ? ",\"tasks_json\":" : "", tasks ? tasks : "") >= 0;
+  if (ok)
+    ok = fprintf(f, "{\"type\":\"usage\",\"prompt_tokens\":%d,"
+                    "\"completion_tokens\":%d,\"total_tokens\":%d,"
+                    "\"context_limit\":%d}\n",
+                 session->usage.prompt_tokens, session->usage.completion_tokens,
+                 session->usage.total_tokens, session->usage.context_limit) >= 0;
   free(tasks);
   free(id);
   free(title);
@@ -722,6 +728,25 @@ int session_load(const char *id, Session *session) {
       break;
     }
     char *type = json_field_string(line, "type");
+    if (type && strcmp(type, "usage") == 0) {
+      const char *fields[] = {"prompt_tokens", "completion_tokens",
+                              "total_tokens", "context_limit"};
+      int *values[] = {&session->usage.prompt_tokens,
+                      &session->usage.completion_tokens,
+                      &session->usage.total_tokens,
+                      &session->usage.context_limit};
+      ok = image_complete;
+      for (size_t i = 0; ok && i < 4; i++) {
+        long long value = json_field_integer(line, fields[i], -1);
+        if (value < 0 || value > INT_MAX)
+          ok = 0;
+        else
+          *values[i] = (int)value;
+      }
+      free(type);
+      free(line);
+      continue;
+    }
     if (type && strcmp(type, "shell_output") == 0) {
       long long start = json_field_integer(line, "start", -1);
       long long end = json_field_integer(line, "end", -1);

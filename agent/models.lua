@@ -18,6 +18,9 @@ local function normalize_selected_reasoning_effort(value)
 end
 
 function M.model_context_length(item)
+    if type(item.context_limit) == "number" and item.context_limit > 0 then
+        return item.context_limit
+    end
     local top = item.top_provider and item.top_provider.context_length or 0
     if top and top > 0 then return top end
     if item.context_length and item.context_length > 0 then
@@ -75,9 +78,9 @@ local function load_provider_models(provider)
     return nil
 end
 
-local function provider_model_limit(provider)
+local function provider_model_limit(provider, catalog)
     if not provider or not provider.model or provider.model == "" then return 0 end
-    local models = load_provider_models(provider)
+    local models = catalog or load_provider_models(provider)
     if not models then return 0 end
 
     local wanted = normalized_model_id(provider.model)
@@ -98,6 +101,12 @@ local function provider_model_limit(provider)
 end
 
 function M.ensure_context_limit(provider)
+    local configured = provider_model_limit(provider, provider.models or {})
+    if configured <= 0 then configured = provider.configured_context_limit or 0 end
+    if configured > 0 then
+        provider.context_limit = configured
+        return configured
+    end
     if provider.context_limit and provider.context_limit > 0 then
         return provider.context_limit
     end

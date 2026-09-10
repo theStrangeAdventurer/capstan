@@ -93,6 +93,15 @@ return {
 ## Behavior
 
 - `provider` and `providers` configure the `agent/` Lua runtime.
+- Context capacity is resolved centrally in `agent/models.lua`: a positive
+  `providers.<name>.models[].context_limit` for the selected model wins over
+  provider-level `context_limit`, then API catalog metadata is a fallback only.
+  Configured model entries also accept `context_length` (including the legacy
+  `top_provider.context_length`); explicit `context_limit` wins over both.
+  Explicit provider limits are retained separately from resolved capacity so
+  model/profile switches and per-run model copies do not lose configuration.
+  Unknown capacity remains zero. This policy serves usage display and automatic
+  compaction in the shared runtime. Regression tests: `test/test_context_limits.lua`.
 - `CAPSTAN_PROVIDER`, `CAPSTAN_MODEL`, and `CAPSTAN_CONTEXT_LIMIT` override the
   active provider selection, its model, and context limit. Provider-native API
   key variables such as `DEEPSEEK_API_KEY` and `OPENROUTER_API_KEY` override

@@ -47,6 +47,17 @@ curl handle lifecycle, or persisted permission storage.
 | `agent/ui.lua` | Canonical adapter for UI-only agent-message appends. |
 | `agent/hooks.lua` | Pipeline hook registry and config/plugin hook installation. |
 
+## Streaming token display
+
+`agent/stream.lua` owns live UI usage updates. Text, reasoning, and tool-call
+names/arguments contribute to approximate output tokens even when the model's
+context limit is absent or zero. Provider usage counters take precedence when
+present (including measured zero); missing counters fall back to local estimates
+rather than resetting the display to zero. Estimates remain UI-only and are not
+exported as measured usage in stream metrics. Suppressed child streams do not
+update the parent UI. Each new model request starts its own output count.
+Regression coverage lives in `test/test_runtime_timeline.lua`.
+
 ## Sequence
 
 ```mermaid

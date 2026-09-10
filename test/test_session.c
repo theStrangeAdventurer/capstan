@@ -56,12 +56,17 @@ static MunitResult test_round_trip(const MunitParameter params[], void *data) {
   };
   session.messages = messages;
   session.message_count = 3;
+  session.usage = (UsageStats){30000, 1234, 31234, 32768};
   session.updated_at += 5;
   munit_assert_true(session_save(&session));
 
   Session loaded;
   munit_assert_true(session_load(session.id, &loaded));
   munit_assert_string_equal(loaded.title, "Тестовая сессия");
+  munit_assert_int(loaded.usage.prompt_tokens, ==, 30000);
+  munit_assert_int(loaded.usage.completion_tokens, ==, 1234);
+  munit_assert_int(loaded.usage.total_tokens, ==, 31234);
+  munit_assert_int(loaded.usage.context_limit, ==, 32768);
   munit_assert_true(loaded.title_generated);
   munit_assert_size(loaded.message_count, ==, 2);
   munit_assert_int(loaded.messages[0].role, ==, SESSION_ROLE_USER);

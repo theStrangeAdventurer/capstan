@@ -14,6 +14,16 @@
 
 static Session g_active = {0};
 static unsigned long g_saved_revision = 0;
+static UsageStats g_saved_usage;
+
+static int session_dirty(void) {
+  UsageStats usage = agent_usage();
+  return agent_messages_revision() != g_saved_revision ||
+         usage.prompt_tokens != g_saved_usage.prompt_tokens ||
+         usage.completion_tokens != g_saved_usage.completion_tokens ||
+         usage.total_tokens != g_saved_usage.total_tokens ||
+         usage.context_limit != g_saved_usage.context_limit;
+}
 static long long g_dirty_since_ms = 0;
 static int g_initialized = 0;
 static char g_title_user_text[4096];
@@ -144,9 +154,11 @@ int session_manager_save(void) {
     return 0;
   update_title();
   g_active.updated_at = time(NULL);
+  g_active.usage = agent_usage();
   int ok = session_save(&g_active);
   release_snapshot();
   if (ok) {
+    g_saved_usage = g_active.usage;
     g_saved_revision = agent_messages_revision();
     g_dirty_since_ms = 0;
   }
@@ -253,6 +265,8 @@ static void install_loaded(Session *loaded) {
   loaded->message_count = 0;
   loaded->tasks_json = NULL;
   release_snapshot();
+  agent_restore_usage(g_active.usage);
+  g_saved_usage = g_active.usage;
   g_saved_revision = agent_messages_revision();
   g_dirty_since_ms = 0;
   log_set_session_id(g_active.id);
@@ -261,7 +275,7 @@ static void install_loaded(Session *loaded) {
 int session_manager_new(void) {
   if (!g_initialized)
     return 0;
-  if (g_active.id[0] && agent_messages_revision() != g_saved_revision &&
+  if (g_active.id[0] && session_dirty() &&
       !session_manager_save())
     return 0;
   Session created;
@@ -270,6 +284,8 @@ int session_manager_new(void) {
   clear_messages();
   session_free(&g_active);
   g_active = created;
+  agent_restore_usage(g_active.usage);
+  g_saved_usage = g_active.usage;
   g_saved_revision = agent_messages_revision();
   g_dirty_since_ms = 0;
   log_set_session_id(g_active.id);
@@ -281,7 +297,7 @@ int session_manager_switch(const char *id) {
     return 0;
   if (strcmp(id, g_active.id) == 0)
     return 1;
-  if (agent_messages_revision() != g_saved_revision && !session_manager_save())
+  if (session_dirty() && !session_manager_save())
     return 0;
   Session loaded;
   if (!session_load(id, &loaded))
@@ -343,7 +359,7 @@ int session_manager_init(const char *workspace_root) {
 }
 
 void session_manager_tick(void) {
-  if (!g_initialized || agent_messages_revision() == g_saved_revision)
+  if (!g_initialized || !session_dirty())
     return;
   long long now = now_ms();
   if (!g_dirty_since_ms)
@@ -417,7 +433,7 @@ int session_manager_set_generated_title(const char *id, const char *title) {
 }
 
 void session_manager_shutdown(void) {
-  if (g_initialized && agent_messages_revision() != g_saved_revision)
+  if (g_initialized && session_dirty())
     session_manager_save();
   session_free(&g_active);
   g_initialized = 0;

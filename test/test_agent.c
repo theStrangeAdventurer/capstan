@@ -322,13 +322,26 @@ static MunitResult test_selected_session_create_and_resume(
       "assert(agent.finish_run(context, 'custom key'))\n"
       "assert(starts == 1 and finishes == 1)\n"), ==, LUA_OK);
   munit_assert_false(agent_is_running());
+  /* A usage-only update after the message snapshot must still be saved. */
+  munit_assert_int(luaL_dostring(L,
+      "agent.set_usage(30000, 1234, 31234, 32768)"), ==, LUA_OK);
   lua_close(L);
   session_manager_shutdown();
+  agent_reset_usage();
   clear_messages();
 
   munit_assert_true(session_manager_init_selected(
       "/repo/selected-session", "custom key"));
   munit_assert_string_equal(session_manager_active_id(), "custom key");
+  munit_assert_int(agent_usage().prompt_tokens, ==, 30000);
+  munit_assert_int(agent_usage().completion_tokens, ==, 1234);
+  munit_assert_int(agent_usage().total_tokens, ==, 31234);
+  munit_assert_int(agent_usage().context_limit, ==, 32768);
+  munit_assert_true(session_manager_new());
+  munit_assert_int(agent_usage().prompt_tokens, ==, 0);
+  munit_assert_int(agent_usage().context_limit, ==, 0);
+  munit_assert_true(session_manager_switch("custom key"));
+  munit_assert_int(agent_usage().prompt_tokens, ==, 30000);
   Messages *messages = get_messages();
   munit_assert_size(messages->size, ==, 2);
   munit_assert_string_equal(messages->items[0]->text, "persisted message");

@@ -2,6 +2,7 @@
 #define SESSION_H
 
 #include "shell_output.h"
+#include "usage.h"
 #include <stddef.h>
 #include <time.h>
 
@@ -39,6 +40,7 @@ typedef struct {
   char *tasks_json; /* Owned opaque JSON; NULL means no task plan. */
   int tasks_view; /* 0: config default, 1: collapsed, 2: expanded. */
   int tasks_scroll; /* Session-local wrapped row offset (not persisted). */
+  UsageStats usage; /* Last displayed request usage, not cumulative billing. */
 } Session;
 
 typedef struct {

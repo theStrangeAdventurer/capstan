@@ -52,6 +52,13 @@ int start_screen_wordmark_pixel(int row, int column);
 /* Terminal cell mask: bit 0 = upper half, bit 1 = lower half. */
 int start_screen_wordmark_cell(int row, int column);
 int start_screen_animation_tick(long long elapsed_ms);
+/* Zero-initialize; hiding the screen resets its opening time. */
+typedef struct {
+  int visible;
+  long long opened_ms;
+} StartScreenAnimation;
+int start_screen_animation_frame(StartScreenAnimation *animation, int visible,
+                                 long long now_ms);
 int start_screen_gradient_level(int row, int column, int tick);
 
 #endif

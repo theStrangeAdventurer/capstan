@@ -113,6 +113,11 @@ function M.build()
         active_provider.context_limit = env_context_limit_value
     end
 
+    for _, provider in pairs(runtime.providers) do
+        -- Keep explicit configuration separate from the resolved model cache.
+        provider.configured_context_limit = provider.context_limit
+    end
+
     return runtime
 end
 

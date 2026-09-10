@@ -29,8 +29,6 @@
 #include <time.h>
 
 BufferedPluginResults g_buffered_results = {0};
-static int g_tool_status_color_pair = 0;
-static int g_dim_color_pair = 0;
 static int g_diff_add_color_pair = 0;
 static int g_diff_del_color_pair = 0;
 
@@ -85,33 +83,23 @@ void init_tui(void) {
     init_pair(2, COLOR_GREEN, -1);
     init_pair(3, COLOR_YELLOW, -1);
     init_pair(4, COLOR_BLACK, COLOR_YELLOW);
-    init_pair(5, -1, COLOR_BLACK);
+    init_pair(5, -1, -1);
     init_pair(21, COLOR_BLACK, COLORS >= 256 ? 234 : COLOR_BLACK);
-    init_pair(22, COLORS >= 256 ? 141 : COLOR_MAGENTA, COLOR_BLACK);
-    init_pair(6, COLOR_RED, COLOR_BLACK);
+    init_pair(6, COLOR_RED, -1);
     init_pair(8, COLOR_RED, -1);
     init_pair(9, COLORS >= 216 ? 208 : COLOR_YELLOW, -1);
     init_pair(10, COLOR_BLUE, -1);
     init_pair(11, COLOR_BLACK, COLOR_WHITE);
-    if (COLORS >= 256) {
-      init_pair(14, 141, -1);
-      init_pair(15, 147, -1);
-      init_pair(16, 153, -1);
-      init_pair(17, 189, -1);
-      init_pair(18, 195, -1);
-      init_pair(19, 231, -1);
-    } else {
-      init_pair(14, COLOR_MAGENTA, -1);
-      init_pair(15, COLOR_MAGENTA, -1);
-      init_pair(16, COLOR_WHITE, -1);
-      init_pair(17, COLOR_WHITE, -1);
-      init_pair(18, COLOR_WHITE, -1);
-      init_pair(19, COLOR_WHITE, -1);
-    }
+    /* The only brand accent is the runtime status indicator. */
+    init_pair(14, COLORS >= 256 ? 141 : COLOR_MAGENTA, -1);
     if (COLORS >= 256) {
       init_pair(12, 65, -1);
       init_pair(13, 95, -1);
       init_pair(20, 179, -1);
+      /* Six neutral shades: visible reflection without a brand tint. */
+      static const short logo_grays[] = {245, 248, 250, 252, 254, 231};
+      for (int i = 0; i < 6; i++)
+        init_pair(22 + i, logo_grays[i], -1);
     } else {
       init_pair(12, COLOR_GREEN, -1);
       init_pair(13, COLOR_RED, -1);
@@ -119,11 +107,6 @@ void init_tui(void) {
     }
     g_diff_add_color_pair = 12;
     g_diff_del_color_pair = 13;
-    if (COLORS > 8) {
-      init_pair(7, COLORS >= 256 ? 245 : COLOR_WHITE, -1);
-      g_tool_status_color_pair = 7;
-      g_dim_color_pair = 7;
-    }
   }
   curs_set(1);
 }
@@ -188,9 +171,9 @@ static void render_session_header(int cols) {
       size_t prefix_len = strlen(prefix);
       if (row == 1 && strncmp(layout.text, prefix, prefix_len) == 0) {
         mvwaddnstr(win, 1 + row, layout.x - x, layout.text, (int)prefix_len);
-        wattron(win, COLOR_PAIR(22));
+        wattron(win, A_BOLD);
         waddstr(win, layout.text + prefix_len);
-        wattron(win, COLOR_PAIR(5));
+        wattroff(win, A_BOLD);
       } else {
         mvwaddstr(win, 1 + row, layout.x - x, layout.text);
       }
@@ -264,17 +247,7 @@ static int centered_x(int width, const char *text) {
 }
 
 static int dim_gray_attr(void) {
-  return g_dim_color_pair ? COLOR_PAIR(g_dim_color_pair) : A_DIM;
-}
-
-static int profile_color_pair(const char *profile) {
-  if (!profile)
-    return 0;
-  if (strcmp(profile, "implement") == 0)
-    return 20;
-  if (strcmp(profile, "plan") == 0)
-    return 10;
-  return 0;
+  return A_DIM;
 }
 
 static void mvwadd_clipped(WINDOW *win, int y, int x, const char *text,
@@ -371,16 +344,9 @@ static void render_profile_pair(WINDOW *win, int y, int x, const char *profile,
   mvwaddstr(win, y, x, "profile");
   wattroff(win, dim);
 
-  int pair = profile_color_pair(profile);
-  if (pair)
-    wattron(win, A_BOLD | COLOR_PAIR(pair));
-  else
-    wattron(win, A_BOLD);
+  wattron(win, A_BOLD);
   mvwadd_clipped(win, y, x + 9, profile, value_width);
-  if (pair)
-    wattroff(win, A_BOLD | COLOR_PAIR(pair));
-  else
-    wattroff(win, A_BOLD);
+  wattroff(win, A_BOLD);
 }
 
 static void render_start_screen_minimal(WINDOW *win, int height, int width) {
@@ -390,17 +356,19 @@ static void render_start_screen_minimal(WINDOW *win, int height, int width) {
   int title_y = height / 2 - 1;
   int title_x = centered_x(width, APP_BANNER_TITLE);
 
-  wattron(win, A_BOLD | COLOR_PAIR(1));
+  wattron(win, A_BOLD);
   mvwaddstr(win, title_y, title_x, APP_BANNER_TITLE);
-  wattroff(win, A_BOLD | COLOR_PAIR(1));
+  wattroff(win, A_BOLD);
 }
+
+static StartScreenAnimation g_start_animation;
 
 static int start_screen_current_animation_tick(void) {
   struct timespec now;
   if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
-    return 0;
-  long long elapsed_ms = now.tv_sec * 1000LL + now.tv_nsec / 1000000LL;
-  return start_screen_animation_tick(elapsed_ms);
+    return 0; /* Resting logo if the clock is unavailable. */
+  long long now_ms = now.tv_sec * 1000LL + now.tv_nsec / 1000000LL;
+  return start_screen_animation_frame(&g_start_animation, 1, now_ms);
 }
 
 static void render_start_screen_wordmark(WINDOW *win, int y, int x) {
@@ -412,7 +380,10 @@ static void render_start_screen_wordmark(WINDOW *win, int y, int x) {
       if (!cell)
         continue;
       int level = start_screen_gradient_level(row * 2, column, tick);
-      int attrs = COLOR_PAIR(14 + level - 1);
+      /* Keep the attribute fallback for terminals without 256 colors. */
+      int attrs = has_colors() && COLORS >= 256
+                      ? COLOR_PAIR(21 + level)
+                      : level == 1 ? A_DIM : level >= 5 ? A_BOLD : A_NORMAL;
       wattron(win, attrs);
       mvwaddstr(win, y + row, x + column, cells[cell]);
       wattroff(win, attrs);
@@ -431,9 +402,9 @@ static void render_start_screen_content(WINDOW *win, int height, int width,
   if (wide) {
     render_start_screen_wordmark(win, content.y, x);
   } else {
-    wattron(win, A_BOLD | COLOR_PAIR(14));
+    wattron(win, A_BOLD);
     mvwaddstr(win, content.y, x, "CAPSTAN");
-    wattroff(win, A_BOLD | COLOR_PAIR(14));
+    wattroff(win, A_BOLD);
   }
 
   /* Keep the version with the brand, not floating at the window's edge. */
@@ -450,9 +421,10 @@ static void render_start_screen_content(WINDOW *win, int height, int width,
   render_status_pair(win, content.status_y + 3, x, "workdir", lines->workdir,
                      value_w);
 
-  wattron(win, COLOR_PAIR(2));
-  mvwaddstr(win, content.ready_y, x, "● ready");
-  wattroff(win, COLOR_PAIR(2));
+  wattron(win, COLOR_PAIR(14));
+  mvwaddstr(win, content.ready_y, x, "●");
+  wattroff(win, COLOR_PAIR(14));
+  waddstr(win, " ready");
   mvwadd_clipped(win, content.ready_y, x + 9, lines->ready, value_w);
   wattron(win, dim);
   mvwadd_clipped(win, content.ready_y + 1, x, lines->shortcuts, content.width);
@@ -597,7 +569,7 @@ static void render_tasks_control(WINDOW *win, int y, int width, int clearance) {
   int length = text_columns(label, strlen(label));
   int x = (width - length) / 2;
   int saved = getattrs(win);
-  wattrset(win, COLOR_PAIR(14)); /* Purple from the logo palette. */
+  wattrset(win, A_NORMAL);
   mvwaddstr(win, 0, x, label);
   wattrset(win, saved);
   g_tasks.chevron_y = y;
@@ -612,13 +584,13 @@ static void render_tasks(int input_y, int width) {
   if (!win) return;
   /* Inherit the terminal palette; the input's top edge closes this panel. */
   werase(win);
-  wattron(win, COLOR_PAIR(14));
+  wattron(win, A_DIM);
   mvwhline(win, 0, 1, ACS_HLINE, width - 2);
   mvwvline(win, 1, 0, ACS_VLINE, g_tasks.height - 1);
   mvwvline(win, 1, width - 1, ACS_VLINE, g_tasks.height - 1);
   mvwaddstr(win, 0, 0, "╭");
   mvwaddstr(win, 0, width - 1, "╮");
-  wattroff(win, COLOR_PAIR(14));
+  wattroff(win, A_DIM);
   render_tasks_control(win, g_tasks.y, width, 1);
   int offset = *session_manager_tasks_scroll();
   if (g_tasks.lines > g_tasks.height - 1) {
@@ -937,7 +909,11 @@ void render_all(void) {
   int win_row = 0;
 
   if (msgs->size == 0) {
+    /* Begin timing even in layouts that do not display the wordmark. */
+    (void)start_screen_current_animation_tick();
     render_start_screen(msg_win, msg_h, inner_w);
+  } else {
+    (void)start_screen_animation_frame(&g_start_animation, 0, 0);
   }
 
   for (size_t i = 0; i < msgs->size && win_row < msg_h; i++) {
@@ -995,9 +971,7 @@ void render_all(void) {
             (current_diff_state == 3 || current_diff_state == 4)
                 ? diff_line_color_pair(logical_line_start)
                 : 0;
-        int tool_status_attrs = A_NORMAL;
-        if (g_tool_status_color_pair)
-          tool_status_attrs |= COLOR_PAIR(g_tool_status_color_pair);
+        int tool_status_attrs = dim_gray_attr();
         if (is_tool_status) {
           wattroff(msg_win, A_DIM);
           wattron(msg_win, tool_status_attrs);
@@ -1037,8 +1011,7 @@ void render_all(void) {
               continue;
             int offset = text_columns(p, (size_t)(c - p));
             mvwchgat(msg_win, win_row, MSG_PAD_H + offset, 1,
-                     A_BOLD | (g_dim_color_pair ? 0 : A_DIM),
-                     g_dim_color_pair, NULL);
+                     A_BOLD | A_DIM, 0, NULL);
           }
         }
 

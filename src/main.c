@@ -895,6 +895,7 @@ static int headless_session_finish(Session *session,
     session->message_count++;
   }
   session->updated_at = time(NULL);
+  session->usage = agent_usage();
   int ok = session_save(session);
   log_event("session", ok ? "headless session finished"
                            : "headless session save failed");

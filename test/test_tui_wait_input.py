@@ -218,6 +218,8 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                "PATH": os.defpath, "LANG": "en_US.UTF-8",
                "XDG_CONFIG_HOME": str(home / ".config"),
                "XDG_STATE_HOME": str(home / ".local/state")}
+        if case == "palette_16":
+            env["TERM"] = "xterm"
         if case == "session_copy":
             commands = root / "bin"
             commands.mkdir()
@@ -268,6 +270,30 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
             until(lambda: b"\x1b[?2004h" in screen, "terminal startup")
             # Wait for initial rendering after plugin and session initialization.
             until(lambda: b"ready" in screen, "initial screen")
+            if case.startswith("palette"):
+                pause(3.8)  # Observe a whole reflection cycle, including its pause.
+                output = bytes(screen)
+                styles = {sgr_attributes(output[:m.start()])
+                          for m in re.finditer('▀|▄|█'.encode(), output)}
+                expected = ({(None, False, True), (None, False, False),
+                             (None, True, False)} if case == 'palette_16' else
+                            {(color, False, False) for color in (245, 248, 250, 252, 254, 231)})
+                assert styles == expected, styles
+                assert sgr_attributes(output.split(b" ready", 1)[0])[0] is None
+                assert sgr_attributes(output.split(b"implement", 1)[0]) == (None, True, False)
+                dot = output.index('●'.encode())
+                assert sgr_attributes(output[:dot])[0] == (5 if case == 'palette_16' else 141)
+                before = len(screen)
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 20, 60, 0, 0))
+                proc.send_signal(signal.SIGWINCH)
+                until(lambda: b'CAPSTAN' in screen[before:], 'neutral compact logo')
+                assert sgr_attributes(bytes(screen).rsplit(b'CAPSTAN', 1)[0]) == (None, True, False)
+                send('tasks\r')
+                until(lambda: b'[ Tasks 0/12 ' in screen, 'neutral task control')
+                assert sgr_attributes(bytes(screen).split(b'[ Tasks 0/12 ', 1)[0])[0] is None
+                print(f'TUI {case}: neutral logo, reflection, profile, tasks and status accent: ok')
+                return
+
             if case == "session_copy":
                 def active_header():
                     directory = next((home / '.local/state/capstan/sessions').iterdir())
@@ -608,9 +634,9 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                     send("fold_wait\r" if case == "shell_wait" else "fold\r")
                 until(lambda: b"[+]" in screen and b"21 lines" in screen,
                       "collapsed shell output")
-                assert sgr_attributes(bytes(screen).split(b"[+]", 1)[0]) == (245, True, False), \
+                assert sgr_attributes(bytes(screen).split(b"[+]", 1)[0]) == (None, True, True), \
                     (case, "expand marker is not bold gray")
-                assert sgr_attributes(bytes(screen).split(b"21 lines", 1)[0]) == (245, False, False), \
+                assert sgr_attributes(bytes(screen).split(b"21 lines", 1)[0]) == (None, False, True), \
                     (case, "line count should stay gray, not bold")
                 assert b"BODY_01" not in screen, "folded body was painted"
                 # Paste atomically: per-key paints can split 'draft' with
@@ -634,10 +660,10 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 until(lambda: b"BODY_01" in screen[before:], "expanded shell output")
                 # Check the first paint, without waiting for an effect to settle.
                 prefix = bytes(screen).split(b"BODY_01", 1)[0]
-                assert sgr_attributes(prefix) == (245, False, False), \
+                assert sgr_attributes(prefix) == (None, False, True), \
                     (case, "shell body is not immediately plain gray")
                 minus = bytes(screen).find(b"-", before)
-                assert minus >= 0 and sgr_attributes(bytes(screen[:minus])) == (245, True, False), \
+                assert minus >= 0 and sgr_attributes(bytes(screen[:minus])) == (None, True, True), \
                     (case, "collapse marker is not bold gray")
                 before = len(screen)
                 click()
@@ -720,7 +746,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
 
 
 if __name__ == "__main__":
-    for scenario in ("session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
+    for scenario in ("palette", "palette_16", "session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
                      "permit_handoff", "permit_new", "shell_multiline",
                      "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear"):
         run_case(scenario)
