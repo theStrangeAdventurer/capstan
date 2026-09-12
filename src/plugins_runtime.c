@@ -1,5 +1,6 @@
 #include "mcp.h"
 #include "plugins.h"
+#include "process_manager.h"
 #include "plugins_internal.h"
 #include "agent.h"
 #include "app_config.h"
@@ -802,5 +803,6 @@ void plugins_cleanup(void) {
     L = NULL;
   }
   mcp_cleanup();
+  process_manager_shutdown();
   http_cleanup();
 }

@@ -48,6 +48,8 @@ int tui_handle_input_shortcut(int ch);
 int tui_handle_reasoning_shortcut(int ch);
 int tui_focus_input_at_point(int rows, int cols, int y, int x);
 void tui_pump_blocking(void);
+int tui_handle_process_input(int ch);
+int tui_submit_process_command(void);
 int tui_handle_paste(int ch);
 void buffer_plugin_result(const char *label, char *ui_result, char *raw_result,
                           size_t shell_output_start, struct MessageImage *images,

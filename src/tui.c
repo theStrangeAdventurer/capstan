@@ -1,4 +1,6 @@
 #include "tui.h"
+#include "process_panel.h"
+#include "process_manager.h"
 #include "agent.h"
 #include "app_config.h"
 #include "clipboard.h"
@@ -1339,11 +1341,13 @@ void render_all(void) {
   curs_set(mode_get() == FOCUS_MESSAGES ? 0 : 1);
 
   mvhline(0, 0, ' ', cols);
+  process_panel_indicator(!session_overlay_visible());
   wnoutrefresh(stdscr);
   wnoutrefresh(msg_win);
   render_tasks(input_y, inner_w);
   render_session_header(cols);
   wnoutrefresh(input_win);
+  process_panel_render();
   popup_render_message();
   popup_render();
   doupdate();
@@ -1460,13 +1464,51 @@ int tui_handle_paste(int ch) {
   return tui_feed_paste(stdscr, ch);
 }
 
+int tui_submit_process_command(void) {
+  if (input_image_count() || !process_panel_command(input_get_text())) return 0;
+  input_clear();
+  process_panel_open();
+  return 1;
+}
+
+int tui_handle_process_input(int ch) {
+  static int discard_paste, paste_end;
+  if (discard_paste) {
+    const char *end = "\033[201~";
+    paste_end = ch == (unsigned char)end[paste_end] ? paste_end + 1 :
+                ch == 27 ? 1 : 0;
+    if (!end[paste_end]) {
+      discard_paste = paste_end = 0;
+      keypad(stdscr, TRUE);
+    }
+    return 1;
+  }
+  if (popup_is_active() || popup_is_message_active() || input_paste_active()) return 0;
+  if (process_panel_active() && ch == TUI_KEY_PASTE_BEGIN) {
+    discard_paste = 1;
+    keypad(stdscr, FALSE);
+    return 1;
+  }
+  if (ch == KEY_MOUSE) {
+    if (!process_panel_active()) return 0;
+    MEVENT event;
+    if (getmouse(&event) == OK)
+      process_panel_mouse(event.y, event.x, event.bstate);
+    return 1;
+  }
+  return process_panel_key(ch);
+}
+
 void tui_pump_blocking(void) {
+  process_manager_poll();
   if (!stdscr)
     return;
 
   int ch;
   /* Bound each input batch so large pastes cannot starve the waiting work. */
   for (int count = 0; count < 256 && (ch = getch()) != ERR; count++) {
+    if (tui_handle_process_input(ch))
+      continue;
     if (tui_handle_paste(ch))
       continue;
     if (popup_is_message_active()) {
@@ -1488,6 +1530,8 @@ void tui_pump_blocking(void) {
       if (getmouse(&event) == OK) {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
+        if (!popup_is_active() && process_panel_mouse(event.y, event.x, event.bstate))
+          continue;
         if (tui_handle_session_mouse(event.y, event.x, event.bstate))
           continue;
         if (tui_handle_tasks_mouse(event.y, event.x, event.bstate))
@@ -1524,6 +1568,8 @@ void tui_pump_blocking(void) {
          Outside that run, the blocking pump may be nested inside a Lua plugin,
          MCP operation, shell command, or permission path. Keep the editor
          contents intact instead of re-entering dispatch on the same lua_State. */
+      if (tui_submit_process_command())
+        continue;
       if (dispatch_blocking_enter_allowed(agent_is_running()))
         dispatch_submit();
     }
@@ -1562,7 +1608,7 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   if (!win)
     return "deny";
   keypad(win, input_paste_active() ? FALSE : TRUE);
-  nodelay(win, FALSE);
+  wtimeout(win, 100);
 
   wattron(win, COLOR_PAIR(5));
   werase(win);
@@ -1602,7 +1648,9 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
     wnoutrefresh(win);
     doupdate();
 
+    process_manager_poll(); /* Drain output without allowing modal bypass. */
     int ch = wgetch(win);
+    if (ch == ERR) continue;
     /* A paste may begin here or arrive half-consumed from the main/wait loop.
        Preserve it in the editor, never interpret it as permission shortcuts. */
     if (tui_feed_paste(win, ch))

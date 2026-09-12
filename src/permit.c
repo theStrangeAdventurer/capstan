@@ -3,6 +3,9 @@
 #include "log.h"
 #include "permit.h"
 #include "shell_process.h"
+#include "process_manager.h"
+#include "process_observe.h"
+#include "session_manager.h"
 #include "tui.h"
 #include "utils.h"
 #include <lauxlib.h>
@@ -300,14 +303,144 @@ void permit_init(lua_State *L) {
   lua_setglobal(L, "permit");
 }
 
+/* NULL scope is reserved for manual UI calls; model calls always install an
+ * explicit owner. Never accept ownership or PIDs from tool arguments. */
+static char process_owner[128];
+static int process_scoped;
+
+static const char *tools_process_owner(void) {
+  if (process_scoped) return process_owner;
+  const char *owner = session_manager_active_id();
+  return owner ? owner : "";
+}
+
+static int l_tools_process_scope(lua_State *L) {
+  const char *owner = luaL_optstring(L, 1, NULL);
+  if (owner && strlen(owner) >= sizeof(process_owner))
+    return luaL_error(L, "process owner too long");
+  if (process_scoped) lua_pushstring(L, process_owner);
+  else lua_pushnil(L);
+  snprintf(process_owner, sizeof(process_owner), "%s", owner ? owner : "");
+  process_scoped = owner != NULL;
+  process_manager_set_owner(tools_process_owner());
+  return 1;
+}
+
+static int process_visible(const ProcessSnapshot *s) {
+  /* Runtime-owned MCPs are shared, but never expose another session's child. */
+  return !process_scoped || strcmp(s->owner, tools_process_owner()) == 0 ||
+      (strcmp(s->owner, "runtime") == 0 && strcmp(s->kind, "mcp") == 0);
+}
+
+static void push_process(lua_State *L, const ProcessSnapshot *s) {
+  lua_newtable(L);
+#define PROCESS_STRING(field) lua_pushstring(L, s->field); lua_setfield(L, -2, #field)
+#define PROCESS_NUMBER(field) lua_pushinteger(L, s->field); lua_setfield(L, -2, #field)
+#define PROCESS_BOOL(field) lua_pushboolean(L, s->field); lua_setfield(L, -2, #field)
+  PROCESS_STRING(id); PROCESS_STRING(kind); PROCESS_STRING(label);
+  PROCESS_STRING(workdir); PROCESS_STRING(owner);
+  PROCESS_NUMBER(pid); PROCESS_NUMBER(pgid); PROCESS_NUMBER(started_ms);
+  PROCESS_NUMBER(finished_ms);
+  PROCESS_BOOL(running); PROCESS_BOOL(stopping); PROCESS_BOOL(timed_out);
+  PROCESS_BOOL(output_available); PROCESS_BOOL(truncated);
+  if (!s->running) {
+    lua_pushinteger(L, s->exit_code); lua_setfield(L, -2, "exit");
+  }
+  lua_pushstring(L, s->running ? (s->stopping ? "stopping" : "running") :
+      (s->timed_out ? "timed_out" : "exited"));
+  lua_setfield(L, -2, "status");
+#undef PROCESS_STRING
+#undef PROCESS_NUMBER
+#undef PROCESS_BOOL
+}
+
+static int l_tools_processes(lua_State *L) {
+  const char *action = luaL_optstring(L, 1, "list");
+  process_manager_poll();
+  if (strcmp(action, "list") == 0) {
+    lua_newtable(L);
+    lua_Integer n = 0;
+    for (size_t i = 0; i < process_manager_count(); ++i) {
+      ProcessSnapshot s;
+      if (process_manager_at(i, &s) && process_visible(&s)) {
+        push_process(L, &s);
+        lua_rawseti(L, -2, ++n);
+      }
+    }
+    return 1;
+  }
+  if (strcmp(action, "get") != 0 && strcmp(action, "output") != 0)
+    return luaL_error(L, "unknown processes action");
+  const char *id = luaL_checkstring(L, 2);
+  ProcessSnapshot s;
+  if (!process_manager_get(id, &s) || !process_visible(&s))
+    return luaL_error(L, "process not found in this session");
+  push_process(L, &s);
+  if (strcmp(action, "get") == 0) {
+    ProcessDescendant children[128];
+    size_t count = s.running ? process_observe_descendants(s.pid, s.pgid, children, 128) : 0;
+    lua_newtable(L);
+    for (size_t i = 0; i < count; i++) {
+      lua_newtable(L);
+      lua_pushinteger(L, children[i].pid); lua_setfield(L, -2, "pid");
+      lua_pushinteger(L, children[i].ppid); lua_setfield(L, -2, "ppid");
+      lua_pushstring(L, children[i].name); lua_setfield(L, -2, "name");
+      lua_pushboolean(L, children[i].in_managed_group); lua_setfield(L, -2, "in_managed_group");
+      lua_pushboolean(L, 1); lua_setfield(L, -2, "observed_only");
+      lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    lua_setfield(L, -2, "descendants");
+  }
+  if (strcmp(action, "output") == 0) {
+    for (int stream = 0; stream < 2; ++stream) {
+      char *output = process_manager_output(id, stream);
+      lua_pushstring(L, output ? output : "");
+      free(output);
+      lua_setfield(L, -2, stream ? "stderr" : "stdout");
+    }
+  }
+  return 1;
+}
+
+static int l_tools_process_stop(lua_State *L) {
+  const char *id = luaL_checkstring(L, 1);
+  ProcessSnapshot s;
+  if (!process_manager_get(id, &s) || !process_visible(&s))
+    return luaL_error(L, "process not found in this session");
+  /* The dispatcher authorizes the distinct process_stop permission before
+   * this binding, including one-shot/ACP grants. Ownership is enforced here;
+   * never reinterpret a shell/MCP grant as a process_stop grant. */
+  if (!process_manager_stop(id))
+    return luaL_error(L, "failed to request process stop");
+  if (!process_manager_get(id, &s))
+    return luaL_error(L, "process snapshot unavailable");
+  push_process(L, &s);
+  return 1;
+}
+
 static int l_tools_shell(lua_State *L) {
   const char *command = luaL_checkstring(L, 1);
-  int timeout = PERMIT_DEFAULT_SHELL_TIMEOUT;
-  if (lua_gettop(L) >= 2)
-    timeout = (int)luaL_checkinteger(L, 2);
-  if (timeout <= 0)
-    timeout = PERMIT_DEFAULT_SHELL_TIMEOUT;
+  int background = lua_toboolean(L, 3);
+  lua_Integer requested = luaL_optinteger(L, 2,
+      background ? 0 : PERMIT_DEFAULT_SHELL_TIMEOUT);
+  int timeout = background && requested > 300 ? 300 : (requested > 0 ? (int)requested :
+      (background ? 0 : PERMIT_DEFAULT_SHELL_TIMEOUT));
+  if (background) {
+    char id[PROCESS_ID_SIZE];
+    process_manager_set_owner(tools_process_owner());
+    if (!process_manager_start(command, NULL, app_workdir(), timeout,
+        PERMIT_MAX_STDOUT, PERMIT_MAX_STDERR, id))
+      return luaL_error(L, "failed to start background shell process");
+    ProcessSnapshot s;
+    if (!process_manager_get(id, &s))
+      return luaL_error(L, "background process snapshot unavailable");
+    process_manager_watch(id);
+    push_process(L, &s);
+    lua_pushboolean(L, 1); lua_setfield(L, -2, "started");
+    return 1;
+  }
 
+  process_manager_set_owner(tools_process_owner());
   long long started_ms = now_ms();
   log_shell_start(timeout, command);
   ShellProcessResult result;
@@ -364,6 +497,7 @@ static int l_tools_exec(lua_State *L) {
   if (timeout <= 0)
     timeout = PERMIT_DEFAULT_SHELL_TIMEOUT;
   ShellProcessResult result;
+  process_manager_set_owner(tools_process_owner());
   int started = shell_process_run_argv(argv, app_workspace_root(), timeout,
       PERMIT_MAX_STDOUT, PERMIT_MAX_STDERR, tui_pump_blocking, &result);
   free(argv);
@@ -381,11 +515,38 @@ static int l_tools_exec(lua_State *L) {
   return 1;
 }
 
+/* Internal runtime operations, deliberately absent from model schemas. */
+static int l_tools_process_events(lua_State *L) {
+  const char *owner = luaL_checkstring(L, 1);
+  process_manager_poll();
+  lua_newtable(L);
+  ProcessSnapshot s;
+  int n = 0;
+  while (process_manager_completion(owner, &s)) {
+    push_process(L, &s);
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+static int l_tools_process_close_owner(lua_State *L) {
+  lua_pushboolean(L, process_manager_close_owner(luaL_checkstring(L, 1)));
+  return 1;
+}
 void tools_init(lua_State *L) {
   lua_newtable(L);
   lua_pushcfunction(L, l_tools_shell);
   lua_setfield(L, -2, "shell");
   lua_pushcfunction(L, l_tools_exec);
   lua_setfield(L, -2, "exec");
+  lua_pushcfunction(L, l_tools_process_scope);
+  lua_setfield(L, -2, "process_scope");
+  lua_pushcfunction(L, l_tools_processes);
+  lua_setfield(L, -2, "processes");
+  lua_pushcfunction(L, l_tools_process_stop);
+  lua_setfield(L, -2, "process_stop");
+  lua_pushcfunction(L, l_tools_process_events);
+  lua_setfield(L, -2, "process_events");
+  lua_pushcfunction(L, l_tools_process_close_owner);
+  lua_setfield(L, -2, "process_close_owner");
   lua_setglobal(L, "tools");
 }

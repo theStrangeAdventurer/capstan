@@ -82,7 +82,18 @@ static MunitResult test_redacts_subscription_token_headers(
   return MUNIT_OK;
 }
 
+static MunitResult test_preserves_command_spacing(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  const char *command = "printf 'ready\\n'; echo $$ > server.pid; sleep 60";
+  char *out = redact_secrets_alloc(command);
+  munit_assert_string_equal(out, command);
+  free(out);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/preserves_command_spacing", test_preserves_command_spacing, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/redacts_sensitive_headers", test_redacts_sensitive_headers, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/redacts_key_values", test_redacts_key_values, NULL, NULL,

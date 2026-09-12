@@ -630,7 +630,13 @@ handlers["session/close"] = function(id, params)
         finish_active("cancelled", {ok = false})
     end
     mcp_client.close_scope(session.id)
+    local cleaned = not tools or not tools.process_close_owner or
+        tools.process_close_owner(session.id)
     sessions[session.id] = nil
+    if not cleaned then
+        rpc_error(id, -32000, "session closed, but some processes are still stopping")
+        return
+    end
     response(id, {})
 end
 
@@ -691,6 +697,7 @@ function capstan_acp_disconnect()
     end
     for session_id in pairs(sessions) do
         mcp_client.close_scope(session_id)
+        if tools and tools.process_close_owner then tools.process_close_owner(session_id) end
     end
     sessions = {}
 end

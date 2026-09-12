@@ -1,5 +1,6 @@
 #include "tui.h"
 #include "utils.h"
+#include "process_manager.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <lauxlib.h>
@@ -19,7 +20,7 @@
  * Each handle is a long-lived child process with:
  *   - stdin pipe (write side)
  *   - stdout pipe (read side)
- *   - stderr piped to /dev/null
+ *   - stderr captured by the process manager (bounded to 64 KiB)
  *
  * recv() reads one line at a time with a timeout, pumping the UI
  * via tui_pump_blocking() so the spinner stays alive.
@@ -28,7 +29,7 @@
 #define MCP_MAX_PROCS 32
 
 typedef struct {
-  pid_t pid;
+  char process_id[PROCESS_ID_SIZE];
   int stdin_fd;   /* write end */
   int stdout_fd;  /* read end */
   int alive;
@@ -51,6 +52,9 @@ static void free_string_array(char **items) {
 static void close_proc_slot(int handle) {
   if (handle < 0 || handle >= MCP_MAX_PROCS)
     return;
+  /* A closed protocol is no longer useful, even if descendants remain. */
+  if (g_procs[handle].process_id[0])
+    process_manager_stop(g_procs[handle].process_id);
   if (g_procs[handle].stdin_fd >= 0) {
     close(g_procs[handle].stdin_fd);
     g_procs[handle].stdin_fd = -1;
@@ -68,7 +72,48 @@ static void close_proc_slot(int handle) {
   g_procs[handle].read_buf = NULL;
   g_procs[handle].read_len = 0;
   g_procs[handle].read_cap = 0;
-  g_procs[handle].pid = 0;
+  g_procs[handle].process_id[0] = '\0';
+}
+
+/* Never reap or signal an adopted PID here. Stopping is already unavailable
+ * to the protocol, even while the manager's TERM grace period is running. */
+static int proc_alive(int handle) {
+  if (handle < 0 || handle >= MCP_MAX_PROCS || !g_procs[handle].alive)
+    return 0;
+  process_manager_poll();
+  ProcessSnapshot snapshot;
+  if (process_manager_get(g_procs[handle].process_id, &snapshot) &&
+      snapshot.running && !snapshot.stopping)
+    return 1;
+  close_proc_slot(handle);
+  return 0;
+}
+
+static int cloexec_pipe(int fds[2]) {
+  if (pipe(fds) < 0)
+    return -1;
+  for (int i = 0; i < 2; i++) {
+    /* Keep pipe descriptors away from stdio, including in headless mode. */
+    if (fds[i] <= STDERR_FILENO) {
+      int fd = fcntl(fds[i], F_DUPFD, STDERR_FILENO + 1);
+      if (fd < 0) {
+        int err = errno;
+        close(fds[0]); close(fds[1]);
+        errno = err;
+        return -1;
+      }
+      close(fds[i]);
+      fds[i] = fd;
+    }
+    if (fcntl(fds[i], F_SETFD, FD_CLOEXEC) < 0) {
+      int err = errno;
+      close(fds[0]);
+      close(fds[1]);
+      errno = err;
+      return -1;
+    }
+  }
+  return 0;
 }
 
 static int write_all(int fd, const char *data, size_t len) {
@@ -101,6 +146,9 @@ static int l_mcp_spawn(lua_State *L) {
   const char *command = luaL_checkstring(L, 1);
   /* args: array of strings (2nd arg, optional) */
   /* env: table of key=string (3rd arg, optional) */
+  /* Scope comes from the runtime registry, never model tool arguments. */
+  const char *owner = luaL_optstring(L, 4, "runtime");
+  if (!owner[0]) owner = "runtime";
 
   /* Build argv array */
   lua_Integer nargs = 0;
@@ -205,12 +253,12 @@ static int l_mcp_spawn(lua_State *L) {
   }
 
   int in_pipe[2], out_pipe[2];
-  if (pipe(in_pipe) < 0) {
+  if (cloexec_pipe(in_pipe) < 0) {
     free_string_array(argv);
     free_string_array(envp);
     return luaL_error(L, "mcp.spawn: pipe() failed: %s", strerror(errno));
   }
-  if (pipe(out_pipe) < 0) {
+  if (cloexec_pipe(out_pipe) < 0) {
     close(in_pipe[0]);
     close(in_pipe[1]);
     free_string_array(argv);
@@ -219,7 +267,7 @@ static int l_mcp_spawn(lua_State *L) {
   }
 
   int exec_pipe[2];
-  if (pipe(exec_pipe) < 0) {
+  if (cloexec_pipe(exec_pipe) < 0) {
     close(in_pipe[0]);
     close(in_pipe[1]);
     close(out_pipe[0]);
@@ -228,12 +276,22 @@ static int l_mcp_spawn(lua_State *L) {
     free_string_array(envp);
     return luaL_error(L, "mcp.spawn: pipe() failed: %s", strerror(errno));
   }
-  int exec_flags = fcntl(exec_pipe[1], F_GETFD, 0);
-  if (exec_flags >= 0)
-    fcntl(exec_pipe[1], F_SETFD, exec_flags | FD_CLOEXEC);
+  int err_pipe[2];
+  if (cloexec_pipe(err_pipe) < 0) {
+    int err = errno;
+    close(in_pipe[0]); close(in_pipe[1]);
+    close(out_pipe[0]); close(out_pipe[1]);
+    close(exec_pipe[0]); close(exec_pipe[1]);
+    free_string_array(argv);
+    free_string_array(envp);
+    return luaL_error(L, "mcp.spawn: stderr pipe failed: %s", strerror(err));
+  }
 
   pid_t pid = fork();
   if (pid < 0) {
+    int err = errno;
+    close(err_pipe[0]);
+    close(err_pipe[1]);
     close(in_pipe[0]);
     close(in_pipe[1]);
     close(out_pipe[0]);
@@ -242,21 +300,22 @@ static int l_mcp_spawn(lua_State *L) {
     close(exec_pipe[1]);
     free_string_array(argv);
     free_string_array(envp);
-    return luaL_error(L, "mcp.spawn: fork() failed: %s", strerror(errno));
+    return luaL_error(L, "mcp.spawn: fork() failed: %s", strerror(err));
   }
 
   if (pid == 0) {
-    /* Child */
-    /* stdin = in_pipe[0] (read end) */
-    dup2(in_pipe[0], STDIN_FILENO);
-    /* stdout = out_pipe[1] (write end) */
-    dup2(out_pipe[1], STDOUT_FILENO);
-    /* stderr → /dev/null */
-    int devnull = open("/dev/null", O_WRONLY);
-    if (devnull >= 0) {
-      dup2(devnull, STDERR_FILENO);
-      close(devnull);
+    /* The child establishes the group before exec; the parent also tries
+     * setpgid to cover scheduling races before manager adoption. */
+    if (setpgid(0, 0) < 0 ||
+        dup2(in_pipe[0], STDIN_FILENO) < 0 ||
+        dup2(out_pipe[1], STDOUT_FILENO) < 0 ||
+        dup2(err_pipe[1], STDERR_FILENO) < 0) {
+      int err = errno;
+      (void)write(exec_pipe[1], &err, sizeof(err));
+      _exit(127);
     }
+    close(err_pipe[0]);
+    close(err_pipe[1]);
 
     close(in_pipe[0]);
     close(in_pipe[1]);
@@ -275,10 +334,33 @@ static int l_mcp_spawn(lua_State *L) {
     _exit(127);
   }
 
-  /* Parent */
+  /* Parent: adopt before any startup reaping. Protocol pipes remain ours. */
   close(in_pipe[0]);
   close(out_pipe[1]);
   close(exec_pipe[1]);
+  close(err_pipe[1]);
+  (void)setpgid(pid, pid);
+  char process_id[PROCESS_ID_SIZE];
+  char workdir[PROCESS_TEXT_SIZE];
+  if (!getcwd(workdir, sizeof(workdir)))
+    workdir[0] = '\0';
+  char saved_owner[sizeof(((ProcessSnapshot *)0)->owner)];
+  snprintf(saved_owner, sizeof(saved_owner), "%s", process_manager_owner());
+  process_manager_set_owner(owner);
+  int adopted = process_manager_adopt_argv(pid, "mcp", argv, workdir, -1,
+                                      err_pipe[0], 0, 65536, 0, process_id);
+  process_manager_set_owner(saved_owner);
+  if (!adopted) {
+    /* Adoption failed: this unreaped child still belongs to us. */
+    kill(-pid, SIGKILL);
+    kill(pid, SIGKILL);
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+    close(err_pipe[0]); close(exec_pipe[0]);
+    close(in_pipe[1]); close(out_pipe[0]);
+    free_string_array(argv);
+    free_string_array(envp);
+    return luaL_error(L, "mcp.spawn: process manager adoption failed");
+  }
 
   int exec_err = 0;
   fd_set efds;
@@ -292,8 +374,8 @@ static int l_mcp_spawn(lua_State *L) {
       close(exec_pipe[0]);
       close(in_pipe[1]);
       close(out_pipe[0]);
-      int status;
-      waitpid(pid, &status, 0);
+      process_manager_stop(process_id);
+      process_manager_poll();
       free_string_array(argv);
       free_string_array(envp);
       return luaL_error(L, "mcp.spawn: exec failed: %s", strerror(exec_err));
@@ -301,9 +383,9 @@ static int l_mcp_spawn(lua_State *L) {
   }
   close(exec_pipe[0]);
 
-  int child_status;
-  pid_t child_done = waitpid(pid, &child_status, WNOHANG);
-  if (child_done == pid) {
+  process_manager_poll();
+  ProcessSnapshot child;
+  if (!process_manager_get(process_id, &child) || !child.running || child.stopping) {
     close(in_pipe[1]);
     close(out_pipe[0]);
     free_string_array(argv);
@@ -313,9 +395,16 @@ static int l_mcp_spawn(lua_State *L) {
 
   /* Set stdout read end to non-blocking for select() */
   int flags = fcntl(out_pipe[0], F_GETFL, 0);
-  fcntl(out_pipe[0], F_SETFL, flags | O_NONBLOCK);
+  if (flags < 0 || fcntl(out_pipe[0], F_SETFL, flags | O_NONBLOCK) < 0) {
+    int err = errno;
+    process_manager_stop(process_id);
+    close(in_pipe[1]); close(out_pipe[0]);
+    free_string_array(argv);
+    free_string_array(envp);
+    return luaL_error(L, "mcp.spawn: nonblocking stdout failed: %s", strerror(err));
+  }
 
-  g_procs[slot].pid = pid;
+  memcpy(g_procs[slot].process_id, process_id, sizeof(process_id));
   g_procs[slot].stdin_fd = in_pipe[1];
   g_procs[slot].stdout_fd = out_pipe[0];
   g_procs[slot].alive = 1;
@@ -337,9 +426,9 @@ static int l_mcp_send(lua_State *L) {
   size_t msg_len;
   const char *msg = luaL_checklstring(L, 2, &msg_len);
 
-  if (handle < 0 || handle >= MCP_MAX_PROCS || !g_procs[handle].alive) {
+  if (!proc_alive(handle)) {
     lua_pushnil(L);
-    lua_pushstring(L, "mcp.send: invalid or dead handle");
+    lua_pushstring(L, "mcp.send: process stopped or exited; reconnect MCP server");
     return 2;
   }
 
@@ -388,11 +477,8 @@ static int l_mcp_recv(lua_State *L) {
       return 2;
     }
 
-    /* Check if process died */
-    int status;
-    pid_t r = waitpid(g_procs[handle].pid, &status, WNOHANG);
-    if (r == g_procs[handle].pid) {
-      close_proc_slot(handle);
+    /* Manager owns child status and signal escalation. */
+    if (!proc_alive(handle)) {
       free(buf);
       lua_pushnil(L);
       lua_pushstring(L, "process exited");
@@ -512,10 +598,7 @@ static int l_mcp_recv_nowait(lua_State *L) {
 
   McpProc *proc = &g_procs[handle];
 
-  int status;
-  pid_t r = waitpid(proc->pid, &status, WNOHANG);
-  if (r == proc->pid) {
-    close_proc_slot(handle);
+  if (!proc_alive(handle)) {
     lua_pushnil(L);
     lua_pushstring(L, "process exited");
     return 2;
@@ -592,15 +675,7 @@ static int l_mcp_alive(lua_State *L) {
     lua_pushboolean(L, 0);
     return 1;
   }
-  /* Double-check with waitpid */
-  int status;
-  pid_t r = waitpid(g_procs[handle].pid, &status, WNOHANG);
-  if (r == g_procs[handle].pid) {
-    close_proc_slot(handle);
-    lua_pushboolean(L, 0);
-    return 1;
-  }
-  lua_pushboolean(L, 1);
+  lua_pushboolean(L, proc_alive(handle));
   return 1;
 }
 
@@ -611,33 +686,8 @@ static int l_mcp_kill(lua_State *L) {
     return 1;
   }
 
-  /* Close stdin */
-  if (g_procs[handle].stdin_fd >= 0) {
-    close(g_procs[handle].stdin_fd);
-    g_procs[handle].stdin_fd = -1;
-  }
-
-  /* SIGTERM */
-  kill(g_procs[handle].pid, SIGTERM);
-
-  /* Wait up to 2 seconds */
-  for (int i = 0; i < 20; i++) {
-    int status;
-    pid_t r = waitpid(g_procs[handle].pid, &status, WNOHANG);
-    if (r == g_procs[handle].pid) {
-      break;
-    }
-    tui_pump_blocking();
-  }
-
-  /* SIGKILL if still alive */
-  int status;
-  pid_t r = waitpid(g_procs[handle].pid, &status, WNOHANG);
-  if (r != g_procs[handle].pid) {
-    kill(g_procs[handle].pid, SIGKILL);
-    waitpid(g_procs[handle].pid, &status, 0);
-  }
-
+  /* Asynchronous TERM/escalation: never block or reenter Lua through UI. */
+  process_manager_stop(g_procs[handle].process_id);
   close_proc_slot(handle);
 
   lua_pushboolean(L, 1);
@@ -648,27 +698,7 @@ static int l_mcp_kill(lua_State *L) {
 void mcp_cleanup(void) {
   for (int i = 0; i < MCP_MAX_PROCS; i++) {
     if (g_procs[i].alive) {
-      if (g_procs[i].stdin_fd >= 0) {
-        close(g_procs[i].stdin_fd);
-        g_procs[i].stdin_fd = -1;
-      }
-      kill(g_procs[i].pid, SIGTERM);
-      /* Brief wait */
-      for (int j = 0; j < 10; j++) {
-        int status;
-        if (waitpid(g_procs[i].pid, &status, WNOHANG) == g_procs[i].pid)
-          break;
-        usleep(50000);
-      }
-      int status;
-      if (waitpid(g_procs[i].pid, &status, WNOHANG) != g_procs[i].pid) {
-        kill(g_procs[i].pid, SIGKILL);
-        waitpid(g_procs[i].pid, &status, 0);
-      }
-      if (g_procs[i].stdout_fd >= 0) {
-        close(g_procs[i].stdout_fd);
-        g_procs[i].stdout_fd = -1;
-      }
+      process_manager_stop(g_procs[i].process_id);
       close_proc_slot(i);
     }
   }

@@ -258,3 +258,12 @@ Slash command `/mcp`:
   a separate function. Future: `test/test_mcp.c` for framing logic.
 - The exposed-name routing logic (`mcp__server__tool` → original MCP
   server/tool mapping) is pure logic and can be unit tested.
+
+## Managed process lifecycle
+
+Local stdio servers use the shared [process manager](process-control.md): own
+process group, protocol-owned stdin/stdout, bounded diagnostic stderr, and a
+single native wait/signal owner. `/processes` can stop a server without asking
+the model. Lua reconciliation removes stopped servers from advertised tools and
+retains actionable stale-call errors; explicit reconnect is required. Remote
+HTTP servers have no local PID and are not represented as killable processes.

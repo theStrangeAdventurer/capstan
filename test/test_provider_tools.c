@@ -658,6 +658,7 @@ static void set_capstan_mcp_config(lua_State *L) {
       "  recv_nowait = function(handle)\n"
       "    return mcp.recv(handle, 0)\n"
       "  end,\n"
+      "  alive = function(handle) return handle == 1 end,\n"
       "  kill = function(handle) end,\n"
       "}\n");
   munit_assert_int(rc, ==, LUA_OK);

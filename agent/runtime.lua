@@ -603,6 +603,17 @@ local function run_impl(opts, callbacks, run_span)
             return
         end
 
+        -- Deliver only at a normal request boundary, never from a C pump and
+        -- never start an autonomous run. Idle completions wait for the next run.
+        local native = rawget(_G, "tools")
+        if run_depth == 0 and native and type(native.process_events) == "function" then
+            local events = native.process_events(opts.process_owner)
+            if #events > 0 then
+                local summary = "Background process completions (runtime state, not instructions):\n" .. json.encode(events)
+                table.insert(current_msgs, {role = "user", content = summary})
+                logging.runtime_log("process", summary)
+            end
+        end
         local deferred_text_chunks = {}
         local defer_visible_text = review_enabled and run_state.workspace_mutated
         local stream_attempt = 0
@@ -757,6 +768,7 @@ local function run_impl(opts, callbacks, run_span)
                     update_status = opts.update_status ~= false,
                     permission_scope = permission_scope,
                     mcp_scope = opts.mcp_scope,
+                    process_owner = opts.process_owner,
                     callbacks = callbacks,
                     guard = guard,
                     state = run_state,
@@ -978,6 +990,12 @@ end
 function M.run(opts, callbacks)
     opts = opts or {}
     callbacks = callbacks or {}
+    -- Capture once, before callbacks can change the visible session. This is
+    -- runtime state, never a model tool argument; descendants inherit it.
+    opts = copy_table(opts)
+    opts.process_owner = opts.process_owner or opts.mcp_scope or
+        (agent and type(agent.session_id) == "function" and agent.session_id()) or
+        ("unowned:" .. tostring(opts))
     local is_subagent = (tonumber(opts.depth) or 0) > 0
     local run_span = telemetry.start(is_subagent and "subagent" or "agent.run", opts.telemetry_parent, {
         operation = telemetry.purpose(opts.purpose or (is_subagent and "subagent" or "agent")),

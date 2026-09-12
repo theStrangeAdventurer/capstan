@@ -18,6 +18,8 @@
 #include "session.h"
 #include "session_manager.h"
 #include "tui.h"
+#include "process_manager.h"
+#include "process_panel.h"
 #include "trace.h"
 #include "utils.h"
 #include "visual.h"
@@ -268,6 +270,10 @@ static int stop_active_stream(void) {
 }
 
 static void handle_mouse_event(MEVENT *event) {
+  if (process_panel_mouse(event->y, event->x, event->bstate)) {
+    g_mouse_selecting_messages = 0;
+    return;
+  }
   if (tui_handle_session_mouse(event->y, event->x, event->bstate)) {
     g_mouse_selecting_messages = 0;
     return;
@@ -1107,6 +1113,8 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   lua_newtable(L);
   lua_push_headless_messages(L, &headless_session, prompt);
   lua_setfield(L, -2, "messages");
+  lua_pushstring(L, headless_session.id);
+  lua_setfield(L, -2, "process_owner");
   if (opts->provider) {
     lua_pushstring(L, opts->provider);
     lua_setfield(L, -2, "provider");
@@ -1197,6 +1205,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   }
 
   while (!g_headless_run.done && http_is_loading()) {
+    process_manager_poll();
     http_poll(L);
     usleep(10000);
   }
@@ -1520,6 +1529,7 @@ static void cycle_agent_profile(lua_State *l) {
 }
 
 int main(int argc, char *argv[]) {
+  atexit(process_manager_shutdown);
   telemetry_startup();
   CliOptions cli = cli_parse(argc, argv);
 
@@ -1624,6 +1634,7 @@ int main(int argc, char *argv[]) {
   long long last_mcp_tick_ms = 0;
 
   while (1) {
+    process_manager_poll();
     telemetry_poll();
     int ch = getch();
     if (ch == ERR) {
@@ -1649,6 +1660,10 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
+    if (tui_handle_process_input(ch)) {
+      render_all();
+      continue;
+    }
     if (tui_handle_paste(ch)) {
       long long now = main_now_ms();
       if (!input_paste_active() ||

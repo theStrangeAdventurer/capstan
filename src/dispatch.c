@@ -12,6 +12,7 @@
 #include "session_manager.h"
 #include "submission_queue.h"
 #include "tui.h"
+#include "process_panel.h"
 #include "utils.h"
 #include "visual.h"
 #include <lauxlib.h>
@@ -86,7 +87,7 @@ static int g_dispatch_after_compact = 0;
 
 static int open_commands(void) {
   int pc = plugin_registry_count();
-  int builtins = 4;
+  int builtins = 5;
   int command_plugins = 0;
   for (int i = 0; i < pc; i++) {
     Plugin *plugin = plugin_registry_at(i);
@@ -107,6 +108,8 @@ static int open_commands(void) {
   items[2].value = my_strdup("/sessions");
   items[3].text = my_strdup("/compact  Compact conversation context");
   items[3].value = my_strdup("/compact");
+  items[4].text = my_strdup("/processes  Manage running processes");
+  items[4].value = my_strdup("/processes");
 
   int out = builtins;
   for (int i = 0; i < pc; i++) {
@@ -411,6 +414,7 @@ void dispatch_tick(void) {
 }
 
 void dispatch_submit(void) {
+  if (tui_submit_process_command()) return;
   const char *text = input_get_text();
   size_t image_count = input_image_count();
   if (!text[0] && image_count == 0 && g_buffered_results.size == 0)

@@ -16,7 +16,8 @@ plugin.tool = {
 		type = "object",
 		properties = {
 			command = { type = "string", description = "The shell command to execute" },
-			timeout = { type = "integer", description = "Timeout in seconds (default 60, max 300)" }
+			timeout = { type = "integer", description = "Timeout seconds (sync default 60; background default 0 unlimited; positive max 300)" },
+			background = { type = "boolean", description = "Start a managed background process and return its ID immediately, not a completion or validation result." }
 		},
 		required = { "command" }
 	},
@@ -72,38 +73,54 @@ end
 
 local function parse_manual_command(ctx)
 	local command = manual_command(ctx)
-	local timeout = nil
-	local parsed_timeout, rest = command:match("^%-%-timeout%s+(%d+)%s+(.+)$")
-	if not parsed_timeout then
-		parsed_timeout, rest = command:match("^%-t%s+(%d+)%s+(.+)$")
+	local timeout, background = nil, false
+	while true do
+		local rest = command:match("^%-%-background%s+(.*)$")
+		if command == "--background" then rest = "" end
+		if rest then
+			background, command = true, trim(rest)
+		else
+			local parsed_timeout, tail = command:match("^%-%-timeout%s+(%d+)%s+(.+)$")
+			if not parsed_timeout then
+				parsed_timeout, tail = command:match("^%-t%s+(%d+)%s+(.+)$")
+			end
+			if not parsed_timeout then break end
+			timeout, command = tonumber(parsed_timeout), trim(tail)
+		end
 	end
-	if parsed_timeout then
-		timeout = tonumber(parsed_timeout)
-		command = trim(rest)
-	end
-	return command, timeout
+	return command, timeout, background
 end
 
 function plugin.handler(ctx)
 	local command
-	local timeout
+	local timeout, background
 	if ctx.tool_args and ctx.tool_args.command then
 		command = ctx.tool_args.command
 		timeout = tonumber(ctx.tool_args.timeout)
+		background = ctx.tool_args.background == true
 	else
-		command, timeout = parse_manual_command(ctx)
+		command, timeout, background = parse_manual_command(ctx)
 	end
-	timeout = timeout or 60
+	timeout = timeout or (background and 0 or 60)
 
 	if not command or command == "" then
 		return ctx:replace("Usage: /shell <command>")
 	end
 
-	if timeout <= 0 then timeout = 60 end
+	if timeout <= 0 then timeout = background and 0 or 60 end
 	if timeout > 300 then timeout = 300 end
 
-	local result = tools.shell(command, timeout)
+	local result = tools.shell(command, timeout, background == true)
 	local display_command = summarize_shell_command(command)
+	if background then
+		if not result.started then
+			return "Background shell failed to start", "Background shell failed to start", false
+		end
+		local out = string.format("[started] id=%s PID=%s status=%s\nNot a completion or validation result. Use processes to inspect output and exit status.",
+			tostring(result.id), tostring(result.pid), tostring(result.status))
+		logging.runtime_log("tool", "shell background " .. out)
+		return "Shell: " .. display_command .. "\n" .. out, out, true
+	end
 	local redacted_stdout = redact_secrets(result.stdout or "")
 	local redacted_stderr = redact_secrets(result.stderr or "")
 

@@ -35,7 +35,7 @@ static int contains_upper_token(const char *key, size_t len, const char *needle)
   return 0;
 }
 
-static int sensitive_key(const char *key, size_t len) {
+int redact_sensitive_key(const char *key, size_t len) {
   char lower[128];
   lower_copy(key, len, lower, sizeof(lower));
 
@@ -129,11 +129,12 @@ char *redact_secrets_alloc(const char *input) {
                         input + (quoted_key ? start - 1 : start),
                         after_key - (quoted_key ? start - 1 : start)))
         goto oom;
+      i = after_key; /* Preserve ordinary whitespace after non-key words. */
       continue;
     }
 
     char sep = input[i++];
-    if (!sensitive_key(input + start, key_end - start)) {
+    if (!redact_sensitive_key(input + start, key_end - start)) {
       if (!append_bytes(&out, &out_len, &out_cap,
                         input + (quoted_key ? start - 1 : start),
                         i - (quoted_key ? start - 1 : start)))
@@ -173,6 +174,10 @@ char *redact_secrets_alloc(const char *input) {
         i++;
       }
     } else {
+      /* Metadata may pass through redaction more than once. Consume the
+       * complete marker, including its boundary character, on repeat passes. */
+      if (strncmp(input + i, "[REDACTED]", 10) == 0)
+        i += 10;
       while (i < n && !is_boundary(input[i]))
         i++;
     }

@@ -88,6 +88,32 @@ local function mark_server_failed(server, reason)
   end
 end
 
+-- Reconcile external process_stop and natural exits even after initialization.
+-- Keep discovered names for actionable errors on stale tool calls, but never
+-- advertise failed servers or respawn them without an explicit restart.
+local function reconcile_server(server)
+  if not server or server.transport ~= "stdio" or not server.handle or
+     (server.status ~= "connected" and server.status ~= "connecting") then
+    return false
+  end
+  local ok, alive, reason = pcall(mcp.alive, server.handle)
+  if ok and alive then return false end
+  mark_server_failed(server, server.error or
+    (ok and (reason or "MCP process stopped or exited; reconnect the server explicitly")
+      or ("MCP transport status failed: " .. tostring(alive))))
+  server.phase = "done"
+  server.pending = nil
+  return true
+end
+
+local function reconcile_registry(registry)
+  local changed = false
+  for _, server in pairs(registry or {}) do
+    if reconcile_server(server) then changed = true end
+  end
+  return changed
+end
+
 local function clone_default(value)
   if type(value) ~= "table" then
     return value
@@ -578,7 +604,7 @@ local function configured_server_count()
   return n
 end
 
-local function start_server_async(cfg, registry)
+local function start_server_async(cfg, registry, scope_id)
   registry = registry or servers
   if cfg.enabled == false then
     log("skipping disabled server: " .. tostring(cfg.name))
@@ -605,7 +631,8 @@ local function start_server_async(cfg, registry)
     local env = cfg.env or {}
     log("spawning server " .. cfg.name .. ": " .. cfg.command .. " " .. json.encode(args))
 
-    local handle, spawn_err = mcp.spawn(cfg.command, args, env)
+    local ok, handle, spawn_err = pcall(mcp.spawn, cfg.command, args, env, scope_id or "runtime")
+    if not ok then spawn_err, handle = handle, nil end
     if not handle then
       server.status = "failed"
       server.error = "spawn failed: " .. tostring(spawn_err)
@@ -782,17 +809,17 @@ function M.is_initialized()
 end
 
 function M.tick(max_steps)
+  local changed = reconcile_registry(servers)
   if disabled or initialized then
-    return false
+    return changed
   end
   M.ensure_initialized()
   if initialized then
-    return false
+    return changed
   end
 
   local steps = max_steps or 1
   if steps < 1 then steps = 1 end
-  local changed = false
 
   for _ = 1, steps do
     local started_one = false
@@ -934,14 +961,15 @@ function M.attach_scope(scope_id, descriptors)
   registry = {}
   local scope = {servers = registry, initialized = #configs == 0}
   scoped_servers[scope_id] = scope
-  for _, cfg in ipairs(configs) do start_server_async(cfg, registry) end
+  for _, cfg in ipairs(configs) do start_server_async(cfg, registry, scope_id) end
   return true
 end
 
 function M.tick_scope(scope_id)
   local scope = scoped_servers[tostring(scope_id or "")]
-  if not scope or scope.initialized then return false end
-  local changed = false
+  if not scope then return false end
+  local changed = reconcile_registry(scope.servers)
+  if scope.initialized then return changed end
   local done = true
   for _, server in pairs(scope.servers) do
     if tick_server(server) then changed = true end
@@ -1024,8 +1052,10 @@ function M.call(tool_name, args, scope_id)
   if not server or not tool then
     return "Unknown MCP tool: " .. tool_name, false
   end
+  reconcile_server(server)
   if server.status ~= "connected" then
-    return "MCP server " .. server.name .. " is " .. server.status, false
+    return "MCP server " .. server.name .. " is " .. server.status ..
+      (server.error and (": " .. server.error) or ""), false
   end
 
   local params = {

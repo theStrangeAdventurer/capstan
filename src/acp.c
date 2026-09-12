@@ -1,4 +1,5 @@
 #include "acp.h"
+#include "process_manager.h"
 #include "telemetry.h"
 #include "app_config.h"
 #include "embedded_assets.h"
@@ -383,6 +384,7 @@ int acp_run(const char *argv0, int yolo) {
     if (ready > 0 && (input.revents & POLLHUP) && !(input.revents & POLLIN))
       g_input_eof = 1;
 
+    process_manager_poll();
     http_poll_limited(L, 4);
     plugins_mcp_tick();
 

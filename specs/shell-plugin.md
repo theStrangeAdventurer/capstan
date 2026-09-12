@@ -1,5 +1,9 @@
 # Shell Plugin
 
+Managed background execution (`background=true`, `/shell --background`) and the
+live `/processes` panel are specified in [Process control](process-control.md).
+Synchronous calls below remain the default and use the same native manager.
+
 ## Behavior
 
 `/shell <command>` executes a local shell command in `capstan.workdir`. The

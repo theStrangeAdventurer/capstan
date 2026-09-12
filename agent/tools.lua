@@ -676,6 +676,7 @@ local function run_subagents(args, run_ctx)
             update_usage = false,
             permission_scope = permission_scope,
             mcp_scope = run_ctx and run_ctx.mcp_scope or nil,
+            process_owner = run_ctx and run_ctx.process_owner or nil,
         }, {
             on_permission_request = run_ctx and run_ctx.callbacks and
                 run_ctx.callbacks.on_permission_request or nil,
@@ -1150,12 +1151,25 @@ local function execute_tool(tool_name, args, run_ctx, permission_ctx,
         agent.set_activity(tool_activity_label(tool_name, display_command))
     end
 
+    local native_tools = rawget(_G, "tools")
+    local scoped = native_tools and type(native_tools.process_scope) == "function"
+    local previous_owner
+    if scoped then
+        local span = run_ctx and run_ctx.telemetry_context
+        local owner = run_ctx and (run_ctx.process_owner or run_ctx.session_id or run_ctx.mcp_scope)
+        owner = owner or (span and (span.session_id or (span.context and span.context.session_id)))
+        -- Missing runtime ownership fails closed: isolate this run rather than
+        -- borrowing whichever interactive session happens to be active now.
+        owner = owner or ("unowned:" .. tostring(run_ctx and run_ctx.state or run_ctx))
+        previous_owner = native_tools.process_scope(tostring(owner))
+    end
     local values = table.pack(xpcall(function()
         return call_plugin_tool_redacted(tool_name, args, run_ctx, permission_ctx)
     end, function(err)
         return debug.traceback(tostring(err), 2)
     end))
 
+    if scoped then native_tools.process_scope(previous_owner) end
     if update_activity then agent.set_activity(nil) end
     if not values[1] then error(values[2], 0) end
     return table.unpack(values, 2, values.n)
@@ -1178,9 +1192,10 @@ local function shell_output_status(result_content, display_command, status)
     return tool_status_suffix(status, display_command) .. output .. "\n\n"
 end
 
-local function tool_success_status(tool_name, result_content, display_command)
+local function tool_success_status(tool_name, result_content, display_command, args)
     if tool_name == "shell" then
-        return shell_output_status(result_content, display_command, "— done")
+        return shell_output_status(result_content, display_command,
+            args and args.background == true and "— started" or "— done")
     end
     if tool_name == "file_edit" and type(result_content) == "string" and result_content ~= "" then
         return "\n" .. result_content .. "\n" .. tool_status_suffix("— done", display_command)
@@ -1363,7 +1378,7 @@ shell_command_is_validation = function(command)
 end
 
 local function mark_validation(run_ctx, tool_name, args, tool_ok)
-    if not tool_ok or tool_name ~= "shell" or not shell_command_is_validation(args and args.command) then return end
+    if not tool_ok or tool_name ~= "shell" or (args and args.background == true) or not shell_command_is_validation(args and args.command) then return end
     if run_ctx and type(run_ctx.state) == "table" and run_ctx.state.workspace_mutated then
         run_ctx.state.successful_validation = true
     end
@@ -1670,7 +1685,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             mark_validation(run_ctx, tool_name, args, tool_ok)
                             if tool_ok then
                                 logging.runtime_log("tool", string.format("done name=%s target=%s bytes=%d images=%d", tool_name, target, #tool_result_text(result_content), #tool_result_images(result_content)))
-                                if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command), tool_name == "shell" and "shell" or nil) end
+                                if show_generic_status then append_status(tool_success_status(tool_name, result_content, display_command, args), tool_name == "shell" and "shell" or nil) end
                             else
                                 logging.runtime_log("tool", string.format("error name=%s target=%s error=%s", tool_name, target, logging.compact(tool_result_text(result_content), 240)))
                                 if show_generic_status then append_status(tool_error_status(error_summary or result_content, display_command), tool_name == "shell" and "shell" or nil) end

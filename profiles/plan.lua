@@ -10,6 +10,7 @@ return {
         fetch = true,
         file_read = true,
         logs = true,
+        processes = true,
         subagents = true,
     },
     prompt = [[

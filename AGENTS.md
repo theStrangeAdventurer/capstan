@@ -298,6 +298,7 @@ Feature specs:
 - [Observability](specs/observability.md)
 - [Permissions](specs/permissions.md)
 - [Queued input](specs/queued-input.md)
+- [Process control](specs/process-control.md)
 - [Runtime logs](specs/runtime-logs.md)
 - [Runtime state](specs/runtime-state.md)
 - [Sessions](specs/sessions.md)
