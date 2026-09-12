@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "http.h"
+#include "log.h"
 #include "telemetry.h"
 #include "popup.h"
 #include "tui.h"
@@ -36,6 +37,7 @@ typedef struct {
   int response_mode;
   int background;
   int async_id;
+  int cancel_requested;
   RespBuf response;
   RespBuf response_headers;
   char err_buf[4096 + 1];
@@ -50,6 +52,15 @@ static int stream_count = 0;
 static int stream_cap = 0;
 static int g_next_async_id = 1;
 static int g_sync_active = 0;
+static int g_curl_performing = 0;
+
+static void perform_transfers(int *running) {
+  g_curl_performing++;
+  curl_multi_perform(multi_handle, running);
+  g_curl_performing--;
+}
+
+static void cancel_pending_streams(lua_State *L);
 static int g_headless = 0;
 static long long g_last_wait_render_ms = 0;
 
@@ -418,7 +429,7 @@ static int l_http_post(lua_State *L) {
 
   int still_running = 1;
   while (still_running) {
-    curl_multi_perform(multi_handle, &still_running);
+    perform_transfers(&still_running);
     if (still_running)
       http_wait_frame();
   }
@@ -483,7 +494,7 @@ static int l_http_post_response(lua_State *L) {
 
   int still_running = 1;
   while (still_running) {
-    curl_multi_perform(multi_handle, &still_running);
+    perform_transfers(&still_running);
     if (still_running)
       http_wait_frame();
   }
@@ -544,7 +555,7 @@ static int l_http_delete_response(lua_State *L) {
   curl_multi_add_handle(multi_handle, easy);
   int still_running = 1;
   while (still_running) {
-    curl_multi_perform(multi_handle, &still_running);
+    perform_transfers(&still_running);
     if (still_running)
       http_wait_frame();
   }
@@ -685,7 +696,7 @@ static int l_http_get(lua_State *L) {
 
   int still_running = 1;
   while (still_running) {
-    curl_multi_perform(multi_handle, &still_running);
+    perform_transfers(&still_running);
     if (still_running)
       http_wait_frame();
   }
@@ -708,6 +719,11 @@ static int l_http_get(lua_State *L) {
   curl_slist_free_all(headers);
   curl_easy_cleanup(easy);
   return 2;
+}
+
+static int l_http_background_wait_safe(lua_State *L) {
+  lua_pushboolean(L, !g_curl_performing && !g_sync_active);
+  return 1;
 }
 
 static int l_http_poll(lua_State *L) {
@@ -787,13 +803,13 @@ static void push_stream_metadata(lua_State *L, long http_status,
   lua_setfield(L, -2, "redirect_count");
 }
 
-int http_poll_limited(lua_State *L, int max_callbacks) {
+static int http_poll_impl(lua_State *L, int max_callbacks) {
   telemetry_poll();
   if (!multi_handle)
     return 0;
 
   int still_running;
-  curl_multi_perform(multi_handle, &still_running);
+  perform_transfers(&still_running);
 
   int had_events = 0;
   CURLMsg *msg;
@@ -943,6 +959,27 @@ int http_poll_limited(lua_State *L, int max_callbacks) {
   return had_events;
 }
 
+int http_poll_limited(lua_State *L, int max_callbacks) {
+  if (g_curl_performing) return 0;
+  cancel_pending_streams(L);
+  static int poll_depth = 0;
+  int outer = poll_depth++ == 0;
+  /* Never enter Lua scheduling from rendering, a modal HTTP wait, or a
+     recursively pumped tool callback. Run before curl owns callback memory. */
+  if (outer && !g_sync_active) {
+    int top = lua_gettop(L);
+    lua_getglobal(L, "agent_background_poll");
+    if (lua_isfunction(L, -1) && lua_pcall(L, 0, 0, 0) != LUA_OK) {
+      log_event("background", lua_tostring(L, -1) ? lua_tostring(L, -1) : "background poll failed");
+    }
+    lua_settop(L, top);
+  }
+  int events = http_poll_impl(L, max_callbacks);
+  cancel_pending_streams(L);
+  poll_depth--;
+  return events;
+}
+
 int http_poll(lua_State *L) { return http_poll_limited(L, 0); }
 
 static void compact_streams(void) {
@@ -956,12 +993,23 @@ static void compact_streams(void) {
 
 static void cancel_stream_at(lua_State *L, int index) {
   StreamCtx *ctx = streams[index];
+  if (g_curl_performing) {
+    ctx->cancel_requested = 1;
+    return;
+  }
   curl_multi_remove_handle(multi_handle, ctx->easy);
   luaL_unref(L, LUA_REGISTRYINDEX, ctx->callback_ref);
   curl_slist_free_all(ctx->headers);
   curl_easy_cleanup(ctx->easy);
   stream_ctx_free(ctx);
   streams[index] = NULL;
+}
+
+static void cancel_pending_streams(lua_State *L) {
+  if (g_curl_performing) return;
+  for (int i = 0; i < stream_count; i++)
+    if (streams[i] && streams[i]->cancel_requested) cancel_stream_at(L, i);
+  compact_streams();
 }
 
 static int l_http_cancel(lua_State *L) {
@@ -1026,6 +1074,9 @@ void http_init(lua_State *L) {
 
   lua_pushcfunction(L, l_http_poll);
   lua_setfield(L, -2, "poll");
+
+  lua_pushcfunction(L, l_http_background_wait_safe);
+  lua_setfield(L, -2, "background_wait_safe");
 
   lua_pushcfunction(L, l_http_cancel);
   lua_setfield(L, -2, "cancel");

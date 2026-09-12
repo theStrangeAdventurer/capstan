@@ -26,6 +26,7 @@ static Record records[RECORDS];
 static size_t count;
 static unsigned long long serial;
 static char current_owner[128];
+static char current_task[PROCESS_ID_SIZE];
 static char runtime_nonce[33];
 static pid_t nonce_pid;
 static char *sanitize(const char *text, size_t len);
@@ -72,6 +73,16 @@ void process_manager_set_owner(const char *owner) {
     snprintf(current_owner, sizeof(current_owner), "[REDACTION_FAILED]");
 }
 const char *process_manager_owner(void) { return current_owner; }
+void process_manager_set_task(const char *task_id) {
+  if (!safe_copy(current_task, sizeof(current_task), task_id ? task_id : ""))
+    snprintf(current_task, sizeof(current_task), "[REDACTION_FAILED]");
+}
+const char *process_manager_task(void) { return current_task; }
+void process_manager_stop_task(const char *task_id) {
+  if (!task_id || !task_id[0]) return;
+  for (size_t i = 0; i < count; i++)
+    if (!strcmp(records[i].s.task_id, task_id)) process_manager_stop(records[i].s.id);
+}
 static Record *find(const char *id) {
   if (id) for (size_t i = 0; i < count; i++)
     if (!strcmp(records[i].s.id, id)) return &records[i];
@@ -133,6 +144,7 @@ int process_manager_adopt(pid_t pid, const char *kind, const char *label,
     free(r.text[0]); free(r.text[1]); return 0;
   }
   snprintf(r.s.owner, sizeof(r.s.owner), "%s", current_owner);
+  snprintf(r.s.task_id, sizeof(r.s.task_id), "%s", current_task);
   r.s.pid = r.s.pgid = pid;
   r.s.running = 1; r.s.exit_code = -1;
   r.s.started_ms = process_manager_now_ms();

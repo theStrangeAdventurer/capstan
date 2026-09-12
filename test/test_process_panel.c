@@ -4,19 +4,29 @@
  *   vendor/ncurses-install/lib/libtinfow.a -o build/test_process_panel
  */
 #include "process_panel.h"
-#include "process_manager.h"
+#include "background_work.h"
+#define process_manager_count background_work_count
+#define process_manager_at background_work_at
+#define process_manager_get background_work_get
+#define process_manager_stop background_work_stop
+#define process_manager_output background_work_output
 #include <assert.h>
 #include <ncursesw/curses.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 static int stopped;
+static const char *kind = "mcp";
+int background_work_inprocess(const BackgroundSnapshot *s) {
+  return !strcmp(s->kind, "subagent") || !strcmp(s->kind, "subagent_group");
+}
+const char *background_work_status(const BackgroundSnapshot *s) { (void)s; return "running"; }
 size_t process_manager_count(void) { return 1; }
 int process_manager_at(size_t i, ProcessSnapshot *p) {
   if (i) return 0;
   memset(p, 0, sizeof(*p));
   strcpy(p->id, "opaque-test-id");
-  strcpy(p->kind, "mcp");
+  strcpy(p->kind, kind);
   p->pid = 42;
   p->running = 1;
   return 1;
@@ -92,6 +102,14 @@ int main(void) {
     process_panel_indicator(0); /* Session overlay owns this corner. */
     assert(!process_panel_mouse(0, x, BUTTON1_CLICKED));
   }
+  assert(resizeterm(24, 110) == OK);
+  kind = "subagent_group";
+  erase(); process_panel_indicator(1);
+  assert(!process_panel_mouse(0, 108, BUTTON1_CLICKED));
+  kind = "subagent";
+  erase(); process_panel_indicator(1);
+  assert(process_panel_mouse(0, 108, BUTTON1_CLICKED));
+  process_panel_key(0x10);
   endwin();
   delscreen(screen);
   fclose(out);

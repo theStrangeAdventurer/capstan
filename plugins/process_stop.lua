@@ -5,7 +5,7 @@ local plugin = {
     description = "Request managed process termination", async = false,
     tool = {
         name = "process_stop",
-        description = "Request termination of a managed process by opaque ID (not PID). Only your session's processes or explicitly permitted shared runtime MCP processes can be stopped. Stopping is not confirmation of exit.",
+        description = "Request termination of a managed process or cancellation of a background subagent/task group by opaque ID (not PID). Only your session's processes or explicitly permitted shared runtime MCP processes can be stopped. Stopping is not confirmation of exit.",
         permission = "process_stop",
         permission_target = function(args) return args.id end,
         parameters = {type = "object", properties = {

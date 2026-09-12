@@ -96,3 +96,49 @@ not call TUI rendering functions.
 `make test` covers CLI option parsing and named-session policy.
 `make test-http-lua` covers session-scoped logging. `make test-build` covers
 embedded runtime availability from an isolated directory.
+
+### Detached background child runtime
+
+`capstan.agent.run(options, callbacks)` keeps its existing boolean/error returns
+and adds an idempotent third return: a cancellation closure. With
+`background=true`, the child captures its provider/model, profile, base system
+prompt, workdir, workspace root and launching process owner. It suppresses active
+session text/status/usage fallbacks and after-turn UI hooks; supplied callbacks
+still receive results. The child has its own telemetry lifecycle, identified by
+background ID and process owner, so finishing the launching tool cannot cancel it.
+
+Tool contexts include `workdir`, `workspace_root`, `system_prompt`,
+`process_owner`, `background_id` and `background`. Lua workspace fields and native
+file/shell/permission paths must agree: `tools.background_context(workdir, root)`
+sets the native context and returns the previous workdir, workspace root,
+actual cwd and explicit-workspace flag for restoration.
+The runtime restores both contexts after callbacks, including exceptions.
+Cross-run transport callbacks encountered inside a background tool are deferred
+until an ordinary poll boundary; nested tool HTTP pumps never enter the scheduler.
+
+The guarded `agent_background_poll` hook is called before ordinary native HTTP
+polls, not from modal HTTP waits or recursive polls. It services cancellation
+flags even without an HTTP reply, discards late cancelled replies, then polls the
+loaded `agent.subagents` scheduler. `agent_close_background_owner(owner)` and
+`agent_shutdown_background()` expose lifecycle cancellation. Native process
+completion events remain owner-scoped runtime data, consumed at the next normal
+model request boundary; they never autonomously launch a model turn.
+
+Offline regression coverage: `test/test_background_runtime.lua` exercises the
+real runtime and SSE parser with mocked native/transport boundaries: detach,
+no-response cancellation, late replies, provider/profile/workspace capture,
+nested callback deferral and exception-safe restoration. Native context adapter
+and poll-boundary integration are checked by `make test-process-control`.
+
+CLI runs do not implicitly wait for detached subagents after the parent finishes.
+Use `processes` with `action="wait"` and inspect `output` before returning an
+answer that depends on a child. CLI exit cancels unfinished children and reports
+the count to stderr; the parent result remains separate from child completion.
+ACP turn completion preserves children, while session close cancels that owner's
+children. TUI session switching preserves the original owner and running work.
+
+`test/test_background_modes.py` uses an offline loopback SSE server and the real
+binary to check independent parent work, CLI/ACP wait and output, single completion
+notification, CLI exit/ACP owner-close cancellation, and TUI session switching
+with panel visibility and completion. `make test-process-control` includes it.
+Validated on macOS; Linux execution has not been checked for this change.

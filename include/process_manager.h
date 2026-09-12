@@ -11,6 +11,7 @@ typedef struct {
   pid_t pid, pgid;
   char kind[24], label[PROCESS_TEXT_SIZE], workdir[PROCESS_TEXT_SIZE];
   char owner[128];
+  char task_id[PROCESS_ID_SIZE];
   int running, stopping, timed_out, exit_code;
   long long started_ms, finished_ms;
   int output_available, truncated;
@@ -20,6 +21,9 @@ typedef struct {
 void process_manager_set_owner(const char *owner);
 /* Borrowed, sanitized current owner; valid until the next set_owner call. */
 const char *process_manager_owner(void);
+void process_manager_set_task(const char *task_id);
+const char *process_manager_task(void);
+void process_manager_stop_task(const char *task_id);
 /* Adopt a direct, unreaped child with its own process group. Manager owns waitpid
  * and signals from this point. out_fd/err_fd are transferred (-1: protocol owned).
  * Returns 0 on failure; caller still owns child and descriptors in that case. */

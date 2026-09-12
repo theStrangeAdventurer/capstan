@@ -4,6 +4,7 @@
 #include "permit.h"
 #include "shell_process.h"
 #include "process_manager.h"
+#include "background_work.h"
 #include "process_observe.h"
 #include "session_manager.h"
 #include "tui.h"
@@ -15,6 +16,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <limits.h>
+#include <unistd.h>
+#include <errno.h>
 
 extern lua_State *L;
 
@@ -307,6 +311,7 @@ void permit_init(lua_State *L) {
  * explicit owner. Never accept ownership or PIDs from tool arguments. */
 static char process_owner[128];
 static int process_scoped;
+static char process_task[PROCESS_ID_SIZE];
 
 static const char *tools_process_owner(void) {
   if (process_scoped) return process_owner;
@@ -316,14 +321,21 @@ static const char *tools_process_owner(void) {
 
 static int l_tools_process_scope(lua_State *L) {
   const char *owner = luaL_optstring(L, 1, NULL);
+  const char *task = luaL_optstring(L, 2, "");
   if (owner && strlen(owner) >= sizeof(process_owner))
     return luaL_error(L, "process owner too long");
+  if (strlen(task) >= sizeof(process_task))
+    return luaL_error(L, "process task too long");
   if (process_scoped) lua_pushstring(L, process_owner);
   else lua_pushnil(L);
+  if (process_task[0]) lua_pushstring(L, process_task);
+  else lua_pushnil(L);
   snprintf(process_owner, sizeof(process_owner), "%s", owner ? owner : "");
+  snprintf(process_task, sizeof(process_task), "%s", task);
   process_scoped = owner != NULL;
   process_manager_set_owner(tools_process_owner());
-  return 1;
+  process_manager_set_task(process_task);
+  return 2;
 }
 
 static int process_visible(const ProcessSnapshot *s) {
@@ -339,15 +351,19 @@ static void push_process(lua_State *L, const ProcessSnapshot *s) {
 #define PROCESS_BOOL(field) lua_pushboolean(L, s->field); lua_setfield(L, -2, #field)
   PROCESS_STRING(id); PROCESS_STRING(kind); PROCESS_STRING(label);
   PROCESS_STRING(workdir); PROCESS_STRING(owner);
-  PROCESS_NUMBER(pid); PROCESS_NUMBER(pgid); PROCESS_NUMBER(started_ms);
+  if (s->task_id[0]) { PROCESS_STRING(task_id); }
+  if (!background_work_inprocess(s)) { PROCESS_NUMBER(pid); PROCESS_NUMBER(pgid); }
+  PROCESS_NUMBER(started_ms);
   PROCESS_NUMBER(finished_ms);
   PROCESS_BOOL(running); PROCESS_BOOL(stopping); PROCESS_BOOL(timed_out);
   PROCESS_BOOL(output_available); PROCESS_BOOL(truncated);
   if (!s->running) {
     lua_pushinteger(L, s->exit_code); lua_setfield(L, -2, "exit");
   }
-  lua_pushstring(L, s->running ? (s->stopping ? "stopping" : "running") :
-      (s->timed_out ? "timed_out" : "exited"));
+  if (background_work_inprocess(s) && !s->running) {
+    lua_pushboolean(L, s->exit_code == 0); lua_setfield(L, -2, "ok");
+  }
+  lua_pushstring(L, background_work_status(s));
   lua_setfield(L, -2, "status");
 #undef PROCESS_STRING
 #undef PROCESS_NUMBER
@@ -360,9 +376,9 @@ static int l_tools_processes(lua_State *L) {
   if (strcmp(action, "list") == 0) {
     lua_newtable(L);
     lua_Integer n = 0;
-    for (size_t i = 0; i < process_manager_count(); ++i) {
+    for (size_t i = 0; i < background_work_count(); ++i) {
       ProcessSnapshot s;
-      if (process_manager_at(i, &s) && process_visible(&s)) {
+      if (background_work_at(i, &s) && process_visible(&s)) {
         push_process(L, &s);
         lua_rawseti(L, -2, ++n);
       }
@@ -373,10 +389,10 @@ static int l_tools_processes(lua_State *L) {
     return luaL_error(L, "unknown processes action");
   const char *id = luaL_checkstring(L, 2);
   ProcessSnapshot s;
-  if (!process_manager_get(id, &s) || !process_visible(&s))
+  if (!background_work_get(id, &s) || !process_visible(&s))
     return luaL_error(L, "process not found in this session");
   push_process(L, &s);
-  if (strcmp(action, "get") == 0) {
+  if (strcmp(action, "get") == 0 && !background_work_inprocess(&s)) {
     ProcessDescendant children[128];
     size_t count = s.running ? process_observe_descendants(s.pid, s.pgid, children, 128) : 0;
     lua_newtable(L);
@@ -393,7 +409,7 @@ static int l_tools_processes(lua_State *L) {
   }
   if (strcmp(action, "output") == 0) {
     for (int stream = 0; stream < 2; ++stream) {
-      char *output = process_manager_output(id, stream);
+      char *output = background_work_output(id, stream);
       lua_pushstring(L, output ? output : "");
       free(output);
       lua_setfield(L, -2, stream ? "stderr" : "stdout");
@@ -405,14 +421,14 @@ static int l_tools_processes(lua_State *L) {
 static int l_tools_process_stop(lua_State *L) {
   const char *id = luaL_checkstring(L, 1);
   ProcessSnapshot s;
-  if (!process_manager_get(id, &s) || !process_visible(&s))
+  if (!background_work_get(id, &s) || !process_visible(&s))
     return luaL_error(L, "process not found in this session");
   /* The dispatcher authorizes the distinct process_stop permission before
    * this binding, including one-shot/ACP grants. Ownership is enforced here;
    * never reinterpret a shell/MCP grant as a process_stop grant. */
-  if (!process_manager_stop(id))
+  if (!background_work_stop(id))
     return luaL_error(L, "failed to request process stop");
-  if (!process_manager_get(id, &s))
+  if (!background_work_get(id, &s))
     return luaL_error(L, "process snapshot unavailable");
   push_process(L, &s);
   return 1;
@@ -428,11 +444,12 @@ static int l_tools_shell(lua_State *L) {
   if (background) {
     char id[PROCESS_ID_SIZE];
     process_manager_set_owner(tools_process_owner());
+    process_manager_set_task(process_task);
     if (!process_manager_start(command, NULL, app_workdir(), timeout,
         PERMIT_MAX_STDOUT, PERMIT_MAX_STDERR, id))
       return luaL_error(L, "failed to start background shell process");
     ProcessSnapshot s;
-    if (!process_manager_get(id, &s))
+    if (!background_work_get(id, &s))
       return luaL_error(L, "background process snapshot unavailable");
     process_manager_watch(id);
     push_process(L, &s);
@@ -441,6 +458,7 @@ static int l_tools_shell(lua_State *L) {
   }
 
   process_manager_set_owner(tools_process_owner());
+  process_manager_set_task(process_task);
   long long started_ms = now_ms();
   log_shell_start(timeout, command);
   ShellProcessResult result;
@@ -498,6 +516,7 @@ static int l_tools_exec(lua_State *L) {
     timeout = PERMIT_DEFAULT_SHELL_TIMEOUT;
   ShellProcessResult result;
   process_manager_set_owner(tools_process_owner());
+  process_manager_set_task(process_task);
   int started = shell_process_run_argv(argv, app_workspace_root(), timeout,
       PERMIT_MAX_STDOUT, PERMIT_MAX_STDERR, tui_pump_blocking, &result);
   free(argv);
@@ -522,18 +541,120 @@ static int l_tools_process_events(lua_State *L) {
   lua_newtable(L);
   ProcessSnapshot s;
   int n = 0;
-  while (process_manager_completion(owner, &s)) {
+  while (background_work_completion(owner, &s)) {
     push_process(L, &s);
     lua_rawseti(L, -2, ++n);
   }
   return 1;
 }
+void background_work_poll_lua(lua_State *L) {
+  static int polling;
+  if (!L || polling) return;
+  polling = 1;
+  int top = lua_gettop(L);
+  lua_getglobal(L, "agent_background_poll");
+  if (lua_isfunction(L, -1) && lua_pcall(L, 0, 0, 0) != LUA_OK)
+    log_event("background", lua_tostring(L, -1) ? lua_tostring(L, -1) : "background poll failed");
+  lua_settop(L, top);
+  polling = 0;
+}
 static int l_tools_process_close_owner(lua_State *L) {
-  lua_pushboolean(L, process_manager_close_owner(luaL_checkstring(L, 1)));
+  const char *owner = luaL_checkstring(L, 1);
+  size_t cancelled = background_work_cancel_owner(owner);
+  /* Adapter teardown is an explicit scheduler boundary, never a render path. */
+  background_work_poll_lua(L);
+  int settled = process_manager_close_owner(owner);
+  BackgroundSnapshot s;
+  for (size_t i = 0; i < background_work_count(); i++)
+    if (background_work_at(i, &s) && s.running && !strcmp(s.owner, owner)) settled = 0;
+  lua_pushboolean(L, settled);
+  lua_pushinteger(L, (lua_Integer)cancelled);
+  return 2;
+}
+static const char *background_field(lua_State *L, const char *key, const char *fallback) {
+  lua_getfield(L, 1, key);
+  return lua_isnil(L, -1) ? fallback : luaL_checkstring(L, -1);
+}
+static int l_tools_background_register(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  /* Internal scheduler API only; never expose this table as model arguments. */
+  const char *owner = background_field(L, "owner", tools_process_owner());
+  const char *kind = background_field(L, "kind", "subagent");
+  const char *label = background_field(L, "label", "");
+  const char *workdir = background_field(L, "workdir", app_workdir());
+  char id[PROCESS_ID_SIZE];
+  if (!background_work_register(owner, kind, label, workdir, id))
+    return luaL_error(L, "cannot register background work (invalid metadata or capacity exhausted)");
+  lua_pushstring(L, id);
+  return 1;
+}
+static int l_tools_background_update(lua_State *L) {
+  const char *id = luaL_checkstring(L, 1);
+  luaL_checktype(L, 2, LUA_TTABLE);
+  lua_getfield(L, 2, "status");
+  const char *status = lua_isnil(L, -1) ? NULL : luaL_checkstring(L, -1);
+  lua_getfield(L, 2, "output");
+  const char *output = lua_isnil(L, -1) ? NULL : luaL_checkstring(L, -1);
+  lua_getfield(L, 2, "ok");
+  int ok = lua_toboolean(L, -1);
+  if (!background_work_update(id, status, output, ok))
+    return luaL_error(L, "cannot update background work (missing, terminal, invalid status, or sanitized output exceeds 65536 bytes; reduce aggregate output)");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+/* Swap only native execution paths, never sessions, Lua runtime state, or UI.
+ * The third return/optional argument preserves cwd even when it differs from
+ * app_workdir. The fourth preserves inferred/explicit workspace policy.
+ * Callers must restore all four values in their finally path. */
+static int l_tools_background_context(lua_State *L) {
+  const char *dir = luaL_checkstring(L, 1);
+  const char *root = luaL_checkstring(L, 2);
+  const char *cwd = luaL_optstring(L, 3, dir);
+  int explicit = lua_isnoneornil(L, 4) ? 1 : lua_toboolean(L, 4);
+  char next_dir[PATH_MAX], next_root[PATH_MAX], next_cwd[PATH_MAX];
+  char old_dir[PATH_MAX], old_root[PATH_MAX], old_cwd[PATH_MAX];
+  struct stat st;
+  if (dir[0] != '/' || root[0] != '/' || cwd[0] != '/' ||
+      !realpath(dir, next_dir) || !realpath(root, next_root) ||
+      !realpath(cwd, next_cwd) || stat(next_dir, &st) || !S_ISDIR(st.st_mode) ||
+      stat(next_root, &st) || !S_ISDIR(st.st_mode))
+    return luaL_error(L, "background context requires existing absolute directories");
+  size_t n = strlen(next_root);
+  if (strcmp(next_root, "/") && strcmp(next_dir, next_root) &&
+      (strncmp(next_dir, next_root, n) || next_dir[n] != '/'))
+    return luaL_error(L, "background workdir must be inside workspace root");
+  snprintf(old_dir, sizeof(old_dir), "%s", app_workdir());
+  snprintf(old_root, sizeof(old_root), "%s", app_workspace_root());
+  if (!getcwd(old_cwd, sizeof(old_cwd)))
+    return luaL_error(L, "cannot capture background cwd: %s", strerror(errno));
+  /* Allocate Lua return values before mutating process-global state. */
+  lua_pushstring(L, old_dir);
+  lua_pushstring(L, old_root);
+  lua_pushstring(L, old_cwd);
+  lua_pushboolean(L, app_workspace_explicit());
+  if (chdir(next_cwd))
+    return luaL_error(L, "cannot enter background cwd: %s", strerror(errno));
+  if (!app_execution_context_set(next_dir, next_root, explicit)) {
+    int restored = chdir(old_cwd) == 0;
+    return luaL_error(L, restored ? "cannot set background context" :
+        "cannot set background context; restoring native paths failed");
+  }
+  return 4;
+}
+static int l_tools_background_cancelled(lua_State *L) {
+  lua_pushboolean(L, background_work_cancelled(luaL_checkstring(L, 1)));
   return 1;
 }
 void tools_init(lua_State *L) {
   lua_newtable(L);
+  lua_pushcfunction(L, l_tools_background_context);
+  lua_setfield(L, -2, "background_context");
+  lua_pushcfunction(L, l_tools_background_register);
+  lua_setfield(L, -2, "background_register");
+  lua_pushcfunction(L, l_tools_background_update);
+  lua_setfield(L, -2, "background_update");
+  lua_pushcfunction(L, l_tools_background_cancelled);
+  lua_setfield(L, -2, "background_cancelled");
   lua_pushcfunction(L, l_tools_shell);
   lua_setfield(L, -2, "shell");
   lua_pushcfunction(L, l_tools_exec);

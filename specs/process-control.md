@@ -2,9 +2,10 @@
 
 ## Scope and user interface
 
-The first version manages shell/argv children and local stdio MCP servers of
-this Capstan instance. It is not a system-wide process monitor, daemon, LSP
-client, terminal emulator or background agent scheduler.
+The common facade manages shell/argv children, local stdio MCP servers and
+in-process background subagent groups/tasks of this Capstan instance. It is not
+a system-wide process monitor, daemon, LSP client or terminal emulator. Lua owns
+subagent scheduling; the native manager owns OS process lifecycle.
 
 `/processes` (no arguments), `Ctrl+P`, and the clickable, dim top-right badge
 `[ Background processes: N | /processes for details ]`
@@ -169,3 +170,30 @@ pattern-based, not a promise to recognize arbitrary secrets printed by programs.
 
 Platform validation must report actual host coverage; native macOS observation
 passing does not establish Linux correctness.
+
+## Background subagent adapter and explicit wait
+
+The session-scoped `list`, `get`, `output`, `process_stop` and completion-event
+facade also includes `subagent` and `subagent_group` entries. These carry opaque
+IDs, owner/workdir/label, and queued/running/completed/failed/cancelled status,
+not fake PIDs or OS signals. A task output is its bounded structured result;
+a group output is a JSON string containing ordered task findings. See
+[subagents](subagents.md) for canonical scheduling, limits and cancellation.
+Native stop requests cancellation only; safe ordinary Lua polling closes runs.
+The panel/modal never dispatches Lua, so cancellation is confirmed only after
+returning to a safe poll boundary. Finishing a parent answer leaves detached
+children running; owner cleanup and shutdown explicitly cancel them.
+
+`processes({action="wait", id=..., timeout=30})` accepts an opaque process,
+task or group ID. It returns the current native snapshot when terminal or after
+a bounded timeout in **seconds** (default 30, cap 300; zero is a nonblocking
+snapshot). `timed_out=true` means the wait elapsed, not that the task failed or
+was cancelled; a terminal return has `timed_out=false`. Existing lifecycle
+status/exit fields remain authoritative. Every refresh rechecks native ownership.
+Unknown/inaccessible IDs and missing HTTP polling surface errors, not success.
+The wait pumps `http.poll`, the guarded Lua scheduler, and optional
+`http.wait_frame`; it never sleeps indefinitely. Model descriptions require an
+explicit wait and output inspection before necessary final conclusions.
+
+Offline plugin/scheduler checks: `test/test_process_tools.lua` and
+`test/test_background_subagents.lua` with the vendored Lua interpreter.

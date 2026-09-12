@@ -23,6 +23,7 @@ extern MunitSuite scroll_suite;
 extern MunitSuite session_suite;
 extern MunitSuite shell_process_suite;
 extern MunitSuite process_manager_suite;
+extern MunitSuite background_work_suite;
 extern MunitSuite process_observe_suite;
 extern MunitSuite shell_output_suite;
 extern MunitSuite start_screen_suite;
@@ -62,6 +63,7 @@ int main(int argc, char *argv[]) {
     session_suite,
     shell_process_suite,
     process_manager_suite,
+    background_work_suite,
     process_observe_suite,
     shell_output_suite,
     start_screen_suite,

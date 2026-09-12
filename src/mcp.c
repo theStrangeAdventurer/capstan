@@ -346,10 +346,16 @@ static int l_mcp_spawn(lua_State *L) {
     workdir[0] = '\0';
   char saved_owner[sizeof(((ProcessSnapshot *)0)->owner)];
   snprintf(saved_owner, sizeof(saved_owner), "%s", process_manager_owner());
+  char saved_task[PROCESS_ID_SIZE];
+  snprintf(saved_task, sizeof(saved_task), "%s", process_manager_task());
   process_manager_set_owner(owner);
+  /* MCP transports belong to the session/runtime, not whichever task happened
+   * to trigger reconciliation. Cancelling that task must not kill shared MCP. */
+  process_manager_set_task(NULL);
   int adopted = process_manager_adopt_argv(pid, "mcp", argv, workdir, -1,
                                       err_pipe[0], 0, 65536, 0, process_id);
   process_manager_set_owner(saved_owner);
+  process_manager_set_task(saved_task);
   if (!adopted) {
     /* Adoption failed: this unreaped child still belongs to us. */
     kill(-pid, SIGKILL);

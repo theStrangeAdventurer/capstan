@@ -1,5 +1,8 @@
 #include "permit.h"
+#include "app_config.h"
+#include <limits.h>
 #include "process_manager.h"
+#include "background_work.h"
 #include <assert.h>
 #include <lauxlib.h>
 #include <lualib.h>
@@ -24,6 +27,38 @@ static void run(const char *script) {
 }
 int main(void) {
   L = luaL_newstate(); assert(L); luaL_openlibs(L); tools_init(L);
+  char original[PATH_MAX], cwd[PATH_MAX], child[PATH_MAX];
+  assert(getcwd(original, sizeof(original)));
+  assert(realpath("test", child));
+  assert(app_workdir_set(original) && app_workspace_set(original));
+  assert(chdir(child) == 0); /* Native workdir and actual cwd may differ. */
+  lua_pushstring(L, child); lua_setglobal(L, "context_child");
+  lua_pushstring(L, original); lua_setglobal(L, "context_root");
+  run("saved_dir,saved_root,saved_cwd = tools.background_context(context_child,context_root); "
+      "assert(saved_dir == context_root and saved_root == context_root and saved_cwd == context_child)");
+  assert(!strcmp(app_workdir(), child));
+  assert(!strcmp(app_workspace_root(), original));
+  assert(getcwd(cwd, sizeof(cwd)) && !strcmp(cwd, child));
+  run("assert(not pcall(tools.background_context,context_root,context_child)); "
+      "assert(not pcall(tools.background_context,context_child,context_root,context_root..'/missing-cwd')); "
+      "tools.background_context(saved_dir,saved_root,saved_cwd)");
+  assert(!strcmp(app_workdir(), original));
+  assert(!strcmp(app_workspace_root(), original));
+  assert(getcwd(cwd, sizeof(cwd)) && !strcmp(cwd, child));
+  assert(chdir(original) == 0);
+  assert(app_execution_context_set(original, original, 0));
+  run("saved_dir,saved_root,saved_cwd,saved_explicit = tools.background_context(context_child,context_root); "
+      "assert(saved_explicit == false)");
+  assert(app_workspace_explicit());
+  run("tools.background_context(saved_dir,saved_root,saved_cwd,saved_explicit)");
+  assert(!app_workspace_explicit());
+  assert(!app_execution_context_set(original, child, 1));
+  assert(!strcmp(app_workdir(), original) && !strcmp(app_workspace_root(), original));
+  assert(!app_workspace_explicit());
+  run("assert(not pcall(tools.background_context,context_root,context_child)); "
+      "assert(not pcall(tools.background_context,context_child,context_root,context_root..'/missing-cwd'))");
+  assert(!app_workspace_explicit());
+  assert(getcwd(cwd, sizeof(cwd)) && !strcmp(cwd, original));
   run("tools.process_scope('session-a'); a = tools.shell('printf ready; sleep 30', 0, true); "
       "assert(a.started and a.id and a.pid and not a.exit); "
       "tools.process_scope('session-b'); assert(#tools.processes('list') == 0); "
@@ -49,7 +84,45 @@ int main(void) {
       "tools.process_scope(nil); local c = tools.shell('true', 2); assert(c.exit == 0)");
   assert(process_manager_at(process_manager_count() - 1, &s));
   assert(!strcmp(s.owner, "manual-session"));
-  process_manager_shutdown(); lua_close(L);
+  run("tools.process_scope('session-a'); "
+      "local id = tools.background_register{owner='session-a',kind='subagent',label='worker',workdir='.'}; "
+      "local s = tools.processes('get',id); assert(s.kind == 'subagent' and s.status == 'queued'); "
+      "assert(s.pid == nil and s.pgid == nil and s.descendants == nil); "
+      "tools.process_scope('session-b'); assert(not pcall(tools.process_stop,id)); "
+      "assert(not pcall(tools.processes,'output',id)); tools.process_scope('session-a'); "
+      "assert(not tools.background_cancelled(id)); tools.process_stop(id); assert(tools.background_cancelled(id)); "
+      "tools.background_update(id,{status='cancelled',output='done',ok=false}); "
+      "assert(tools.processes('output',id).stdout == 'done'); "
+      "assert(#tools.process_events('session-a') == 0); "
+      "local group = tools.background_register{owner='session-a',kind='subagent_group'}; "
+      "tools.background_update(group,{status='cancelled',output='{\"ok\":false}',ok=false}); "
+      "local events = tools.process_events('session-a'); assert(#events == 1 and events[1].id == group); "
+      "assert(events[1].status == 'cancelled' and events[1].ok == false); "
+      "assert(#tools.process_events('session-a') == 0); "
+      "assert(not pcall(tools.background_update,id,{status='completed',output='changed',ok=true})); "
+      "assert(tools.processes('output',id).stdout == 'done'); "
+      "local c = tools.background_register{owner='session-a',kind='subagent'}; "
+      "agent_background_poll = function() if tools.background_cancelled(c) then "
+      "tools.background_update(c,{status='cancelled',ok=false}) end end; "
+      "local ok,n = tools.process_close_owner('session-a'); assert(ok and n == 1)");
+  run("tools.process_scope('tasks'); "
+      "local a = tools.background_register{kind='subagent'}; "
+      "local b = tools.background_register{kind='subagent'}; "
+      "local owner,task = tools.process_scope('tasks',a); assert(owner == 'tasks' and task == nil); "
+      "local pa = tools.shell('sleep 30',0,true); assert(pa.task_id == a); "
+      "owner,task = tools.process_scope('tasks',b); assert(owner == 'tasks' and task == a); "
+      "local pb = tools.shell('sleep 30',0,true); assert(pb.task_id == b); "
+      "owner,task = tools.process_scope('tasks'); assert(task == b); "
+      "local job = tools.shell('sleep 30',0,true); assert(job.task_id == nil); "
+      "tools.process_stop(a); assert(tools.processes('get',pa.id).stopping); "
+      "assert(not tools.processes('get',pb.id).stopping); "
+      "tools.background_update(b,{status='cancelled'}); assert(tools.background_cancelled(b)); "
+      "assert(tools.processes('get',pb.id).stopping); "
+      "tools.background_update(a,{status='cancelled'}); "
+      "assert(not pcall(tools.process_stop,a)); "
+      "assert(tools.processes('get',job.id).running and not tools.processes('get',job.id).stopping); "
+      "assert(tools.process_close_owner('tasks'))");
+  background_work_shutdown(); lua_close(L);
   puts("process bindings: ownership, opaque IDs, completion delivery, owner cleanup passed");
   return 0;
 }

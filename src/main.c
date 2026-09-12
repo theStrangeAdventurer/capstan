@@ -19,6 +19,7 @@
 #include "session_manager.h"
 #include "tui.h"
 #include "process_manager.h"
+#include "background_work.h"
 #include "process_panel.h"
 #include "trace.h"
 #include "utils.h"
@@ -1207,6 +1208,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   while (!g_headless_run.done && http_is_loading()) {
     process_manager_poll();
     http_poll(L);
+    background_work_poll_lua(L);
     usleep(10000);
   }
 
@@ -1253,6 +1255,10 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
             g_headless_run.error[0] ? g_headless_run.error : "run failed");
   }
 
+  size_t cancelled_background = background_work_cancel_owner(headless_session.id);
+  background_work_poll_lua(L);
+  if (cancelled_background)
+    fprintf(stderr, "capstan: cancelled %zu background subagent(s) at CLI exit\n", cancelled_background);
   int rc = g_headless_run.ok ? 0 : 1;
   free(g_headless_run.text);
   g_headless_run = (HeadlessRun){0};
@@ -1639,6 +1645,7 @@ int main(int argc, char *argv[]) {
     int ch = getch();
     if (ch == ERR) {
       int had_http_events = http_poll_limited(L, 2);
+      if (!popup_is_active()) background_work_poll_lua(L);
       dispatch_tick();
       session_manager_tick();
       long long now = main_now_ms();

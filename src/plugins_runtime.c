@@ -1,6 +1,7 @@
 #include "mcp.h"
 #include "plugins.h"
 #include "process_manager.h"
+#include "background_work.h"
 #include "plugins_internal.h"
 #include "agent.h"
 #include "app_config.h"
@@ -87,6 +88,7 @@ static void register_embedded_modules(void) {
   lua_pushcfunction(L, l_require_embedded_json);
   lua_setfield(L, -2, "vendor.rxi.json");
   preload_embedded_asset(L, "agent.runtime", "agent/runtime.lua");
+  preload_embedded_asset(L, "agent.subagents", "agent/subagents.lua");
   preload_embedded_asset(L, "agent.telemetry", "agent/telemetry.lua");
   preload_embedded_asset(L, "agent.provider_config",
                          "agent/provider_config.lua");
@@ -791,7 +793,13 @@ void plugins_init_with_options(const PluginsInitOptions *options) {
 void plugins_init(void) { plugins_init_with_options(NULL); }
 
 void plugins_cleanup(void) {
+  background_work_cancel_all();
   if (L) {
+    background_work_poll_lua(L);
+    if (luaL_dostring(L, "local s=package.loaded['agent.subagents']; if s then s.shutdown() end") != LUA_OK) {
+      log_event("background", lua_tostring(L, -1));
+      lua_pop(L, 1);
+    }
     /* Settle explicit run owners before Lua and foreground HTTP are destroyed. */
     const char *shutdown = "local t=package.loaded['agent.telemetry']; if t then t.shutdown() end";
     if (luaL_dostring(L, shutdown) != LUA_OK) lua_pop(L, 1);
@@ -803,6 +811,6 @@ void plugins_cleanup(void) {
     L = NULL;
   }
   mcp_cleanup();
-  process_manager_shutdown();
+  background_work_shutdown();
   http_cleanup();
 }

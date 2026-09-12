@@ -1,5 +1,6 @@
 #include "acp.h"
 #include "process_manager.h"
+#include "background_work.h"
 #include "telemetry.h"
 #include "app_config.h"
 #include "embedded_assets.h"
@@ -386,6 +387,7 @@ int acp_run(const char *argv0, int yolo) {
 
     process_manager_poll();
     http_poll_limited(L, 4);
+    background_work_poll_lua(L);
     plugins_mcp_tick();
 
     if (g_input_eof && !disconnected) {

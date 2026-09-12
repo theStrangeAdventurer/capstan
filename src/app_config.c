@@ -209,6 +209,24 @@ static void workspace_root_init(void) {
   set_workspace_root(g_workdir);
 }
 
+int app_execution_context_set(const char *dir, const char *root, int explicit) {
+  char resolved_dir[PATH_MAX], resolved_root[PATH_MAX];
+  if (!is_absolute_path(dir) || !is_absolute_path(root) ||
+      !realpath(dir, resolved_dir) || !realpath(root, resolved_root) ||
+      !is_dir(resolved_dir) || !is_dir(resolved_root) ||
+      !path_is_within(resolved_dir, resolved_root))
+    return 0;
+  strcpy(g_workdir, resolved_dir);
+  strcpy(g_workspace_root, resolved_root);
+  g_workspace_explicit = !!explicit;
+  return 1;
+}
+
+int app_workspace_explicit(void) {
+  workspace_root_init();
+  return g_workspace_explicit;
+}
+
 int app_workspace_set(const char *path) {
   int ok = set_workspace_root(path);
   if (ok)

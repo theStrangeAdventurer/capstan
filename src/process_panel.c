@@ -1,5 +1,5 @@
 #include "process_panel.h"
-#include "process_manager.h"
+#include "background_work.h"
 #include "process_observe.h"
 #include <ncursesw/curses.h>
 #include <ctype.h>
@@ -31,23 +31,22 @@ void process_panel_open(void) {
 }
 int process_panel_active(void) { return active; }
 static int current(ProcessSnapshot *p) {
-  size_t count = process_manager_count();
+  size_t count = background_work_count();
   if (selected_id[0]) {
     for (size_t i = 0; i < count; i++) {
-      if (process_manager_at(i, p) && !strcmp(p->id, selected_id)) {
+      if (background_work_at(i, p) && !strcmp(p->id, selected_id)) {
         selected = i;
         return 1;
       }
     }
   }
   if (selected >= count) selected = count ? count - 1 : 0;
-  if (!count || !process_manager_at(selected, p)) return 0;
+  if (!count || !background_work_at(selected, p)) return 0;
   snprintf(selected_id, sizeof(selected_id), "%s", p->id);
   return 1;
 }
 static const char *state(const ProcessSnapshot *p) {
-  return p->running ? (p->stopping ? "stopping" : "running") :
-         p->timed_out ? "timed out" : p->exit_code < 0 ? "unknown" : "exited";
+  return background_work_status(p);
 }
 /* Metadata may contain controls too. Keep every field within its own row. */
 static void row(WINDOW *win, int y, const char *text) {
@@ -66,7 +65,7 @@ int process_panel_key(int ch) {
   }
   if (confirming) {
     if (ch == 'y' || ch == 'Y') {
-      snprintf(notice, sizeof(notice), "%s", process_manager_stop(stop_id) ?
+      snprintf(notice, sizeof(notice), "%s", background_work_stop(stop_id) ?
                "Stop requested" : "Cannot stop process (it may have exited)");
       confirming = 0;
     } else if (ch == 'n' || ch == 'N' || ch == 27) confirming = 0;
@@ -109,8 +108,8 @@ void process_panel_indicator(int visible) {
   char text[96];
   size_t running = 0;
   ProcessSnapshot p;
-  for (size_t i = 0; i < process_manager_count(); i++)
-    if (process_manager_at(i, &p) && p.running) running++;
+  for (size_t i = 0; i < background_work_count(); i++)
+    if (background_work_at(i, &p) && p.running && strcmp(p.kind, "subagent_group")) running++;
   if (!running) return;
   snprintf(text, sizeof(text), "[ Background processes: %zu | /processes for details ]", running);
   if ((int)strlen(text) > cols - 2)
@@ -136,7 +135,7 @@ int process_panel_mouse(int y, int x, unsigned long buttons) {
   if (click && !detail && y >= top + 2 && y < top + height - 3 &&
       x >= left && x < left + width) {
     size_t index = first + (size_t)(y - top - 2);
-    if (index < process_manager_count()) {
+    if (index < background_work_count()) {
       selected = index; selected_id[0] = 0; detail = 1; offset = 0;
     }
   }
@@ -164,16 +163,19 @@ void process_panel_render(void) {
     row(win, 2, "Stop this process group? [y/N]");
     row(win, 3, stop_id);
     ProcessSnapshot target;
-    if (process_manager_get(stop_id, &target) && !strcmp(target.kind, "mcp"))
+    if (background_work_get(stop_id, &target) && !strcmp(target.kind, "mcp"))
       row(win, 5, "WARNING: stopping MCP disconnects its tools and may fail active requests.");
   } else if (detail && found) {
-    snprintf(text, sizeof(text), "%s  PID %ld  %s  %s  exit=%d", p.id,
+    if (background_work_inprocess(&p)) {
+      stream = 0;
+      snprintf(text, sizeof(text), "%s  %s  %s", p.id, p.kind, state(&p));
+    } else snprintf(text, sizeof(text), "%s  PID %ld  %s  %s  exit=%d", p.id,
              (long)p.pid, p.kind, state(&p), p.exit_code);
     row(win, 1, text);
     snprintf(text, sizeof(text), "Owner: %s   Workdir: %s", p.owner, p.workdir);
     row(win, 2, text);
     row(win, 3, p.label);
-    row(win, 4, stream == 2 ? "Descendants (observed only; stop acts on root group)" :
+    row(win, 4, background_work_inprocess(&p) ? "Output" : stream == 2 ? "Descendants (observed only; stop acts on root group)" :
         stream ? "stderr (Tab: descendants)" : "stdout (Tab: stderr / descendants)");
     if (stream == 2) {
       long long now = process_manager_now_ms();
@@ -193,7 +195,7 @@ void process_panel_render(void) {
       }
     } else if (!p.output_available) row(win, 5, "No captured output yet (MCP stdout is protocol-owned)");
     else {
-      char *output = process_manager_output(p.id, stream);
+      char *output = background_work_output(p.id, stream);
       const char *line = output;
       int skip = offset, y = 5;
       while (line && *line && y < height - 3) {
@@ -217,10 +219,12 @@ void process_panel_render(void) {
     if (!found) row(win, 2, "No managed processes");
     for (int r = 0; r < visible; r++) {
       size_t i = first + (size_t)r;
-      if (!process_manager_at(i, &p)) break;
+      if (!background_work_at(i, &p)) break;
       long long elapsed = ((p.running ? process_manager_now_ms() : p.finished_ms) - p.started_ms) / 1000;
-      snprintf(text, sizeof(text), "%-8ld %-28.28s %-8.8s %-12.12s %5llds %s%s",
-               (long)p.pid, p.label, p.kind, p.owner, elapsed < 0 ? 0 : elapsed,
+      char pid[32] = "";
+      if (!background_work_inprocess(&p)) snprintf(pid, sizeof(pid), "%ld", (long)p.pid);
+      snprintf(text, sizeof(text), "%-8s %-28.28s %-14.14s %-12.12s %5llds %s%s",
+               pid, p.label, p.kind, p.owner, elapsed < 0 ? 0 : elapsed,
                state(&p), !p.running && p.exit_code != 0 ? " !" : "");
       if (i == selected) wattron(win, A_REVERSE);
       row(win, r + 2, text);

@@ -71,7 +71,18 @@ local function configured_profile()
     return profiles.normalize(_G.capstan and _G.capstan.config and _G.capstan.config.profile)
 end
 
+local function deep_copy(value, seen)
+    if type(value) ~= "table" then return value end
+    seen = seen or {}
+    if seen[value] then return seen[value] end
+    local out = {}
+    seen[value] = out
+    for k, v in pairs(value) do out[k] = deep_copy(v, seen) end
+    return out
+end
+
 local function effective_profile(opts)
+    if opts and type(opts.profile) == "table" then return opts.profile end
     local name = profiles.normalize(opts and opts.profile) or active_profile_name or configured_profile() or profiles.default_name()
     return profiles.get(name)
 end
@@ -87,9 +98,9 @@ local function append_system_prompt(system, value)
 end
 
 -- Assembles the message list: prepends system_prompt, then copies all messages.
-local function build_messages(messages, profile)
+local function build_messages(messages, profile, opts)
     local msgs = {}
-    local system = _G.system_prompt or ""
+    local system = (opts and opts.system_prompt) or _G.system_prompt or ""
     local configured = config_table("agent")
     system = append_system_prompt(system, configured and configured.system_prompt_append)
     if profile and profile.prompt then
@@ -201,13 +212,13 @@ local function prepare_provider(opts, profile)
     opts = opts or {}
     local provider_name = opts.provider or M.provider
     local profile_model = nil
-    if not opts.provider and not opts.model and profile and not M.env_provider_override then
+    if not opts.provider_snapshot and not opts.provider and not opts.model and profile and not M.env_provider_override then
         profile_model = models.profile(M, profile.name)
         if profile_model then
             provider_name = profile_model.provider
         end
     end
-    local active = M.providers[provider_name]
+    local active = opts.provider_snapshot or M.providers[provider_name]
     if not active then
         return nil, provider_name
     end
@@ -440,11 +451,149 @@ local function protect_run(span, fn, ...)
     end)
 end
 
+-- Only ordinary poll boundaries may enter another background context. In
+-- particular a plugin's nested http.poll must not execute another run's tools.
+local context_stack = {}
+local deferred_callbacks = {}
+local background_runs = {}
+local background_polling = false
+local cancelled_transports = {}
+local suspended_contexts = {}
+local background_waiting = false
+-- Fail closed rather than retaining an unbounded SSE backlog during modal work.
+local MAX_DEFERRED_BYTES = 10 * 1024 * 1024
+local MAX_DEFERRED_CALLBACKS = 4096
+
+local function must_defer(opts)
+    local current = context_stack[#context_stack]
+    return suspended_contexts[opts] or
+        (current and current ~= opts and (current.background or opts.background))
+end
+
+local function in_context(opts, fn, ...)
+    local cap = _G.capstan
+    local old_dir, old_root = cap.workdir, cap.workspace_root
+    local native = rawget(_G, "tools")
+    local restore_dir, restore_root, restore_cwd, restore_explicit
+    if opts.background and native and type(native.background_context) == "function" then
+        restore_dir, restore_root, restore_cwd, restore_explicit =
+            native.background_context(opts.workdir, opts.workspace_root)
+    elseif opts.background and native and
+        (opts.workdir ~= workspace.configured_workdir() or
+         opts.workspace_root ~= workspace.configured_workspace_root()) then
+        error("background workspace isolation requires tools.background_context", 0)
+    end
+    -- Foreground keeps the existing runtime workspace semantics (including an
+    -- unset workdir); only detached callbacks install a captured workspace.
+    if opts.background then
+        cap.workdir, cap.workspace_root = opts.workdir, opts.workspace_root
+    end
+    context_stack[#context_stack + 1] = opts
+    local scoped = native and type(native.process_scope) == "function"
+    local previous_owner, previous_task, owner_installed
+    local args = table.pack(...)
+    local result = table.pack(pcall(function()
+        if scoped then
+            previous_owner, previous_task = native.process_scope(opts.process_owner, opts.background_id)
+            owner_installed = true
+        end
+        return fn(table.unpack(args, 1, args.n))
+    end))
+    context_stack[#context_stack] = nil
+    cap.workdir, cap.workspace_root = old_dir, old_root
+    local owner_ok, owner_err = true, nil
+    if owner_installed then owner_ok, owner_err = pcall(native.process_scope, previous_owner, previous_task) end
+    local dir_ok, dir_err = true, nil
+    if restore_dir then
+        dir_ok, dir_err = pcall(native.background_context, restore_dir, restore_root, restore_cwd, restore_explicit)
+    end
+    if not result[1] then error(result[2], 0) end
+    if not owner_ok then error(owner_err, 0) end
+    if not dir_ok then error(dir_err, 0) end
+    return table.unpack(result, 2, result.n)
+end
+
+local function dispatch_context(opts, fn, ...)
+    if must_defer(opts) then
+        deferred_callbacks[#deferred_callbacks + 1] = {opts = opts, fn = fn, args = table.pack(...)}
+        return
+    end
+    return in_context(opts, fn, ...)
+end
+
+function M.close_background_owner(owner)
+    local scheduler = package.loaded["agent.subagents"]
+    if scheduler and scheduler.cancel_owner then scheduler.cancel_owner(owner) end
+    for cancel, opts in pairs(background_runs) do
+        if opts.process_owner == owner then cancel() end
+    end
+end
+
+function M.shutdown_background()
+    local scheduler = package.loaded["agent.subagents"]
+    if scheduler and scheduler.shutdown then scheduler.shutdown() end
+    for cancel in pairs(background_runs) do cancel() end
+    deferred_callbacks = {}
+end
+
+_G.agent_background_poll = function()
+    if background_polling or #context_stack > 0 or
+        (http and http.background_wait_safe and not http.background_wait_safe()) then return end
+    background_polling = true
+    local ok, err = pcall(function()
+        local native = rawget(_G, "tools")
+        for cancel, opts in pairs(background_runs) do
+            if opts.background_id and native and native.background_cancelled and
+                native.background_cancelled(opts.background_id) then cancel() end
+        end
+        local transports = cancelled_transports
+        cancelled_transports = {}
+        for _, id in ipairs(transports) do
+            if http and http.cancel then http.cancel(id) end
+        end
+        local pending = deferred_callbacks
+        deferred_callbacks = {}
+        local failure
+        for _, entry in ipairs(pending) do
+            local delivered, delivery_error = pcall(dispatch_context,
+                entry.opts, entry.fn, table.unpack(entry.args, 1, entry.args.n))
+            if not delivered and not failure then failure = delivery_error end
+        end
+        if failure then error(failure, 0) end
+        local scheduler = package.loaded["agent.subagents"]
+        if scheduler and scheduler.poll then scheduler.poll() end
+    end)
+    background_polling = false
+    if not ok then error(err, 0) end
+end
+-- Explicit processes-wait boundary only. Suspend the caller, not the safety
+-- policy: child tools still push a context and nested modal polls stay blocked.
+function M.wait_background_tick()
+    if background_waiting or background_polling then return end
+    local saved = context_stack
+    for _, opts in ipairs(saved) do suspended_contexts[opts] = true end
+    context_stack = {}
+    background_waiting = true
+    local ok, err = pcall(function()
+        _G.agent_background_poll()
+        if http and http.poll then http.poll() end
+        _G.agent_background_poll()
+    end)
+    background_waiting = false
+    context_stack = saved
+    for _, opts in ipairs(saved) do suspended_contexts[opts] = nil end
+    if not ok then error(err, 0) end
+end
+_G.agent_background_wait_poll = M.wait_background_tick
+_G.agent_close_background_owner = M.close_background_owner
+_G.agent_shutdown_background = M.shutdown_background
+
 -- Full agent run: build messages, stream LLM response, handle tool_calls recursively.
 local function run_impl(opts, callbacks, run_span)
     opts = opts or {}
     callbacks = callbacks or {}
-    if opts.profile ~= nil and not profiles.normalize(opts.profile) then
+    if opts.profile ~= nil and not profiles.normalize(
+        type(opts.profile) == "table" and opts.profile.name or opts.profile) then
         local message = "Unknown profile: " .. tostring(opts.profile)
         if callbacks.on_error then callbacks.on_error(message) end
         if callbacks.on_done then callbacks.on_done({ok = false, error = message, error_category = "configuration", text = ""}) end
@@ -460,6 +609,7 @@ local function run_impl(opts, callbacks, run_span)
         return false, message
     end
 
+    active = deep_copy(active)
     local effort = effective_reasoning_effort(active, opts, profile)
     if opts.update_status ~= false then
         agent.set_info(provider_name, active.model, effort or "default")
@@ -472,7 +622,7 @@ local function run_impl(opts, callbacks, run_span)
         agent.set_usage(0, 0, 0, active.context_limit or 0)
     end
     local task_message
-    local msgs = build_messages(opts.messages or {}, profile)
+    local msgs = build_messages(opts.messages or {}, profile, opts)
     local messages_ctx = hooks.run("before_messages", {
         runtime = M,
         provider = active,
@@ -763,12 +913,18 @@ local function run_impl(opts, callbacks, run_span)
                     depth = tonumber(opts.depth) or 0,
                     max_turns = max_turns,
                     profile = profile and profile.name or nil,
+                    profile_snapshot = profile,
                     tools = tools,
                     silent_tools = opts.silent_tools,
                     update_status = opts.update_status ~= false,
                     permission_scope = permission_scope,
                     mcp_scope = opts.mcp_scope,
                     process_owner = opts.process_owner,
+                    background_id = opts.background_id,
+                    background = opts.background,
+                    workdir = opts.workdir,
+                    workspace_root = opts.workspace_root,
+                    system_prompt = opts.system_prompt,
                     callbacks = callbacks,
                     guard = guard,
                     state = run_state,
@@ -959,15 +1115,43 @@ local function run_impl(opts, callbacks, run_span)
                 if is_done then attempt_done = true end
                 return on_result(result, is_done)
             end, prompt_estimate, opts)
-            local response_callback = function(...)
+            local pending_bytes, pending_count, overflow = 0, 0, false
+            local function deliver_response(...)
+                local chunk = ...
+                pending_bytes = math.max(0, pending_bytes - (type(chunk) == "string" and #chunk or 0))
+                pending_count = math.max(0, pending_count - 1)
                 if attempt_done or run_span.ended then return end
                 return protect_run(run_span, parse_response, ...)
+            end
+            local response_callback = function(...)
+                if attempt_done or run_span.ended or overflow then return end
+                local args = table.pack(...)
+                if must_defer(opts) then
+                    pending_bytes = pending_bytes + (type(args[1]) == "string" and #args[1] or 0)
+                    pending_count = pending_count + 1
+                    if pending_bytes > MAX_DEFERRED_BYTES or pending_count > MAX_DEFERRED_CALLBACKS then
+                        overflow = true
+                        local retained = {}
+                        for _, entry in ipairs(deferred_callbacks) do
+                            if entry.fn ~= deliver_response then retained[#retained + 1] = entry end
+                        end
+                        deferred_callbacks = retained
+                        pending_bytes, pending_count = 0, 1
+                        if opts.transport_id then
+                            cancelled_transports[#cancelled_transports + 1] = opts.transport_id
+                            opts.transport_id = nil
+                        end
+                        args = table.pack(nil, true, "Deferred stream buffer limit exceeded")
+                    end
+                end
+                return dispatch_context(opts, deliver_response, table.unpack(args, 1, args.n))
             end
             local transport_ok, transport_error = pcall(
                 http.post_stream,
                 endpoint, body, headers, response_callback,
                 stream_timeout_sec * 1000,
                 {background = opts.background == true})
+            if transport_ok then opts.transport_id = transport_error end
             if not transport_ok then
                 -- A synchronous transport may invoke our callback inline.
                 -- Do not turn its already-settled exception into a retry.
@@ -996,8 +1180,29 @@ function M.run(opts, callbacks)
     opts.process_owner = opts.process_owner or opts.mcp_scope or
         (agent and type(agent.session_id) == "function" and agent.session_id()) or
         ("unowned:" .. tostring(opts))
+    opts.workdir = opts.workdir or workspace.configured_workdir()
+    opts.workspace_root = opts.workspace_root or workspace.configured_workspace_root()
+    opts.system_prompt = opts.system_prompt or _G.system_prompt or ""
+    local captured_profile = effective_profile(opts)
+    if opts.profile == nil or type(opts.profile) == "table" or profiles.normalize(opts.profile) then
+        opts.profile = deep_copy(captured_profile)
+    end
+    opts.provider_snapshot = deep_copy(opts.provider_snapshot)
+    if opts.background then
+        opts.update_status, opts.update_usage, opts.silent_tools = false, false, true
+        opts.skip_after_agent_turn = true
+        callbacks = copy_table(callbacks)
+        callbacks.on_text = callbacks.on_text or function() end
+    end
     local is_subagent = (tonumber(opts.depth) or 0) > 0
-    local run_span = telemetry.start(is_subagent and "subagent" or "agent.run", opts.telemetry_parent, {
+    -- A detached run is correlated by IDs, never owned by the launching tool.
+    local parent = opts.telemetry_parent
+    if opts.background then parent = nil end
+    local run_span = telemetry.start(is_subagent and "subagent" or "agent.run", parent, {
+        background_id = opts.background_id,
+        process_owner = opts.process_owner,
+        linked_span_id = opts.background and opts.telemetry_parent and
+            opts.telemetry_parent.context and opts.telemetry_parent.context.span_id or nil,
         operation = telemetry.purpose(opts.purpose or (is_subagent and "subagent" or "agent")),
         depth = tonumber(opts.depth) or 0,
         subagent_index = is_subagent and opts.subagent_index or nil,
@@ -1034,9 +1239,23 @@ function M.run(opts, callbacks)
         return attributes
     end
     local settled = false
+    local cancel
+    cancel = function()
+        if settled then return end
+        dispatch_context(opts, function()
+            if settled then return end
+            if opts.transport_id then
+                cancelled_transports[#cancelled_transports + 1] = opts.transport_id
+                opts.transport_id = nil
+            end
+            observers.on_done({ok = false, cancelled = true, error = "cancelled", text = ""})
+        end)
+    end
+    if opts.background then background_runs[cancel] = opts end
     observers.on_done = function(result)
         if settled then return end
         settled = true
+        background_runs[cancel] = nil
         result = result or {}
         if type(result.duration_ms) == "number" then
             local residual = result.duration_ms - measurements.model_ms - measurements.tool_ms
@@ -1069,7 +1288,8 @@ function M.run(opts, callbacks)
         run_span.on_terminal = nil
         return false, "cancelled"
     end
-    return protect_run(run_span, function()
+    local ok, err = protect_run(run_span, function()
+        return in_context(opts, function()
         -- Deliver explicit correlation before validation, hooks, or transport.
         -- Like other API observers, failures terminate the owned run.
         if type(callbacks.on_run_start) == "function" then
@@ -1077,7 +1297,9 @@ function M.run(opts, callbacks)
         end
         if run_span.ended then return false, "cancelled" end
         return run_impl(opts, observers, run_span)
+        end)
     end)
+    return ok, err, cancel
 end
 
 -- Inherit only model routing; background work keeps its own run policy.

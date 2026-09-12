@@ -169,3 +169,59 @@ result is returned. It receives `ctx.args`, `ctx.ok`, and `ctx.result`.
 
 `make test-http-lua` covers default exposure, capability disablement, stream
 error propagation, and provider/tool runtime behavior.
+
+## Detached background groups
+
+`subagents({background=true, tasks=..., max_concurrent=...})` returns immediately
+with `started=true`, `status="queued"`, opaque `id`/`group_id`, and input-ordered
+`tasks` containing each caller task `id` and native `background_id`. This is
+acceptance, **not completion or successful validation**. Use
+`processes({action="wait", id=group_id, timeout=30})`, then `output`, before final
+conclusions that depend on these findings. The group output is a structured JSON
+string with the ordinary input-ordered `results`, `ok`, timings and turn totals.
+A group and its tasks have no PID; shell/MCP processes remain real processes.
+
+`agent/subagents.lua` owns both foreground scheduling and detached groups;
+`agent/tools.lua` is only the tool adapter. Native `background_register`,
+`background_update`, and `background_cancelled` adapt snapshots and stop requests
+to the common process facade. Foreground calls never require these bindings.
+There is one aggregate active-attempt count across all groups, bounded by the
+configured `max_concurrent_cap`, plus each group's `max_concurrent`. Configuration
+is captured at submission; when outstanding groups have differing caps, the
+smallest applies to new dispatches. Already running attempts are not preempted.
+Retries use the existing transient-error policy and attempt budget, re-enter the
+queue rather than recursively dispatching from callbacks, and release exactly
+one concurrency slot. Inline completion, rejected starts and late callbacks
+cannot settle twice or restart cancelled work.
+
+Background submission registers but does not dispatch children or pump HTTP.
+Ordinary safe runtime poll boundaries call `poll()`; modal rendering never runs
+Lua scheduling. The explicit model `processes wait` pumps HTTP and scheduling.
+The scheduler guards against poll reentry. Background callbacks never append
+text/progress to the active parent UI. Owner, workdir, workspace root, prompt,
+provider/model selection, profile, tools and permission/MCP scopes are captured
+at submission. Background permission scope is an isolated copy; foreground scope
+sharing remains compatible. Ending the initiating turn/span or its cancellation
+predicate does not cancel detached groups. There is no survival across application
+exit or persistence/restart.
+
+Native stop only sets cancellation flags. On the next safe poll a task stop
+cancels that task; a group stop cancels every unfinished task. `cancel_owner(owner)`
+and `shutdown()` close running cancellation closures, discard pending/retry work,
+close queue spans and publish terminal snapshots. Late text/errors/completion are
+ignored. Failed and cancelled task text is empty. Group hooks run exactly once;
+only bounded, redacted canonical task fields are published after hooks.
+
+The Lua registry fails closed at 128 retained background groups (including
+completed groups), rather than growing indefinitely. Native registry capacity
+can reject a submission earlier; partially registered groups are cancelled.
+Stream accumulation retains only the configured output prefix and its original
+byte count, then redacts the entire retained prefix (including split chunks).
+Native output limits may impose additional bounds. Pattern-based redaction is
+not a guarantee against arbitrary secrets.
+
+Tests: `vendor/lua-5.5.0/src/lua test/test_background_subagents.lua` mocks runtime
+and native adapters to cover deferred dispatch, per-group/global limits, retries,
+late/inline callbacks, cancellation, context/UI isolation, output bounds/hooks,
+retained-group exhaustion, foreground scope compatibility and explicit waits.
+Existing `make test-http-lua` subagent/telemetry tests cover foreground behavior.
