@@ -117,3 +117,13 @@ when the user can respond again. Do not replace `_G.agent_entry` for this.
 `make test-http-lua` covers config hooks, plugin hooks discovered before runtime
 load, tool-call hooks, stream chunk hooks, final-turn hooks, and hook error
 logging.
+
+## Completion review boundary
+
+[Completion review](completion-review.md) is a runtime finalization gate, not a
+nested run launched by `after_agent_turn`. Reviewer tool schemas are reset to
+snapshot-only `file_read` after tool and request hooks; dispatch uses immutable
+snapshot bytes, never plugin live reads. Internal `after_subagents` result
+rewrites are ignored, and hook failure cannot manufacture a clean verdict.
+Hooks are trusted runtime code, not an OS sandbox; these restrictions constrain
+the reviewer model's tool access.

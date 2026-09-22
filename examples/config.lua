@@ -38,7 +38,13 @@ return {
     max_duration_sec = 2700,
     stream_timeout_sec = 300,
     max_stream_retries = 1,
-    completion_review = true,
+    completion_review = { -- false/true remain supported
+      enabled = false,
+      max_fix_cycles = 2,
+      max_duration_sec = 900,
+      -- max_requests: defaults to all review cycles + parent repair turn budget
+      -- reviewer = {max_turns = 80}, -- optional; otherwise inherits agent.max_turns
+    },
     auto_compact_percent = 80, -- set to 0 to disable automatic compaction
   },
 

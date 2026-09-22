@@ -277,6 +277,8 @@ Feature specs:
 - [CLI run mode](specs/cli-run.md)
 - [CI binaries](specs/ci-binaries.md)
 - [Compact command](specs/compact-command.md)
+- [Completion review — implementation status](specs/completion-review.md)
+- [Review issues and verdict protocol](specs/issues.md)
 - [Config](specs/config.md)
 - [Embedded runtime assets](specs/embedded-runtime-assets.md)
 - [Focus modes](specs/focus-modes.md)

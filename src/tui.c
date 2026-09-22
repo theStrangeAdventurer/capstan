@@ -1008,6 +1008,11 @@ void render_all(void) {
           wattrset(msg_win, dim_gray_attr());
         wmove(msg_win, win_row, MSG_PAD_H);
         const MarkdownView *md = &g_views[i].markdown;
+        /* Review events live beside background notifications in the transcript.
+         * Only the header line (up to the colon) is purple; the body below it
+         * renders like normal text so long verdicts stay readable. */
+        if (msg->role == MSG_REVIEW && logical_line_start == display_text)
+          wattrset(msg_win, COLOR_PAIR(14));
         int base_attrs = getattrs(msg_win);
         for (const char *run = p; run < line_end;) {
           size_t offset = (size_t)(run - display_text);
@@ -1342,6 +1347,21 @@ void render_all(void) {
 
   mvhline(0, 0, ' ', cols);
   process_panel_indicator(!session_overlay_visible());
+  const char *review = agent_review_status();
+  if (review[0] && cols > 2) {
+    /* Keep the process indicator intact; use only the free upper-left cells. */
+    int end = 1;
+    while (end < cols - 1 && (mvinch(0, end) & A_CHARTEXT) == ' ') end++;
+    int room = end - 2;
+    if (room > 0) {
+      size_t bytes = text_line_length(review, room);
+      if (text_columns(review, bytes) <= room) {
+        wattrset(stdscr, has_colors() ? COLOR_PAIR(14) : A_BOLD);
+        mvaddnstr(0, 1, review, (int)bytes);
+        wattrset(stdscr, A_NORMAL);
+      }
+    }
+  }
   wnoutrefresh(stdscr);
   wnoutrefresh(msg_win);
   render_tasks(input_y, inner_w);

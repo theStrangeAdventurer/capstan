@@ -235,3 +235,17 @@ dangling links, explicit denies under YOLO, and benchmark confinement.
 
 Pure permission matching and saved-rule string escaping can be tested through
 `permit_logic.c` without linking ncurses, Lua, or curl.
+
+## Review issue metadata
+
+The `issues` model tool is a bounded session-metadata operation (`permission =
+false`), not workspace write access. It can read or mark executor responses;
+only the internal runtime protocol can publish reviewer verdicts, and only the
+manual `/issues accept` command exposes user risk acceptance. Subagents cannot
+collect or dispatch the parent issue tool, even through explicit whitelists.
+See [issues](issues.md). The [completion reviewer](completion-review.md) uses
+only immutable snapshot-backed `file_read`, never a live-read fallback. Capture
+uses non-prompting persistent read permissions, repeated by native reads;
+run-local allowances are not inherited yet. Denied eligible files make review
+incomplete. Sensitive/ignored paths and symlinks are excluded. The managed write
+barrier is cooperative, not an OS lock or a sandbox against external writers.

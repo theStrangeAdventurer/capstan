@@ -2,6 +2,7 @@
 #include "dyn_arr.h"
 #include "log.h"
 #include "permit.h"
+#include "review_snapshot.h"
 #include "shell_process.h"
 #include "process_manager.h"
 #include "background_work.h"
@@ -582,14 +583,32 @@ static int l_tools_background_register(lua_State *L) {
   const char *kind = background_field(L, "kind", "subagent");
   const char *label = background_field(L, "label", "");
   const char *workdir = background_field(L, "workdir", app_workdir());
+  lua_getfield(L, 1, "notify");
+  if (!lua_isnil(L, -1)) luaL_checktype(L, -1, LUA_TBOOLEAN);
+  int notify = lua_isnil(L, -1) ? 1 : lua_toboolean(L, -1);
   char id[PROCESS_ID_SIZE];
-  if (!background_work_register(owner, kind, label, workdir, id))
+  if (!background_work_register_ex(owner, kind, label, workdir, notify, id))
     return luaL_error(L, "cannot register background work (invalid metadata or capacity exhausted)");
   lua_pushstring(L, id);
   return 1;
 }
-static int l_tools_background_update(lua_State *L) {
+static const char *check_background_owner(lua_State *L) {
   const char *id = luaL_checkstring(L, 1);
+  BackgroundSnapshot s;
+  if (!background_work_get(id, &s) || !background_work_inprocess(&s) ||
+      (process_scoped && strcmp(s.owner, tools_process_owner())))
+    luaL_error(L, "background work not found in this session");
+  return id;
+}
+static int l_tools_background_release(lua_State *L) {
+  const char *id = check_background_owner(L);
+  if (!background_work_release(id))
+    return luaL_error(L, "cannot release active background work");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+static int l_tools_background_update(lua_State *L) {
+  const char *id = check_background_owner(L);
   luaL_checktype(L, 2, LUA_TTABLE);
   lua_getfield(L, 2, "status");
   const char *status = lua_isnil(L, -1) ? NULL : luaL_checkstring(L, -1);
@@ -647,10 +666,13 @@ static int l_tools_background_cancelled(lua_State *L) {
 }
 void tools_init(lua_State *L) {
   lua_newtable(L);
+  review_snapshot_init(L);
   lua_pushcfunction(L, l_tools_background_context);
   lua_setfield(L, -2, "background_context");
   lua_pushcfunction(L, l_tools_background_register);
   lua_setfield(L, -2, "background_register");
+  lua_pushcfunction(L, l_tools_background_release);
+  lua_setfield(L, -2, "background_release");
   lua_pushcfunction(L, l_tools_background_update);
   lua_setfield(L, -2, "background_update");
   lua_pushcfunction(L, l_tools_background_cancelled);

@@ -9,6 +9,7 @@
 typedef enum {
   MSG_USER,
   MSG_AGENT,
+  MSG_REVIEW, /* Persisted runtime data; never a foreground output target. */
 } MessageRole;
 
 typedef struct MessageImage {
@@ -62,6 +63,11 @@ int  agent_is_thinking(void);
 void agent_begin_run(void);
 void agent_finish_run(void);
 int agent_is_running(void);
+/* Runtime-owned boolean _G.agent_root_pending; excludes independent jobs.
+ * Runtime clears it before final completion and services it from
+ * _G.agent_background_poll, including ticks without HTTP. */
+int agent_root_pending(lua_State *L);
+const char *agent_review_status(void);
 void agent_set_activity(const char *label);
 const char *agent_activity(void);
 long long agent_activity_elapsed_seconds(void);

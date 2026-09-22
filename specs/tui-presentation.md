@@ -83,3 +83,16 @@ control sanitization, workspace labels and usage formatting.
 `make test-tui-input`: real ncurses colors, Markdown emphasis, shell mouse
 controls, task view persistence, reasoning metadata and draft preservation.
 `make test-http-lua`: shell projection integration and task/runtime adapters.
+
+## Completion review status
+
+Opt-in [completion review](completion-review.md) uses a separate compact upper
+purple indicator: queue, review, repairs and rechecks (with cycle counts).
+It is not the lower Thinking/Answering activity label. Runtime owns the label
+through `agent.set_review_status`; nil/empty clears it on terminal cleanup.
+Held final drafts are not shown as accepted while review is pending; ordinary
+tool commentary remains visible. During queued/running review the foreground slot
+is free: new prompts and writes run without waiting for the reviewer. Review
+results are anchored to their original message; newer requests supersede automatic
+repairs and acceptance of old drafts. Status labels are Queued, Review, Fixing and
+Rechecking. See the completion-review lifecycle for CLI/ACP differences.

@@ -5,10 +5,15 @@
 typedef ProcessSnapshot BackgroundSnapshot;
 int background_work_register(const char *owner, const char *kind, const char *label,
                              const char *workdir, char id[PROCESS_ID_SIZE]);
+/* Only groups notify; the compatibility wrapper enables notifications. */
+int background_work_register_ex(const char *owner, const char *kind, const char *label,
+                                const char *workdir, int notify, char id[PROCESS_ID_SIZE]);
+/* Release terminal in-process records only; unknown, active and OS IDs fail. */
+int background_work_release(const char *id);
 /* Terminal records are immutable. Oversize sanitized output (>65536 bytes)
  * rejects the whole update, preserving the previous snapshot and output.
- * Capacity fails closed; records are retained until shutdown. Only groups
- * produce in-process completion notifications. */
+ * Capacity fails closed; records are retained until explicit release or shutdown.
+ * Only groups produce in-process completion notifications. */
 int background_work_update(const char *id, const char *status, const char *output, int ok);
 int background_work_cancelled(const char *id);
 int background_work_inprocess(const BackgroundSnapshot *s);

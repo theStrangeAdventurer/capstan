@@ -122,6 +122,35 @@ int main(void) {
       "assert(not pcall(tools.process_stop,a)); "
       "assert(tools.processes('get',job.id).running and not tools.processes('get',job.id).stopping); "
       "assert(tools.process_close_owner('tasks'))");
+  run("tools.process_scope('release-owner'); "
+      "assert(not pcall(tools.background_register,{notify='false'})); "
+      "local id = tools.background_register{kind='subagent_group',notify=false}; "
+      "assert(not pcall(tools.background_release,id)); "
+      "tools.process_scope('other-owner'); "
+      "assert(not pcall(tools.background_update,id,{status='completed'})); "
+      "assert(not pcall(tools.background_release,id)); "
+      "tools.process_scope('release-owner'); "
+      "assert(tools.processes('get',id).running); "
+      "tools.background_update(id,{status='completed',output='visible',ok=true}); "
+      "assert(tools.processes('output',id).stdout == 'visible'); "
+      "assert(#tools.process_events('release-owner') == 0); "
+      "tools.process_scope('other-owner'); assert(not pcall(tools.background_release,id)); "
+      "tools.process_scope('release-owner'); assert(tools.background_release(id)); "
+      "assert(not pcall(tools.background_release,id)); "
+      "assert(not pcall(tools.processes,'get',id)); "
+      "assert(not pcall(tools.background_update,id,{status='completed'})); "
+      "assert(not pcall(tools.background_release,'unknown')); "
+      "tools.process_scope('session-a'); assert(not pcall(tools.background_release,a.id)); "
+      "assert(not tools.processes('get',a.id).running); "
+      "tools.process_scope(nil); "
+      "local manual = tools.background_register{owner='another',kind='subagent_group',notify=true}; "
+      "tools.background_update(manual,{status='completed',ok=true}); "
+      "local events = tools.process_events('another'); assert(#events == 1 and events[1].id == manual); "
+      "assert(tools.background_release(manual))");
+  assert(process_manager_get("unknown", &s) == 0);
+  assert(process_manager_at(0, &s));
+  assert(!background_work_release(s.id));
+  assert(process_manager_get(s.id, &s));
   background_work_shutdown(); lua_close(L);
   puts("process bindings: ownership, opaque IDs, completion delivery, owner cleanup passed");
   return 0;

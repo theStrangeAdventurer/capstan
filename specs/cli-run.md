@@ -142,3 +142,13 @@ binary to check independent parent work, CLI/ACP wait and output, single complet
 notification, CLI exit/ACP owner-close cancellation, and TUI session switching
 with panel visibility and completion. `make test-process-control` includes it.
 Validated on macOS; Linux execution has not been checked for this change.
+
+## Completion review
+
+Opt-in [completion review](completion-review.md) uses the shared runtime gate.
+A ready draft is held while the internal reviewer runs and during bounded parent
+repairs/rechecks; an idle HTTP interval does not mean the root has finished.
+Explicit question/blocked completion bypasses review, but ordinary terminal text
+is treated as ready. Incomplete review returns blocked, not accepted success;
+a draft from before repairs is not reused as the final result. Disabled review
+adds no reviewer requests. Active review restoration is not supported.

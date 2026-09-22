@@ -108,12 +108,14 @@ static int snapshot_messages(void) {
     return 0;
   for (size_t i = 0; i < messages->size; i++) {
     Message *source = messages->items[i];
-    if (!source || ((!source->text || !source->text[0]) &&
+    if (!source ||
+        ((!source->text || !source->text[0]) &&
                     source->image_count == 0))
       continue;
     SessionMessage *target = &g_active.messages[g_active.message_count++];
-    target->role = source->role == MSG_USER ? SESSION_ROLE_USER
-                                            : SESSION_ROLE_ASSISTANT;
+    target->role = source->role == MSG_USER ? SESSION_ROLE_USER :
+                   source->role == MSG_REVIEW ? SESSION_ROLE_REVIEW :
+                                               SESSION_ROLE_ASSISTANT;
     target->shell_output = source->shell_output; /* Borrowed for serialization. */
     target->text = source->text;
     target->raw_text = source->raw_text ? source->raw_text : source->text;
@@ -166,8 +168,12 @@ int session_manager_save(void) {
 }
 
 static Session *g_tasks_session = NULL;
+static unsigned long g_issues_token = 1;
+
+unsigned long session_manager_issues_token(void) { return g_issues_token; }
 
 void session_manager_tasks_session(Session *session) {
+  if (session != g_tasks_session) g_issues_token++;
   g_tasks_session = session;
 }
 
@@ -201,22 +207,22 @@ const char *session_manager_tasks(void) {
   return session->tasks_json ? session->tasks_json : "";
 }
 
-int session_manager_set_tasks(const char *json) {
-  if (!json || strlen(json) > SESSION_TASKS_MAX_BYTES)
+static int set_session_artifact(Session *session, char **slot,
+                                const char *json, size_t limit) {
+  if (!json || strlen(json) > limit)
     return 0;
   char *next = json[0] ? my_strdup(json) : NULL;
   if (json[0] && !next)
     return 0;
-  Session *session = g_tasks_session ? g_tasks_session : &g_active;
-  char *previous = session->tasks_json;
+  char *previous = *slot;
   char previous_title[SESSION_TITLE_SIZE];
   memcpy(previous_title, session->title, sizeof(previous_title));
   time_t previous_updated_at = session->updated_at;
-  session->tasks_json = next;
+  *slot = next;
   int ok = g_tasks_session ? (!session->id[0] || session_save(session)) :
                             (!g_initialized || session_manager_save());
   if (!ok) {
-    session->tasks_json = previous;
+    *slot = previous;
     memcpy(session->title, previous_title, sizeof(session->title));
     session->updated_at = previous_updated_at;
     free(next);
@@ -226,7 +232,26 @@ int session_manager_set_tasks(const char *json) {
   return 1;
 }
 
+int session_manager_set_tasks(const char *json) {
+  Session *session = g_tasks_session ? g_tasks_session : &g_active;
+  return set_session_artifact(session, &session->tasks_json, json,
+                              SESSION_TASKS_MAX_BYTES);
+}
+
+const char *session_manager_issues(void) {
+  const Session *session = g_tasks_session ? g_tasks_session : &g_active;
+  return session->issues_json ? session->issues_json : "";
+}
+
+int session_manager_set_issues(const char *json, unsigned long token) {
+  if (token != g_issues_token) return 0;
+  Session *session = g_tasks_session ? g_tasks_session : &g_active;
+  return set_session_artifact(session, &session->issues_json, json,
+                              (size_t)-1); /* Lua bounds active state; archive is lossless. */
+}
+
 static void install_loaded(Session *loaded) {
+  g_issues_token++;
   clear_messages();
   for (size_t i = 0; i < loaded->message_count; i++) {
     SessionMessage *source = &loaded->messages[i];
@@ -236,8 +261,9 @@ static void install_loaded(Session *loaded) {
     source->raw_text = NULL;
     Messages *messages = get_messages();
     size_t previous_size = messages ? messages->size : 0;
-    add_message(text, raw, source->role == SESSION_ROLE_USER ? MSG_USER
-                                                             : MSG_AGENT);
+    add_message(text, raw, source->role == SESSION_ROLE_USER ? MSG_USER :
+                           source->role == SESSION_ROLE_REVIEW ? MSG_REVIEW :
+                                                                MSG_AGENT);
     Message *installed = messages && messages->size > previous_size
                              ? messages->items[messages->size - 1]
                              : NULL;
@@ -264,6 +290,7 @@ static void install_loaded(Session *loaded) {
   loaded->messages = NULL;
   loaded->message_count = 0;
   loaded->tasks_json = NULL;
+  loaded->issues_json = NULL;
   release_snapshot();
   agent_restore_usage(g_active.usage);
   g_saved_usage = g_active.usage;
@@ -284,6 +311,7 @@ int session_manager_new(void) {
   clear_messages();
   session_free(&g_active);
   g_active = created;
+  g_issues_token++;
   agent_restore_usage(g_active.usage);
   g_saved_usage = g_active.usage;
   g_saved_revision = agent_messages_revision();
@@ -316,6 +344,7 @@ int session_manager_switch(const char *id) {
 int session_manager_init_selected(const char *workspace_root,
                                   const char *session_id) {
   session_free(&g_active);
+  g_issues_token++;
   g_initialized = 0;
   log_set_session_id(NULL);
   if (!session_store_init(workspace_root))
@@ -349,6 +378,7 @@ int session_manager_init_selected(const char *workspace_root,
 
 fail:
   session_free(&g_active);
+  g_issues_token++;
   g_initialized = 0;
   log_set_session_id(NULL);
   return 0;
@@ -436,5 +466,6 @@ void session_manager_shutdown(void) {
   if (g_initialized && session_dirty())
     session_manager_save();
   session_free(&g_active);
+  g_issues_token++;
   g_initialized = 0;
 }

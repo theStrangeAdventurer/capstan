@@ -53,6 +53,10 @@ static int copy_safe(char *dst, size_t n, const char *src) {
 }
 int background_work_register(const char *owner, const char *kind, const char *label,
                              const char *workdir, char id[PROCESS_ID_SIZE]) {
+  return background_work_register_ex(owner, kind, label, workdir, 1, id);
+}
+int background_work_register_ex(const char *owner, const char *kind, const char *label,
+                                const char *workdir, int notify, char id[PROCESS_ID_SIZE]) {
   if (!id || !owner || strlen(owner) >= 128 || !kind ||
       (strcmp(kind, "subagent") && strcmp(kind, "subagent_group")) || serial == UINT64_MAX) return 0;
   unsigned char entropy[16];
@@ -75,9 +79,18 @@ int background_work_register(const char *owner, const char *kind, const char *la
   strcpy(w.status, "queued");
   w.s.running = 1; w.s.exit_code = -1;
   w.s.started_ms = process_manager_now_ms();
-  w.notify = !strcmp(kind, "subagent_group");
+  w.notify = notify && !strcmp(kind, "subagent_group");
   records[count++] = w;
   memcpy(id, w.s.id, PROCESS_ID_SIZE);
+  return 1;
+}
+int background_work_release(const char *id) {
+  Work *w = find(id);
+  if (!w || w->s.running) return 0;
+  size_t index = (size_t)(w - records);
+  free(w->output);
+  memmove(w, w + 1, (count - index - 1) * sizeof(*w));
+  memset(&records[--count], 0, sizeof(*w));
   return 1;
 }
 int background_work_update(const char *id, const char *status, const char *output, int ok) {

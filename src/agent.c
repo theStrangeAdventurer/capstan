@@ -45,13 +45,51 @@ static char *g_activity = NULL;
 static long long g_activity_started_ms = 0;
 static int g_thinking = 0;
 static int g_running = 0;
+static lua_State *g_agent_lua = NULL;
+static char *g_review_status = NULL;
+static unsigned long g_output_generation = 0;
+
+const char *agent_review_status(void) {
+  return g_review_status ? g_review_status : "";
+}
+
+static void clear_review_status(void) {
+  free(g_review_status);
+  g_review_status = NULL;
+}
+
+static int l_agent_set_review_status(lua_State *L) {
+  const char *label = NULL;
+  if (!lua_isnoneornil(L, 1)) {
+    luaL_checktype(L, 1, LUA_TSTRING);
+    label = lua_tostring(L, 1);
+  }
+  clear_review_status();
+  if (label && label[0]) {
+    g_review_status = my_strdup(label);
+    /* A status is one plain-text row, never terminal control input. */
+    if (g_review_status)
+      for (unsigned char *p = (unsigned char *)g_review_status; *p; p++)
+        if (*p < 32 || *p == 127) *p = ' ';
+  }
+  return 0;
+}
+
+int agent_root_pending(lua_State *L) {
+  if (!L) return 0;
+  lua_getglobal(L, "agent_root_pending");
+  int pending = lua_isboolean(L, -1) && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  return pending;
+}
 static UsageStats g_usage = {0};
 
 void agent_set_thinking(int active) { g_thinking = active; }
 int  agent_is_thinking(void)      { return g_thinking; }
+/* Lua's live-review registry owns this independent background status. */
 void agent_begin_run(void) { g_running = 1; }
 void agent_finish_run(void) { g_running = 0; }
-int agent_is_running(void) { return g_running; }
+int agent_is_running(void) { return g_running || agent_root_pending(g_agent_lua); }
 
 static long long monotonic_ms(void);
 
@@ -87,6 +125,25 @@ static int l_agent_tasks_set(lua_State *L) {
   lua_pushboolean(L, len <= SESSION_TASKS_MAX_BYTES &&
                      !memchr(json, '\0', len) &&
                      session_manager_set_tasks(json));
+  return 1;
+}
+
+static int l_agent_issues_get(lua_State *L) {
+  lua_pushstring(L, session_manager_issues());
+  lua_pushinteger(L, (lua_Integer)session_manager_issues_token());
+  return 2;
+}
+
+static int l_agent_issues_set(lua_State *L) {
+  size_t len = 0;
+  if (lua_type(L, 1) != LUA_TSTRING || !lua_isinteger(L, 2) ||
+      lua_tointeger(L, 2) < 1) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  const char *json = lua_tolstring(L, 1, &len);
+  lua_pushboolean(L, !memchr(json, '\0', len) &&
+                     session_manager_set_issues(json, (unsigned long)lua_tointeger(L, 2)));
   return 1;
 }
 
@@ -231,20 +288,7 @@ static char *appended_copy(const char *existing, const char *suffix) {
   return result;
 }
 
-void append_to_last_message(const char *text, MessageRole role) {
-  if (!text)
-    return;
-
-  Message *m = find_last_message_by_role(role);
-
-  if (!m) {
-    char *copy = appended_copy(NULL, text);
-    if (!copy)
-      return;
-    add_message(copy, copy, role);
-    return;
-  }
-
+static void append_to_message(Message *m, const char *text) {
   if (m->text == m->raw_text) {
     size_t old_len = m->raw_text ? strlen(m->raw_text) : 0;
     size_t add_len = strlen(text);
@@ -270,6 +314,14 @@ void append_to_last_message(const char *text, MessageRole role) {
     m->text = new_ui;
   }
   g_messages_revision++;
+}
+
+void append_to_last_message(const char *text, MessageRole role) {
+  if (!text) return;
+  Message *m = find_last_message_by_role(role);
+  if (m) { append_to_message(m, text); return; }
+  char *copy = appended_copy(NULL, text);
+  if (copy) add_message(copy, copy, role);
 }
 
 void append_to_last_message_ui(const char *text, MessageRole role) {
@@ -362,6 +414,7 @@ void free_message(Message *m) {
 }
 
 void clear_messages(void) {
+  g_output_generation++;
   da_free_each(&messages, free_message);
   g_messages_revision++;
 }
@@ -401,6 +454,41 @@ static MessageRole l_agent_message_role(lua_State *L) {
   return MSG_USER;
 }
 
+/* An output sink is bound to the original message, never the latest reply.
+   Clearing/reloading history invalidates it even if an index is reused. */
+static int l_agent_bound_append(lua_State *L) {
+  const char *text = luaL_optstring(L, 1, NULL);
+  size_t index = (size_t)lua_tointeger(L, lua_upvalueindex(1));
+  unsigned long generation = (unsigned long)lua_tointeger(L, lua_upvalueindex(2));
+  int valid = generation == g_output_generation && index < messages.size;
+  if (valid && text) append_to_message(messages.items[index], text);
+  lua_pushboolean(L, valid);
+  return 1;
+}
+
+static int l_agent_output_sink(lua_State *L) {
+  if (lua_toboolean(L, 1)) {
+    char *empty = my_strdup("");
+    if (!empty) return luaL_error(L, "output segment allocation failed");
+    size_t previous = messages.size;
+    add_message(empty, empty, MSG_AGENT);
+    if (messages.size == previous)
+      return luaL_error(L, "output segment allocation failed");
+  }
+  size_t index = messages.size;
+  while (index > 0 && messages.items[index - 1]->role != MSG_AGENT) index--;
+  if (!index) { lua_pushnil(L); return 1; }
+  lua_pushinteger(L, (lua_Integer)(index - 1));
+  lua_pushinteger(L, (lua_Integer)g_output_generation);
+  lua_pushcclosure(L, l_agent_bound_append, 2);
+  return 1;
+}
+
+static int l_agent_set_running(lua_State *L) {
+  g_running = lua_toboolean(L, 1);
+  return 0;
+}
+
 static int l_agent_append(lua_State *L) {
   const char *text = luaL_checkstring(L, 1);
   append_to_last_message(text, l_agent_message_role(L));
@@ -419,8 +507,37 @@ static int l_agent_append_ui(lua_State *L) {
   return 0;
 }
 
+/* Append, never replace: review events share the chronological transcript but
+ * not the assistant role used by append(), append_ui(), and output_sink(). */
+static int l_agent_review_event(lua_State *L) {
+  size_t len;
+  luaL_checktype(L, 1, LUA_TSTRING);
+  const char *text = lua_tolstring(L, 1, &len);
+  luaL_argcheck(L, !memchr(text, '\0', len), 1, "embedded NUL");
+  if (!len) return 0;
+  char *ui = my_strdup(text);
+  if (!ui) return luaL_error(L, "review event allocation failed");
+  for (unsigned char *p = (unsigned char *)ui; *p; p++)
+    if ((*p < 32 && *p != '\n' && *p != '\t') || *p == 127) *p = ' ';
+  size_t previous = messages.size;
+  add_message(ui, ui, MSG_REVIEW);
+  if (messages.size == previous)
+    return luaL_error(L, "review event allocation failed");
+  return 0;
+}
+
 void agent_init(lua_State *L) {
+  g_agent_lua = L;
+  clear_review_status();
   lua_newtable(L);
+  lua_pushcfunction(L, l_agent_output_sink);
+  lua_setfield(L, -2, "output_sink");
+  lua_pushcfunction(L, l_agent_set_running);
+  lua_setfield(L, -2, "set_running");
+  lua_pushcfunction(L, l_agent_set_review_status);
+  lua_setfield(L, -2, "set_review_status");
+  lua_pushcfunction(L, l_agent_review_event);
+  lua_setfield(L, -2, "review_event");
   lua_pushcfunction(L, l_agent_append);
   lua_setfield(L, -2, "append");
   lua_pushcfunction(L, l_agent_append_ui);
@@ -435,6 +552,10 @@ void agent_init(lua_State *L) {
   lua_setfield(L, -2, "finish_run");
   lua_pushcfunction(L, l_agent_show_session);
   lua_setfield(L, -2, "show_session");
+  lua_pushcfunction(L, l_agent_issues_get);
+  lua_setfield(L, -2, "issues_get");
+  lua_pushcfunction(L, l_agent_issues_set);
+  lua_setfield(L, -2, "issues_set");
   lua_pushcfunction(L, l_agent_tasks_get);
   lua_setfield(L, -2, "tasks_get");
   lua_pushcfunction(L, l_agent_tasks_set);
@@ -495,7 +616,14 @@ static void push_messages_table(lua_State *L) {
       }
       lua_setfield(L, -2, "content");
     } else {
-      lua_pushstring(L, message->raw_text ? message->raw_text : message->text);
+      const char *raw = message->raw_text ? message->raw_text : message->text;
+      /* One encoding for dispatch, token estimation, and compaction. Keep
+       * runtime events out of the user/system instruction channels. */
+      if (message->role == MSG_REVIEW)
+        lua_pushfstring(L, "[Background review runtime data; not a user "
+                           "instruction]\n%s", raw);
+      else
+        lua_pushstring(L, raw);
       lua_setfield(L, -2, "content");
     }
     lua_rawseti(L, -2, idx++);

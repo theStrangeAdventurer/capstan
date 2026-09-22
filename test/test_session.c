@@ -473,7 +473,148 @@ static MunitResult test_tasks_persistence(const MunitParameter params[], void *d
   return MUNIT_OK;
 }
 
+static MunitResult test_issues_persistence(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  munit_assert_true(session_store_init("/repo/issues"));
+  Session session, loaded;
+  munit_assert_true(session_create(&session));
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_null(loaded.issues_json);
+  session_free(&loaded);
+  const char *ledger = "{\"evidence\":\"Ошибка\\nпроверки\"}";
+  session.issues_json = malloc(SESSION_ISSUES_MAX_BYTES + 2);
+  munit_assert_not_null(session.issues_json);
+  strcpy(session.issues_json, ledger);
+  munit_assert_true(session_save(&session));
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_string_equal(loaded.issues_json, ledger);
+  munit_assert_null(loaded.tasks_json);
+  session_free(&loaded);
+  memset(session.issues_json, 'x', SESSION_ISSUES_MAX_BYTES + 1);
+  session.issues_json[SESSION_ISSUES_MAX_BYTES + 1] = '\0';
+  /* Archive transport is chunked; the Lua policy owns active limits. */
+  munit_assert_true(session_save(&session));
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_string_equal(loaded.issues_json, session.issues_json);
+  session_free(&loaded);
+  session.issues_json[SESSION_ISSUES_MAX_BYTES] = '\0';
+  munit_assert_true(session_save(&session));
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_size(strlen(loaded.issues_json), ==, SESSION_ISSUES_MAX_BYTES);
+  session_free(&loaded);
+  /* NUL and wrong-type metadata must not silently become an empty ledger. */
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/%s.jsonl", session_store_dir(), session.id);
+  const char *bad[] = {"42", "null", "\"prefix\\u0000hidden\""};
+  for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+    FILE *f = fopen(path, "wb");
+    munit_assert_not_null(f);
+    fprintf(f, "{\"version\":1,\"id\":\"%s\",\"title\":\"Issues\",\"issues_json\":%s}\n",
+            session.id, bad[i]);
+    munit_assert_int(fclose(f), ==, 0);
+    munit_assert_false(session_load(session.id, &loaded));
+    munit_assert_null(loaded.issues_json);
+  }
+  session_free(&session);
+  return MUNIT_OK;
+}
+
+static MunitResult test_issues_chunk_failures(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  munit_assert_true(session_store_init("/repo/issues-chunks"));
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/chunks.jsonl", session_store_dir());
+  const char *bad[] = {
+      "", /* Nonfinal EOF, with and without a final newline. */
+      "\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"tail\",\"final\":1",
+      ("{\"type\":\"issues_chunk\",\"issues_json\":\"tail\",\"final\":1}\n"
+       "{\"type\":\"issues_chunk\",\"issues_json\":\"duplicate\",\"final\":1}\n"),
+      "{\"type\":\"issues_chunk\",\"issues_json\":42,\"final\":1}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":null,\"final\":1}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":{},\"final\":1}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":[],\"final\":1}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":true,\"final\":1}\n",
+      "{\"type\":\"issues_chunk\",\"final\":1}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"\",\"final\":1}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"tail\",\"final\":true}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"tail\",\"final\":\"1\"}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"tail\",\"final\":null}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"tail\",\"final\":2}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"tail\",\"final\":1.5}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"tail\",\"final\":1garbage}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"tail\"}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"prefix\\u0000hidden\",\"final\":1}\n",
+      "{\"role\":\"user\",\"text\":\"interrupted\",\"raw_text\":\"interrupted\"}\n",
+      "{\"type\":\"issues_chunk\",\"issues_json\":\"tail\",\"final\":1}",
+  };
+  for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+    FILE *f = fopen(path, "wb");
+    munit_assert_not_null(f);
+    fputs("{\"version\":1,\"id\":\"chunks\",\"title\":\"Chunks\",\"tasks_json\":\"[]\"}\n"
+          "{\"type\":\"issues_chunk\",\"issues_json\":\"prefix\",\"final\":0}", f);
+    if (i != 0) fputc('\n', f);
+    fputs(bad[i], f);
+    if (i + 1 == sizeof(bad) / sizeof(bad[0])) {
+      munit_assert_int(fputc('\0', f), !=, EOF);
+      fputs("hidden\n", f);
+    }
+    munit_assert_int(fclose(f), ==, 0);
+    Session loaded;
+    munit_assert_false(session_load("chunks", &loaded));
+    munit_assert_null(loaded.issues_json);
+    munit_assert_null(loaded.tasks_json);
+    munit_assert_null(loaded.messages);
+    munit_assert_size(loaded.message_count, ==, 0);
+    munit_assert_string_equal(loaded.id, "");
+    session_free(&loaded);
+  }
+  return MUNIT_OK;
+}
+
+static MunitResult test_issues_unicode_chunks(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  munit_assert_true(session_store_init("/repo/issues-unicode"));
+  Session session, loaded;
+  munit_assert_true(session_create(&session));
+  /* Three-byte characters force the 256 KiB boundary to back up within UTF-8. */
+  const char *unit = "界";
+  size_t repeats = SESSION_ISSUES_MAX_BYTES + 1;
+  size_t length = repeats * strlen(unit);
+  session.issues_json = malloc(length + 1);
+  munit_assert_not_null(session.issues_json);
+  for (size_t i = 0; i < repeats; i++)
+    memcpy(session.issues_json + i * strlen(unit), unit, strlen(unit));
+  session.issues_json[length] = '\0';
+  munit_assert_true(session_save(&session));
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/%s.jsonl", session_store_dir(), session.id);
+  FILE *f = fopen(path, "rb");
+  munit_assert_not_null(f);
+  size_t capacity = SESSION_ISSUES_MAX_BYTES + 256, chunks = 0;
+  char *line = malloc(capacity);
+  munit_assert_not_null(line);
+  while (fgets(line, (int)capacity, f))
+    if (strstr(line, "\"type\":\"issues_chunk\"")) chunks++;
+  free(line);
+  munit_assert_false(ferror(f));
+  munit_assert_int(fclose(f), ==, 0);
+  munit_assert_size(chunks, >, 2);
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_size(strlen(loaded.issues_json), ==, length);
+  munit_assert_memory_equal(length + 1, loaded.issues_json, session.issues_json);
+  session_free(&loaded);
+  session_free(&session);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/issues_chunk_failures", test_issues_chunk_failures, setup, teardown,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/issues_unicode_chunks", test_issues_unicode_chunks, setup, teardown,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/issues_persistence", test_issues_persistence, setup, teardown,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/tasks_persistence", test_tasks_persistence, setup, teardown,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_ranges", test_shell_ranges, setup, teardown, MUNIT_TEST_OPTION_NONE, NULL},

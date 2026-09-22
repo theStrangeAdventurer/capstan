@@ -5,6 +5,7 @@ local redact = require("agent.redact")
 local ui = require("agent.ui")
 local telemetry = require("agent.telemetry")
 local workspace = require("agent.workspace")
+---@type CapstanSubagentsApi
 local M = {}
 local function config_table(name)
     if _G.capstan and type(_G.capstan.runtime_options) == "table" and
@@ -242,6 +243,8 @@ end
 -- One scheduler owns foreground and detached work; callbacks only settle an
 -- attempt. Dispatch/retry happens at ordinary poll boundaries, never recursively.
 local groups, active, polling = {}, 0, false
+-- Handles are runtime-only capabilities, never native IDs supplied by a model.
+local handles = {}
 local function copy(value, seen)
     if type(value) ~= "table" then return value end
     seen = seen or {}
@@ -273,15 +276,25 @@ local function encode_bounded(value)
     return encoded
 end
 local function publish(g, state)
-    if not g.background then return end
+    if not g.background then return true end
     local r = state and state.result
     local id = state and state.native_id or g.id
-    if not id then return end
-    tools.background_update(id, {
-        status = state and state.status or g.status,
-        ok = state and r.ok or (g.output and g.output.ok) or false,
-        output = encode_bounded(state and r or g.output or {results = g.results}),
-    })
+    if not id then return true end
+    local ok, err = pcall(function()
+        local accepted = tools.background_update(id, {
+            status = state and state.status or g.status,
+            ok = (state and r.ok == true) or (not state and g.output and g.output.ok == true) or false,
+            output = encode_bounded(state and r or g.output or {results = g.results}),
+        })
+        if accepted == false then error("background publication rejected") end
+    end)
+    if not ok then
+        g.publication_error = safe_subagent_error(err)
+        logging.runtime_log("subagents", "snapshot publication failed: " .. g.publication_error)
+        return false
+    end
+    if state then state.published = state.status end
+    return true
 end
 local function finish_group(g)
     if g.done then return end
@@ -291,13 +304,24 @@ local function finish_group(g)
         turns = turns + (tonumber(s.result.turns) or 0)
         if not s.result.ok then errors = errors + 1 end
     end
-    g.done = true
+    -- Retry failed terminal publications at poll boundaries. Never rerun hooks
+    -- or claim completion while the native facade still reports active work.
+    for _, s in ipairs(g.states) do
+        if g.background and s.published ~= s.status and not publish(g, s) then return end
+    end
+    if g.output then
+        if publish(g) then g.done = true end
+        return
+    end
     local output = {ok = errors == 0, results = copy(g.results), total_turns = turns,
         duration_ms = math.max(0, math.floor(now_ms() - g.started_at))}
     local ok, ctx = pcall(hooks.run, "after_subagents", {
         args = g.args, ok = output.ok, result = copy(output), run = g.ctx,
     })
-    if ok and type(ctx) == "table" and type(ctx.result) == "table" then
+    if g.reviewer then
+        -- Internal verdicts are a protocol; plugin result rewriting cannot forge acceptance.
+        if not ok then output.ok=false; output.error=safe_subagent_error(ctx) end
+    elseif ok and type(ctx) == "table" and type(ctx.result) == "table" then
         -- Hooks may amend task findings, but cannot bypass registry/output bounds.
         local hooked = ctx.result
         output.ok = hooked.ok == true
@@ -318,11 +342,19 @@ local function finish_group(g)
         sanitize_subagent_result(result, g.limit)
         if not result.ok then output.ok = false end
     end
+    if g.publication_error then
+        output.ok, output.error = false, "Snapshot publication failed: " .. g.publication_error
+    end
     g.output = output
     g.status = g.cancelled and "cancelled" or (output.ok and "completed" or "failed")
     -- Individual terminal snapshots are immutable. Hooks amend the group's
     -- aggregated findings only, never rewrite already-published task outcomes.
-    publish(g)
+    if not publish(g) then
+        output.ok, output.error = false, "Snapshot publication failed: " .. g.publication_error
+        if not g.cancelled then g.status = "failed" end
+        return
+    end
+    g.done = true
     if not g.background then
         ui.append(string.format("\n\n⚙ subagents: done %d/%d, error %d/%d, %.1fs\n",
             #g.states - errors, #g.states, errors, #g.states, output.duration_ms / 1000), "agent")
@@ -363,11 +395,18 @@ end
 local function cancel_group(g)
     if g.done then return end
     g.cancelled = true
+    if g.output then
+        g.status, g.output.ok = "cancelled", false
+    end
     for _, s in ipairs(g.states) do cancel_state(g, s) end
     finish_group(g)
 end
 local function is_cancelled(g, s)
     if g.cancelled then return true end
+    if g.lifetime then
+        local ok, cancelled = pcall(g.lifetime)
+        if not ok or cancelled then return true end
+    end
     if g.background then
         return tools.background_cancelled(g.id) or (s and tools.background_cancelled(s.native_id))
     end
@@ -420,6 +459,20 @@ local function start_one(g, s)
         publish(g, s)
     end
     local child_tools = filter_tools(g.ctx.tools, s.task.tools)
+    if g.reviewer then
+        -- Reviewer-only schema; never mutate the parent/live file_read contract.
+        child_tools=copy(child_tools)
+        for _,tool in ipairs(child_tools) do
+            if tool['function'].name=='file_read' then
+                tool['function'].description='Read immutable snapshot files. Batch paths must omit offset and limit. For paging use one path, offset=0, limit=48000, then follow next_offset to EOF. Argument/size errors allow retry; finish every file in an oversized batch.'
+                tool['function'].parameters={type='object',properties={
+                    path={type='string'}, paths={type='array',items={type='string'},minItems=1},
+                    offset={type='integer',minimum=0,description='Byte offset; only with one file.'},
+                    limit={type='integer',minimum=4,maximum=48000,description='Page bytes; only with one file.'},
+                },additionalProperties=false}
+            end
+        end
+    end
     local model = subagent_model(s.task, g.models, g.default_model)
     logging.runtime_log("subagents", string.format("start index=%d id=%s attempt=%d/%d provider=%s model=%s prompt=%s",
         s.index, r.id, s.attempt, g.attempts, tostring(g.ctx.provider_name or ""), tostring(model or ""), logging.compact(subagent_prompt(g.args, s.task), 300)))
@@ -438,6 +491,8 @@ local function start_one(g, s)
         workdir = g.ctx.workdir, workspace_root = g.ctx.workspace_root,
         system_prompt = g.ctx.system_prompt, process_owner = g.ctx.process_owner,
         tools = child_tools, silent_tools = true, update_status = false, update_usage = false,
+        reviewer = g.reviewer,
+        review_budget = g.reviewer and g.reviewer.budget,
         permission_scope = g.ctx.permission_scope, mcp_scope = g.ctx.mcp_scope,
         is_cancelled = function() return s.done or is_cancelled(g, s) end,
     }, {
@@ -455,6 +510,30 @@ local function start_one(g, s)
     if not called then done({ok = false, error = ok})
     elseif not ok then done({ok = false, error = err})
     elseif live() then s.cancel = cancel end
+end
+local function reclaim(g)
+    if not g.done then return false, "Subagents group is still active" end
+    if not tools or type(tools.background_release) ~= "function" then
+        return false, "Background release unavailable"
+    end
+    -- Clear each ID only after successful release, so a partial failure can be
+    -- retried without touching a stale ID or dropping the owning Lua context.
+    for _, s in ipairs(g.states) do
+        if s.native_id then
+            local ok, err = pcall(tools.background_release, s.native_id)
+            if not ok or err == false then return false, safe_subagent_error(err) end
+            s.native_id = nil
+        end
+    end
+    if g.id then
+        local ok, err = pcall(tools.background_release, g.id)
+        if not ok or err == false then return false, safe_subagent_error(err) end
+        g.id = nil
+    end
+    for i, entry in ipairs(groups) do
+        if entry == g then table.remove(groups, i); break end
+    end
+    return true
 end
 function M.poll()
     if polling then return end
@@ -477,6 +556,10 @@ function M.poll()
                 end
             end
         end
+        for i = #groups, 1, -1 do
+            local g = groups[i]
+            if g.discard and g.done then reclaim(g) end
+        end
     end, debug.traceback)
     polling = false
     if not ok then error(err, 0) end
@@ -486,8 +569,13 @@ function M.cancel_owner(owner)
 end
 function M.shutdown()
     for _, g in ipairs(groups) do cancel_group(g) end
+    -- Public groups keep their inspection history. Internal owners disappear
+    -- at shutdown, so reclaim their records and invalidate their handles.
+    for handle, g in pairs(handles) do
+        if reclaim(g) then handles[handle] = nil end
+    end
 end
-function M.run(args, run_ctx)
+local function run(args, run_ctx, internal)
     args, run_ctx = args or {}, run_ctx or {}
     if type(args.tasks) ~= "table" or #args.tasks == 0 then return "Subagents failed: missing tasks", false end
     if not _G.capstan or not capstan.agent or type(capstan.agent.run) ~= "function" then return "Subagents failed: agent runtime is not available", false end
@@ -521,7 +609,10 @@ function M.run(args, run_ctx)
         cap = math.max(1, math.floor(subagent_config_number("max_concurrent_cap", 8))),
         limit = subagent_max_result_bytes(), attempts = subagent_max_attempts(),
         active = 0, states = {}, results = {}, started_at = now_ms(), status = "queued",
-        telemetry_parent = not background and run_ctx.telemetry_tool or nil}
+        telemetry_parent = internal and internal.telemetry_parent or (not background and run_ctx.telemetry_tool or nil),
+        lifetime = internal and internal.is_cancelled,
+        reviewer = internal and internal.reviewer,
+        notify = not internal or internal.notify == true}
     if background then
         -- Model metadata lookup may use blocking HTTP; never do it in launch.
         for _, task in ipairs(args.tasks) do
@@ -533,7 +624,8 @@ function M.run(args, run_ctx)
     end
     local function register(kind, label)
         local id, err = tools.background_register({owner = ctx.process_owner, kind = kind,
-            label = logging.truncate(redact.text(label), 240), workdir = ctx.workdir})
+            label = logging.truncate(redact.text(label), 240), workdir = ctx.workdir,
+            notify = kind == "subagent_group" and g.notify or false})
         if not id then error(err or "background registration failed") end
         return id
     end
@@ -541,21 +633,34 @@ function M.run(args, run_ctx)
         if background then g.id = register("subagent_group", "Subagents (" .. #args.tasks .. ")") end
         for i, task in ipairs(g.args.tasks) do
             local s = {index = i, task = task, status = "queued", attempt = 0, generation = 0,
-                max_turns = subagent_max_turns(task), result = make_subagent_result(task, i, g.started_at)}
+                -- Internal review inherits the resolved orchestrator budget,
+                -- not the public subagent default/cap. Other limits still apply.
+                max_turns = g.reviewer and task.max_turns or subagent_max_turns(task),
+                result = make_subagent_result(task, i, g.started_at)}
             sanitize_subagent_result(s.result, g.limit)
             if background then s.native_id = register("subagent", task_label(task)) end
             g.states[i], g.results[i] = s, s.result
             s.queue = {started_at = now_ms(), span = telemetry.start("operation", g.telemetry_parent, {operation = "subagent_queue", depth = depth + 1})}
-            publish(g, s)
+            if not publish(g, s) then error(g.publication_error) end
         end
+        if background and not publish(g) then error(g.publication_error) end
     end)
     if not ok then
+        -- Retain failed cleanup only until terminal publication/release can be
+        -- retried. Never leak partially registered tasks on capacity failure.
+        g.discard = true
+        groups[#groups + 1] = g
         cancel_group(g)
+        reclaim(g)
         return "Subagents failed: " .. safe_subagent_error(err), false
     end
     groups[#groups + 1] = g
+    if internal then
+        local handle = {}
+        handles[handle] = g
+        return handle, true
+    end
     if background then
-        publish(g)
         local ids = {}; for _, s in ipairs(g.states) do ids[#ids + 1] = {id = s.result.id, background_id = s.native_id, status = "queued"} end
         return json.encode({background = true, started = true, id = g.id, group_id = g.id, status = "queued", tasks = ids}), true
     end
@@ -577,5 +682,66 @@ function M.run(args, run_ctx)
     for i, entry in ipairs(groups) do if entry == g then table.remove(groups, i); break end end
     if g.cancelled then return "Subagents cancelled", false end
     return json.encode(g.output), true
+end
+
+function M.run(args, run_ctx)
+    return run(args, run_ctx)
+end
+
+-- Internal asynchronous adapter. Public model arguments cannot supply lifetime
+-- predicates, telemetry parents, handles or notification policy.
+function M.submit(args, run_ctx, options)
+    options = options or {}
+    if type(options) ~= "table" or
+        (options.is_cancelled ~= nil and type(options.is_cancelled) ~= "function") or
+        (options.notify ~= nil and type(options.notify) ~= "boolean") then
+        return nil, "Invalid internal subagent options"
+    end
+    local capabilities = config_table("capabilities")
+    if capabilities and capabilities.subagents == false then
+        return nil, "Subagents denied: capability disabled"
+    end
+    if not tools or type(tools.background_release) ~= "function" then
+        return nil, "Subagents failed: background release unavailable"
+    end
+    if args ~= nil and type(args) ~= "table" then return nil, "Subagents failed: invalid arguments" end
+    args = copy(args or {})
+    args.background = true
+    local handle, ok = run(args, run_ctx, options)
+    if not ok then return nil, handle end
+    return handle
+end
+
+function M.result(handle)
+    local g = handles[handle]
+    if not g then return nil, "Unknown or released subagent handle" end
+    return {done = g.done == true, status = g.status,
+        result = g.done and copy(g.output) or nil,
+        publication_error = g.publication_error}
+end
+
+function M.cancel(handle)
+    local g = handles[handle]
+    if not g then return false, "Unknown or released subagent handle" end
+    cancel_group(g)
+    return true
+end
+
+-- Transfer failed cleanup to the existing polling reclamation path.
+function M.discard(handle)
+    local g=handles[handle]
+    if not g then return false end
+    g.discard=true
+    handles[handle]=nil
+    cancel_group(g)
+    return true
+end
+
+function M.release(handle)
+    local g = handles[handle]
+    if not g then return false, "Unknown or released subagent handle" end
+    local ok, err = reclaim(g)
+    if ok then handles[handle] = nil end
+    return ok, err
 end
 return M

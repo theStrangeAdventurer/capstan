@@ -78,6 +78,17 @@ The overlay is painted above chat and below modal popups; closing restores chat.
 `make test` covers narrow/Unicode layout; `make test-tui-input` covers actual
 clipboard-command delivery, `/new`, resize, and shell mouse geometry.
 
+## Review metadata
+
+Optional `issues_json` stores the [review issue registry](issues.md) independently
+of tasks and conversation messages. Lua caps the active ledger at 256 KiB and
+archives eligible closed runs without deleting history. The complete envelope
+uses a header field or bounded `issues_chunk` rows and follows the same
+atomic-save/rollback and owned-session lifetime rules for active state and archive. Native generation tokens
+reject late report writes after session switching, new-session creation or CLI
+detachment. ACP has a separate in-memory issue store per session; this does not
+add ACP resume or restore active review execution.
+
 ## Storage
 
 Sessions are stored under the XDG state directory:
@@ -154,3 +165,8 @@ load/save round trips, oversized-row rejection, and `0600`/`0700` permissions. `
 covers selected-session creation and restoration through the TUI
 session manager. `make test-build` verifies create-then-resume headless
 persistence in an isolated HOME as part of the linked-binary smoke checks.
+
+Completion-review snapshots, held drafts, barriers and active scheduler handles
+are transient run state, not resumable session metadata. Persisting final output
+and issues does not restore an active review after restart. See
+[completion review](completion-review.md).

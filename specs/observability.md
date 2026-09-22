@@ -463,3 +463,14 @@ Adapter/export errors are best-effort and do not prevent the actual save.
 
 Coverage: agent selected-session test checks explicit context delivery, stale
 session rejection and disk restoration; cross-mode telemetry tests cover CLI/TUI.
+
+## Completion review lifecycle
+
+The [completion gate](completion-review.md) creates a `completion_review`
+operation at the first ready attempt and supplies it as scheduler telemetry
+parent. Its lifetime includes queueing, review, repairs and rechecks. Terminal
+metadata includes cycles, request count and stage/reason; parent completion also
+carries completion status and review error. These events do not replace the
+canonical exporter attribute allowlist or authorize exporting snapshot contents.
+Incomplete review is not a clean verdict. Review and parent finalization retain
+separate ownership to avoid duplicate terminal publication.

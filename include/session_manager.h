@@ -22,6 +22,10 @@ int *session_manager_tasks_scroll(void);
 int session_manager_tasks_view(void);
 int session_manager_set_tasks_view(int expanded);
 int session_manager_set_tasks(const char *json);
+/* Session-generation token rejects late review writes after switch/detach. */
+unsigned long session_manager_issues_token(void);
+const char *session_manager_issues(void);
+int session_manager_set_issues(const char *json, unsigned long token);
 void session_manager_tick(void);
 int session_manager_list(SessionInfo **items, size_t *count);
 const char *session_manager_active_id(void);

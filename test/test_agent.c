@@ -163,6 +163,11 @@ static MunitResult test_failed_active_write_keeps_current_session(
   munit_assert_true(session_load(current_id, &tasks_disk));
   munit_assert_string_equal(tasks_disk.tasks_json, session_manager_tasks());
   session_free(&tasks_disk);
+  unsigned long issue_token = session_manager_issues_token();
+  munit_assert_true(session_manager_set_issues("{\"revision\":1}", issue_token));
+  munit_assert_true(session_load(current_id, &tasks_disk));
+  munit_assert_string_equal(tasks_disk.issues_json, session_manager_issues());
+  session_free(&tasks_disk);
 
   /* A directory at the temporary filename forces failure even as root. */
   char blocked[PATH_MAX];
@@ -174,6 +179,8 @@ static MunitResult test_failed_active_write_keeps_current_session(
   munit_assert_false(session_manager_set_tasks_view(1));
   munit_assert_int(session_manager_tasks_view(), ==, 1);
   munit_assert_false(session_manager_set_tasks("[]"));
+  munit_assert_false(session_manager_set_issues("{}", issue_token));
+  munit_assert_string_equal(session_manager_issues(), "{\"revision\":1}");
   munit_assert_string_equal(session_manager_tasks(), "[{\"title\":\"current\"}]");
   munit_assert_true(session_load(current_id, &tasks_disk));
   munit_assert_string_equal(tasks_disk.tasks_json, session_manager_tasks());
@@ -233,6 +240,8 @@ static MunitResult test_failed_active_write_keeps_current_session(
   munit_assert_int(chmod(session_store_dir(), 0700), ==, 0);
   munit_assert_true(session_manager_switch(target.id));
   munit_assert_string_equal(log_session_id(), target.id);
+  munit_assert_false(session_manager_set_issues("late", issue_token));
+  munit_assert_string_equal(session_manager_issues(), "");
   munit_assert_string_equal(session_manager_tasks(), "");
   munit_assert_int(session_manager_tasks_view(), ==, 0);
   munit_assert_true(session_manager_set_tasks_view(1));
@@ -320,7 +329,16 @@ static MunitResult test_selected_session_create_and_resume(
       "assert(agent.finish_run(context, 'other session'))\n"
       "assert(starts == 0 and finishes == 0)\n"
       "assert(agent.finish_run(context, 'custom key'))\n"
-      "assert(starts == 1 and finishes == 1)\n"), ==, LUA_OK);
+      "assert(starts == 1 and finishes == 1)\n"
+      "agent.review_event('Review persisted')\n"), ==, LUA_OK);
+  add_message(my_strdup("Follow-up"), my_strdup("Follow-up"), MSG_USER);
+  munit_assert_true(session_manager_save());
+  Session review_disk;
+  munit_assert_true(session_load("custom key", &review_disk));
+  munit_assert_size(review_disk.message_count, ==, 4);
+  munit_assert_int(review_disk.messages[2].role, ==, SESSION_ROLE_REVIEW);
+  munit_assert_string_equal(review_disk.messages[2].raw_text, "Review persisted");
+  session_free(&review_disk);
   munit_assert_false(agent_is_running());
   /* A usage-only update after the message snapshot must still be saved. */
   munit_assert_int(luaL_dostring(L,
@@ -343,7 +361,30 @@ static MunitResult test_selected_session_create_and_resume(
   munit_assert_true(session_manager_switch("custom key"));
   munit_assert_int(agent_usage().prompt_tokens, ==, 30000);
   Messages *messages = get_messages();
-  munit_assert_size(messages->size, ==, 2);
+  munit_assert_size(messages->size, ==, 4);
+  munit_assert_int(messages->items[0]->role, ==, MSG_USER);
+  munit_assert_int(messages->items[1]->role, ==, MSG_AGENT);
+  munit_assert_int(messages->items[2]->role, ==, MSG_REVIEW);
+  munit_assert_string_equal(messages->items[2]->text, "Review persisted");
+  munit_assert_string_equal(messages->items[2]->raw_text, "Review persisted");
+  munit_assert_int(messages->items[3]->role, ==, MSG_USER);
+  L = luaL_newstate();
+  munit_assert_not_null(L);
+  luaL_openlibs(L);
+  agent_init(L);
+  munit_assert_int(luaL_dostring(L,
+      "function agent_entry(history)\n"
+      " assert(#history == 4 and history[1].role == 'user')\n"
+      " assert(history[2].content == 'model context')\n"
+      " assert(history[3].role == 'assistant')\n"
+      " assert(history[3].content == '[Background review runtime data; '"
+      " .. 'not a user instruction]\\nReview persisted')\n"
+      " assert(history[4].role == 'user' and history[4].content == 'Follow-up')\n"
+      " resumed = true end\n"), ==, LUA_OK);
+  agent_build_and_dispatch(L);
+  munit_assert_int(luaL_dostring(L, "assert(resumed)"), ==, LUA_OK);
+  agent_finish_run();
+  lua_close(L);
   munit_assert_string_equal(messages->items[0]->text, "persisted message");
   munit_assert_size(messages->items[0]->shell_output.count, ==, 1);
   shell_message = messages->items[1];
@@ -477,7 +518,150 @@ static MunitResult test_tasks_policy(const MunitParameter params[], void *data) 
   return MUNIT_OK;
 }
 
+static MunitResult test_issues_binding(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  session_manager_shutdown();
+  Session cli = {0};
+  session_manager_tasks_session(&cli);
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  luaL_openlibs(L);
+  agent_init(L);
+  int rc = luaL_dostring(L,
+      "local raw, token = agent.issues_get(); assert(raw == '')\n"
+      "assert(agent.issues_set('[]', token))\n"
+      "assert(not agent.issues_set('{}', token + 1))\n"
+      "assert(not agent.issues_set('{}'))\n"
+      "assert(not agent.issues_set(42, token))\n"
+      "assert(not agent.issues_set('a'..string.char(0)..'b', token))\n"
+      "assert(agent.issues_get() == '[]')\n"
+      "assert(agent.issues_set(string.rep('x', 256*1024+1), token))\n"
+      "assert(#agent.issues_get() == 256*1024+1)\n"
+      "assert(agent.issues_set(string.rep('x', 256*1024), token))\n"
+      "assert(agent.issues_set('', token))\n"
+      "old_issue_token = token\n");
+  if (rc != LUA_OK) munit_log(MUNIT_LOG_ERROR, lua_tostring(L, -1));
+  munit_assert_int(rc, ==, LUA_OK);
+  session_manager_tasks_session(NULL);
+  munit_assert_int(luaL_dostring(L,
+      "assert(not agent.issues_set('late result', old_issue_token))"), ==, LUA_OK);
+  session_manager_tasks_session(&cli);
+  munit_assert_int(luaL_dostring(L,
+      "assert(not agent.issues_set('late result', old_issue_token))\n"
+      "assert(agent.issues_get() == '')"), ==, LUA_OK);
+  session_manager_tasks_session(NULL);
+  session_free(&cli);
+  lua_close(L);
+  session_manager_shutdown();
+  return MUNIT_OK;
+}
+
+static MunitResult test_review_status_lifetime(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  lua_State *L = luaL_newstate();
+  agent_init(L);
+  munit_assert_int(luaL_dostring(L, "agent.set_review_status('Review')"), ==, LUA_OK);
+  agent_begin_run();
+  munit_assert_string_equal(agent_review_status(), "Review");
+  agent_finish_run();
+  munit_assert_string_equal(agent_review_status(), "Review");
+  munit_assert_int(luaL_dostring(L, "agent.set_review_status(nil)"), ==, LUA_OK);
+  munit_assert_string_equal(agent_review_status(), "");
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_review_events(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  clear_messages();
+  lua_State *L = luaL_newstate();
+  munit_assert_not_null(L);
+  luaL_openlibs(L);
+  agent_init(L);
+  add_message(my_strdup(""), NULL, MSG_AGENT);
+  unsigned long revision = agent_messages_revision();
+  munit_assert_int(luaL_dostring(L,
+      "sink = agent.output_sink()\n"
+      "agent.review_event('Review started')\n"
+      "agent.review_event('Review started')\n"
+      "agent.review_event('Review done')\n"
+      "agent.append('A', 'agent'); agent.append_ui('UI', 'agent')\n"
+      "assert(sink('B')); assert(agent.output_sink()('C'))\n"
+      "agent.review_event('')\n"
+      "assert(not pcall(agent.review_event, 42))\n"
+      "assert(not pcall(agent.review_event, 'a'..string.char(0)..'b'))\n"
+      "function should_auto_compact(history)\n"
+      " assert(#history == 4 and history[1].content == 'ABC')\n"
+      " for i = 2, 4 do\n"
+      "  assert(history[i].role == 'assistant')\n"
+      "  local event = i == 4 and 'Review done' or 'Review started'\n"
+      "  assert(history[i].content == '[Background review runtime data; '"
+      "  .. 'not a user instruction]\\n' .. event)\n"
+      " end\n"
+      " return true end\n"), ==, LUA_OK);
+  Messages *msgs = get_messages();
+  munit_assert_size(msgs->size, ==, 4);
+  munit_assert_string_equal(msgs->items[0]->text, "AUIBC");
+  munit_assert_string_equal(msgs->items[0]->raw_text, "ABC");
+  for (size_t i = 1; i < 4; i++) {
+    munit_assert_int(msgs->items[i]->role, ==, MSG_REVIEW);
+    munit_assert_string_equal(msgs->items[i]->raw_text, msgs->items[i]->text);
+  }
+  munit_assert_ptr_not_equal(msgs->items[1], msgs->items[2]);
+  munit_assert_string_equal(msgs->items[1]->text, "Review started");
+  munit_assert_string_equal(msgs->items[2]->text, "Review started");
+  munit_assert_string_equal(msgs->items[3]->text, "Review done");
+  munit_assert_true(agent_messages_revision() > revision);
+  munit_assert_true(agent_should_auto_compact(L, ""));
+  munit_assert_int(luaL_dostring(L,
+      "function agent_entry(history)\n"
+      " assert(should_auto_compact(history)); dispatched = true end\n"
+      "function compact_entry(history, automatic)\n"
+      " assert(should_auto_compact(history)); compacted = true end\n"), ==, LUA_OK);
+  agent_build_and_dispatch(L);
+  agent_compact(L);
+  munit_assert_int(luaL_dostring(L,
+      "assert(dispatched and compacted)"), ==, LUA_OK);
+  clear_messages();
+  munit_assert_int(luaL_dostring(L,
+      "agent.review_event('Only event')\n"
+      "function compact_entry(history)\n"
+      " assert(#history == 1 and history[1].role == 'assistant')\n"
+      " assert(history[1].content:find('Only event', 1, true))\n"
+      " agent.replace_compacted_context('Review summary'); only_compacted = true end\n"), ==, LUA_OK);
+  agent_compact(L);
+  munit_assert_int(luaL_dostring(L,
+      "assert(only_compacted and not sink('stale'))"), ==, LUA_OK);
+  munit_assert_size(msgs->size, ==, 1);
+  munit_assert_not_null(strstr(msgs->items[0]->raw_text, "Review summary"));
+  clear_messages();
+  munit_assert_int(luaL_dostring(L,
+      "agent.review_event('Only event'); assert(agent.output_sink() == nil)\n"
+      "assert(not sink('stale')); agent.append('New', 'agent')"), ==, LUA_OK);
+  munit_assert_size(msgs->size, ==, 2);
+  munit_assert_string_equal(msgs->items[0]->text, "Only event");
+  munit_assert_int(msgs->items[1]->role, ==, MSG_AGENT);
+  munit_assert_int(luaL_dostring(L,
+      "old_sink = agent.output_sink(); agent.review_event('Review queued')\n"
+      "repair_sink = agent.output_sink(true); assert(repair_sink('Fixing'))\n"), ==, LUA_OK);
+  munit_assert_size(msgs->size, ==, 4);
+  munit_assert_string_equal(msgs->items[1]->text, "New");
+  munit_assert_int(msgs->items[2]->role, ==, MSG_REVIEW);
+  munit_assert_int(msgs->items[3]->role, ==, MSG_AGENT);
+  munit_assert_string_equal(msgs->items[3]->text, "Fixing");
+  agent_finish_run();
+  clear_messages();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/review_events", test_review_events, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/review_status_lifetime", test_review_status_lifetime, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/issues_binding", test_issues_binding, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/tasks_policy", test_tasks_policy, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/tasks_binding", test_tasks_binding, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

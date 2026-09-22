@@ -213,8 +213,18 @@ ignored. Failed and cancelled task text is empty. Group hooks run exactly once;
 only bounded, redacted canonical task fields are published after hooks.
 
 The Lua registry fails closed at 128 retained background groups (including
-completed groups), rather than growing indefinitely. Native registry capacity
-can reject a submission earlier; partially registered groups are cancelled.
+completed public groups), rather than growing indefinitely. Native registry capacity
+can reject a submission earlier; partially registered groups are cancelled and
+explicitly reclaimed (failed cleanup remains scheduled for retry).
+Internal consumers use opaque `submit/result/cancel/release` handles on this same
+scheduler. They can bind cancellation to a parent run, suppress ordinary group
+notifications, and explicitly release terminal groups and native task records.
+See [completion review](completion-review.md) for these internal contracts.
+Its reviewer uses this scheduler with a strict snapshot-only `file_read` adapter,
+run-owned cancellation, shared review budgets and muted notifications. It does
+not inherit the public empty-whitelist behavior or recursively launch reviews.
+Publication failure is not success: terminal snapshots are retried at safe poll
+boundaries, without rerunning group hooks, before a group is marked done.
 Stream accumulation retains only the configured output prefix and its original
 byte count, then redacts the entire retained prefix (including split chunks).
 Native output limits may impose additional bounds. Pattern-based redaction is

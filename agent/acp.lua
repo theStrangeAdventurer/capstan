@@ -3,6 +3,7 @@ local images = require("agent.images")
 local mcp_client = require("agent.mcp")
 local profiles = require("agent.profiles")
 local tasks = require("agent.tasks")
+local issues = require("agent.issues")
 
 local sessions = {}
 local next_session = 1
@@ -370,6 +371,7 @@ local function start_prompt(id, params)
     end
 
     tasks.use_store(session.tasks)
+    issues.use_store(session.issues)
     local command = not has_image and parse_command(text) or nil
     if command and command.error then
         rpc_error(id, -32000, command.error)
@@ -403,7 +405,7 @@ local function start_prompt(id, params)
     end
 
     table.insert(session.messages, {role = "user", content = content})
-    local started, start_err = capstan.agent.run({
+    local started, start_err, cancel_run = capstan.agent.run({
         messages = session.messages,
         profile = session.profile,
         provider = session.provider,
@@ -479,6 +481,7 @@ local function start_prompt(id, params)
         end,
     })
 
+    run.cancel=cancel_run
     if not started and active == run and not run.finished then
         table.remove(session.messages)
         run.finished = true
@@ -551,6 +554,7 @@ handlers["session/new"] = function(id, params)
         cwd = cwd,
         messages = {},
         tasks = {json = ''},
+        issues = {json = ''},
         permission_scope = {allowed_tools = {}, allowed_targets = {}, full_control = false},
     }
     apply_profile_defaults(session, profile)
@@ -569,8 +573,9 @@ handlers["session/cancel"] = function(id, params)
     local session = find_session(params, id)
     if not session then return end
     if active and active.session == session and not active.finished then
-        acp.cancel()
+        local cancel=active.cancel
         finish_active("cancelled", {ok = false})
+        if cancel then cancel() else acp.cancel() end
     end
     if id ~= nil then response(id, {}) end
 end
@@ -626,8 +631,9 @@ handlers["session/close"] = function(id, params)
     local session = find_session(params, id)
     if not session then return end
     if active and active.session == session then
-        acp.cancel()
+        local cancel=active.cancel
         finish_active("cancelled", {ok = false})
+        if cancel then cancel() else acp.cancel() end
     end
     mcp_client.close_scope(session.id)
     local cleaned = not tools or not tools.process_close_owner or
@@ -691,9 +697,10 @@ end
 
 function capstan_acp_disconnect()
     if active and not active.finished then
-        acp.cancel()
+        local cancel=active.cancel
         active.finished = true
         active = nil
+        if cancel then cancel() else acp.cancel() end
     end
     for session_id in pairs(sessions) do
         mcp_client.close_scope(session_id)

@@ -5,6 +5,38 @@ local tokens = require("agent.tokens")
 
 local M = {}
 
+-- One bounded UI cache, not request telemetry. Only extending the same owner's
+-- conversation/model may reuse a measured input count while awaiting fresh usage.
+local last_context
+local function copy_value(value)
+    if type(value) ~= 'table' then return value end
+    local out = {}
+    for k, v in pairs(value) do out[k] = copy_value(v) end
+    return out
+end
+local function equal(a, b)
+    if type(a) ~= 'table' or type(b) ~= 'table' then return a == b end
+    for k, v in pairs(a) do if not equal(v, b[k]) then return false end end
+    for k in pairs(b) do if a[k] == nil then return false end end
+    return true
+end
+function M.usage_context(provider, owner, messages, provider_name)
+    if provider.suppress_agent_state then return nil end
+    local previous = last_context
+    local extends = previous and previous.owner == owner and previous.provider == provider_name and
+        previous.model == provider.model and previous.endpoint == provider.endpoint and
+        #previous.messages > 0 and #messages >= #previous.messages
+    if extends then
+        for i, message in ipairs(previous.messages) do
+            if not equal(message, messages[i]) then extends = false; break end
+        end
+    end
+    local context = {owner = owner, provider = provider_name, model = provider.model, endpoint = provider.endpoint,
+        messages = copy_value(messages), prompt = extends and previous.prompt or nil}
+    last_context = context
+    return context
+end
+
 local function structured_error_message(value)
     if type(value) == "string" and value ~= "" then return value end
     if type(value) ~= "table" then return nil end
@@ -188,7 +220,7 @@ end
 -- callback argument to http.post_stream. Accumulates text, reasoning, and
 -- tool_call fragments across partial SSE chunks, calls on_result for each
 -- text delta and a final result with collected tool_calls on stream end.
-function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
+function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_context)
     local buf = ""
     local accumulated_text = ""
     local accumulated_reasoning = ""
@@ -241,12 +273,18 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
             end
             return fallback
         end
-        local prompt = counter("prompt_tokens", prompt_estimate)
+        local measured_prompt = counter("prompt_tokens", nil)
+        if usage_context and measured_prompt ~= nil then
+            usage_context.prompt = measured_prompt
+        end
+        local prompt = measured_prompt or (usage_context and usage_context.prompt) or prompt_estimate
         local completion = counter("completion_tokens",
             text_token_estimate + reasoning_token_estimate + tool_token_estimate)
         agent.set_usage(prompt, completion, counter("total_tokens", prompt + completion),
             provider.context_limit or 0)
     end
+
+    update_usage() -- Request start uses the same policy as subsequent chunks.
 
     local function elapsed_ms()
         local now = (_G.capstan and _G.capstan.now_ms and _G.capstan.now_ms()) or os.clock() * 1000

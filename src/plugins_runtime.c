@@ -96,6 +96,12 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.stream", "agent/stream.lua");
   preload_embedded_asset(L, "agent.tools", "agent/tools.lua");
   preload_embedded_asset(L, "agent.tasks", "agent/tasks.lua");
+  preload_embedded_asset(L, "agent.issues", "agent/issues.lua");
+  preload_embedded_asset(L, "agent.review_verdict", "agent/review_verdict.lua");
+  preload_embedded_asset(L, "agent.review_config", "agent/review_config.lua");
+  preload_embedded_asset(L, "agent.review_snapshot", "agent/review_snapshot.lua");
+  preload_embedded_asset(L, "agent.completion_review", "agent/completion_review.lua");
+  preload_embedded_asset(L, "plugins.completion_review", "plugins/completion_review.lua");
   preload_embedded_asset(L, "agent.tool_output", "agent/tool_output.lua");
   preload_embedded_asset(L, "agent.workspace", "agent/workspace.lua");
   preload_embedded_asset(L, "agent.redact", "agent/redact.lua");

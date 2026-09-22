@@ -111,8 +111,8 @@ class Script:
 
 
 @contextmanager
-def fixture(cancel=False):
-    script = Script(cancel)
+def fixture(cancel=False, script=None, completion_review='false'):
+    script = script if script is not None else Script(cancel)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -176,7 +176,7 @@ def fixture(cancel=False):
  providers = {{fixture = {{endpoint = "http://127.0.0.1:{server.server_port}/v1/chat/completions",
    model = "fixture", context_limit = 65536,
    models = {{{{id = "fixture", context_limit = 65536}}}}}}}},
- agent = {{completion_review = false, max_stream_retries = 0}},
+ agent = {{completion_review = {completion_review}, max_stream_retries = 0}},
  mcp = {{enabled = false}}, wiki = {{enabled = false}},
 }}\n''')
         # Override development-binary workspace inference explicitly.

@@ -1,4 +1,5 @@
 #include "agent.h"
+#include "utils.h"
 #include "munit.h"
 #include <lauxlib.h>
 #include <lua.h>
@@ -4996,6 +4997,58 @@ static MunitResult test_stream_tool_delta_logs_only_at_debug(
   return MUNIT_OK;
 }
 
+/* Exercise the runtime gate without native snapshots/background registry.
+ * The controller holds the original draft until an explicit clean verdict. */
+static void install_completion_review_stub(lua_State *L) {
+  int rc = luaL_dostring(
+      L,
+      "REVIEW_FACTORIES = 0; REVIEW_ATTEMPTS = 0\n"
+      "package.loaded['agent.completion_review'] = {state = function() return {} end, new = function(config, context)\n"
+      "  assert(config.enabled == true)\n"
+      "  REVIEW_FACTORIES = REVIEW_FACTORIES + 1\n"
+      "  return {\n"
+      "    consume = function() return true end,\n"
+      "    dispose = function() end,\n"
+      "    poll = function() end,\n"
+      "    attempt = function(self, text, kind)\n"
+      "      assert(kind == 'ready')\n"
+      "      REVIEW_ATTEMPTS = REVIEW_ATTEMPTS + 1\n"
+      "      REVIEW_DRAFT = text\n"
+      "      REVIEW_CLEAN = function() context.finalize(text, 'ready') end\n"
+      "    end,\n"
+      "  }\n"
+      "end}\n");
+  munit_assert_int(rc, ==, LUA_OK);
+}
+
+static void assert_completion_review_clean_publishes_draft(lua_State *L,
+                                                          int requests) {
+  munit_assert_int(post_stream_calls, ==, requests);
+  munit_assert_null(strstr(captured_agent_appends, "draft answer"));
+  int rc = luaL_dostring(L,
+      "assert(REVIEW_FACTORIES == 1 and REVIEW_ATTEMPTS == 1)\n"
+      "assert(REVIEW_DRAFT == 'draft answer')\n"
+      "assert(type(REVIEW_CLEAN) == 'function')\n");
+  munit_assert_int(rc, ==, LUA_OK);
+  size_t before = strlen(captured_agent_appends);
+  size_t messages_before = get_messages()->size;
+  rc = luaL_dostring(L, "REVIEW_CLEAN()");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_string_equal(captured_agent_appends + before, "");
+  munit_assert_size(get_messages()->size, ==, messages_before + 1);
+  Message *event = get_messages()->items[messages_before];
+  munit_assert_int(event->role, ==, MSG_REVIEW);
+  munit_assert_not_null(strstr(event->text, "Background review result"));
+  munit_assert_not_null(strstr(event->text, "draft answer"));
+  munit_assert_int(post_stream_calls, ==, requests);
+  /* A duplicate/late verdict must not publish a second event. */
+  rc = luaL_dostring(L, "REVIEW_CLEAN(); assert(REVIEW_ATTEMPTS == 1)");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_size(get_messages()->size, ==, messages_before + 1);
+  munit_assert_string_equal(captured_agent_appends + before, "");
+  munit_assert_int(post_stream_calls, ==, requests);
+}
+
 static MunitResult test_streamed_file_edit_tool_edits_file(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -5015,6 +5068,7 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
   int rc = luaL_dostring(
       L, "capstan.config = {agent = {completion_review = true}}");
   munit_assert_int(rc, ==, LUA_OK);
+  install_completion_review_stub(L);
   rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 1);
@@ -5079,17 +5133,18 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
   munit_assert_true(strstr(captured_agent_appends, "+BETA") != NULL);
 
   send_text_delta(L, "Running the focused validation before finalizing.");
+  /* Conversation/progress is visible before tool completion, even with review. */
   munit_assert_true(strstr(captured_agent_appends,
-                           "Running the focused validation") == NULL);
+                           "Running the focused validation") != NULL);
   send_tool_call(L, "call_validate", "shell",
                  "{\\\"command\\\":\\\"npm test\\\"}");
   munit_assert_true(strstr(captured_agent_appends,
                            "Running the focused validation") != NULL);
   munit_assert_true(strstr(captured_agent_appends, "Validating") != NULL);
-  send_text_done(L, "draft answer");
-  munit_assert_true(strstr(captured_body, "bounded completion review") == NULL);
-  munit_assert_true(strstr(captured_agent_appends, "draft answer") != NULL);
-  munit_assert_true(strstr(captured_logs, "completion_review started") == NULL);
+  int requests = post_stream_calls;
+  send_tool_call(L, "complete", "request_completion",
+                 "{\\\"status\\\":\\\"ready\\\",\\\"text\\\":\\\"draft answer\\\"}");
+  assert_completion_review_clean_publishes_draft(L, requests);
 
   reset_captures(L);
   lua_close(L);
@@ -5120,6 +5175,7 @@ static MunitResult test_unvalidated_multi_file_write_starts_completion_review(
   int rc = luaL_dostring(
       L, "capstan.config = {agent = {completion_review = true}}");
   munit_assert_int(rc, ==, LUA_OK);
+  install_completion_review_stub(L);
   rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 1);
@@ -5130,14 +5186,10 @@ static MunitResult test_unvalidated_multi_file_write_starts_completion_review(
                  "{\\\"path\\\":\\\"one.txt\\\",\\\"old_text\\\":\\\"old-one\\\",\\\"new_text\\\":\\\"new-one\\\"}");
   send_tool_call(L, "write-two", "file_edit",
                  "{\\\"path\\\":\\\"two.txt\\\",\\\"old_text\\\":\\\"old-two\\\",\\\"new_text\\\":\\\"new-two\\\"}");
-  send_text_done(L, "draft answer");
-
-  munit_assert_true(strstr(captured_body, "bounded completion review") != NULL);
-  munit_assert_true(strstr(captured_agent_appends, "draft answer") == NULL);
-  munit_assert_true(strstr(captured_logs, "completion_review started") != NULL);
-
-  send_text_done(L, "reviewed answer");
-  munit_assert_true(strstr(captured_agent_appends, "reviewed answer") != NULL);
+  int requests = post_stream_calls;
+  send_tool_call(L, "complete", "request_completion",
+                 "{\\\"status\\\":\\\"ready\\\",\\\"text\\\":\\\"draft answer\\\"}");
+  assert_completion_review_clean_publishes_draft(L, requests);
 
   reset_captures(L);
   lua_close(L);
@@ -5169,6 +5221,7 @@ static MunitResult test_write_after_validation_restores_completion_review(
   int rc = luaL_dostring(
       L, "capstan.config = {agent = {completion_review = true}}");
   munit_assert_int(rc, ==, LUA_OK);
+  install_completion_review_stub(L);
   rc = luaL_dofile(L, "agent/runtime.lua");
   munit_assert_int(rc, ==, LUA_OK);
   lua_pop(L, 1);
@@ -5181,13 +5234,10 @@ static MunitResult test_write_after_validation_restores_completion_review(
                  "{\\\"command\\\":\\\"npm test\\\"}");
   send_tool_call(L, "write-two", "file_edit",
                  "{\\\"path\\\":\\\"two.txt\\\",\\\"old_text\\\":\\\"old-two\\\",\\\"new_text\\\":\\\"new-two\\\"}");
-  send_text_done(L, "draft answer");
-
-  munit_assert_true(strstr(captured_body, "bounded completion review") != NULL);
-  munit_assert_true(strstr(captured_agent_appends, "draft answer") == NULL);
-
-  send_text_done(L, "reviewed answer");
-  munit_assert_true(strstr(captured_agent_appends, "reviewed answer") != NULL);
+  int requests = post_stream_calls;
+  send_tool_call(L, "complete", "request_completion",
+                 "{\\\"status\\\":\\\"ready\\\",\\\"text\\\":\\\"draft answer\\\"}");
+  assert_completion_review_clean_publishes_draft(L, requests);
 
   reset_captures(L);
   lua_close(L);
@@ -7759,7 +7809,59 @@ static MunitResult test_runtime_timeline_edges(
   return MUNIT_OK;
 }
 
+static MunitResult test_issues_subagent_boundary(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  int rc = luaL_dostring(L,
+      "plugins.issues = dofile('plugins/issues.lua')\n"
+      "local dispatcher = require('agent.tools')\n"
+      "local parent = dispatcher.collect()\n"
+      "local found = false\n"
+      "for _, t in ipairs(parent) do if t['function'].name == 'issues' then found=true end end\n"
+      "assert(found)\n"
+      "for _, t in ipairs(dispatcher.collect({disable_subagents=true})) do\n"
+      "  assert(t['function'].name ~= 'issues')\n"
+      "end\n"
+      "plugins.issues.handler = function() error('child reached parent ledger') end\n"
+      "local result, success\n"
+      "dispatcher.handle_tool_calls({}, parent, {{id='child', name='issues', arguments='{\"operation\":\"read\"}'}}, '',\n"
+      " function(msgs) result=msgs[#msgs].content end, {depth=1,tools=parent,silent_tools=true,\n"
+      " callbacks={on_tool_done=function(_,_,ok) success=ok end}})\n"
+      "assert(success == false and result:find('not accessible to subagents',1,true), result)\n");
+  if (rc != LUA_OK) munit_errorf("%s", lua_tostring(L, -1));
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_bound_review_output(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  agent_init(L);
+  clear_messages();
+  add_message(my_strdup("old:"), NULL, MSG_AGENT);
+  munit_assert_int(luaL_dostring(L, "sink=agent.output_sink()"), ==, LUA_OK);
+  add_message(my_strdup("new:"), NULL, MSG_AGENT);
+  munit_assert_int(luaL_dostring(L, "sink('review')"), ==, LUA_OK);
+  munit_assert_string_equal(get_messages()->items[0]->text, "old:review");
+  munit_assert_string_equal(get_messages()->items[1]->text, "new:");
+  clear_messages();
+  add_message(my_strdup("reloaded"), NULL, MSG_AGENT);
+  munit_assert_int(luaL_dostring(L, "sink('late'); agent.set_running(false)"), ==, LUA_OK);
+  munit_assert_string_equal(get_messages()->items[0]->text, "reloaded");
+  munit_assert_false(agent_is_running());
+  clear_messages();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/bound_review_output", test_bound_review_output, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/issues_subagent_boundary", test_issues_subagent_boundary, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/runtime_timeline_edges", test_runtime_timeline_edges,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/runtime_telemetry_lifecycle", test_runtime_telemetry_lifecycle,

@@ -63,6 +63,7 @@ end
 
 local active_profile_name = nil
 local interactive_run_options = {}
+local interactive_generation = 0
 
 local function configured_profile()
     local configured = config_table("agent")
@@ -321,16 +322,32 @@ local function agent_config_boolean(field)
     return nil
 end
 
-local completion_review_instruction = [[
-Before finalizing, perform one bounded completion review of this implementation.
-Re-read the original request line by line. For every required behavior and each
-exact term, name, version, value, or scope, locate evidence in the changed source
-or a direct check at the boundary where consumers observe it. A related effect,
-default, label, visual approximation, or setting at another hierarchy level is
-not evidence. Fix any concrete gap and validate that distinct requirement;
-otherwise give the final answer. Do not repeat checks or add dependencies or an
-ad-hoc harness solely for this review.
-]]
+local review_config = require('agent.review_config')
+local completion_review = require('agent.completion_review')
+local root_polls = {}
+-- Review presentation is owned by live reviews, not the foreground reply.
+-- Keep the oldest active label stable; completing another run cannot erase it.
+local review_statuses, review_status_serial = {}, 0
+local function set_review_status(owner, text)
+    if text then
+        if not review_statuses[owner] then
+            review_status_serial = review_status_serial + 1
+            review_statuses[owner] = {serial = review_status_serial}
+        end
+        review_statuses[owner].text = text
+    else
+        if not review_statuses[owner] then return end
+        review_statuses[owner] = nil
+    end
+    local first, count = nil, 0
+    for _, entry in pairs(review_statuses) do
+        count = count + 1
+        if not first or entry.serial < first.serial then first = entry end
+    end
+    local label = first and first.text
+    if count > 1 then label = label .. ' (+' .. (count - 1) .. ')' end
+    if agent.set_review_status then agent.set_review_status(label) end
+end
 
 local empty_terminal_instruction = [[
 Continue from the available tool results. If the task is complete, provide a
@@ -339,12 +356,13 @@ necessary action. Mention any blocker or remaining uncertainty, and never
 return an empty response.
 ]]
 
-local function completion_review_enabled(opts, profile, run_depth)
-    if run_depth > 0 then return false end
-    if type(opts.completion_review) == "boolean" then return opts.completion_review end
-    local configured = agent_config_boolean("completion_review")
-    if configured ~= nil then return configured end
-    return profile and profile.completion_review == true
+local function completion_review_settings(opts, profile, run_depth)
+    if run_depth > 0 then return review_config.normalize(false) end
+    local configured = config_table('agent')
+    local value = opts.completion_review
+    if value == nil and configured then value=configured.completion_review end
+    if value == nil and profile then value=profile.completion_review end
+    return review_config.normalize(value,run_depth)
 end
 
 local function preserve_reasoning_enabled(opts)
@@ -354,18 +372,6 @@ local function preserve_reasoning_enabled(opts)
     local configured = agent_config_boolean("preserve_reasoning")
     if configured ~= nil then return configured end
     return true
-end
-
-local function completion_review_warranted(state)
-    if not state or not state.workspace_mutated then return false end
-    if state.successful_validation then return false end
-    local targets = state.workspace_write_targets or {}
-    local count = 0
-    for _ in pairs(targets) do
-        count = count + 1
-        if count >= 2 then return true end
-    end
-    return false
 end
 
 local function now_ms()
@@ -560,6 +566,11 @@ _G.agent_background_poll = function()
             if not delivered and not failure then failure = delivery_error end
         end
         if failure then error(failure, 0) end
+        local polls={}
+        for opts, poll in pairs(root_polls) do polls[#polls+1]={opts,poll} end
+        for _,entry in ipairs(polls) do
+            if root_polls[entry[1]]==entry[2] then in_context(entry[1],entry[2]) end
+        end
         local scheduler = package.loaded["agent.subagents"]
         if scheduler and scheduler.poll then scheduler.poll() end
     end)
@@ -592,6 +603,12 @@ _G.agent_shutdown_background = M.shutdown_background
 local function run_impl(opts, callbacks, run_span)
     opts = opts or {}
     callbacks = callbacks or {}
+    local reviewer=opts.reviewer
+    local review_budget=opts.review_budget
+    local hook_opts=copy_table(opts)
+    hook_opts.reviewer=nil
+    hook_opts.review_budget=nil
+    hook_opts.review_cleanup=nil
     if opts.profile ~= nil and not profiles.normalize(
         type(opts.profile) == "table" and opts.profile.name or opts.profile) then
         local message = "Unknown profile: " .. tostring(opts.profile)
@@ -618,20 +635,38 @@ local function run_impl(opts, callbacks, run_span)
         end
     end
     models.ensure_context_limit(active)
-    if opts.update_usage ~= false then
-        agent.set_usage(0, 0, 0, active.context_limit or 0)
-    end
     local task_message
+    -- Derived from user history, never supplied by the model tool. Assistant
+    -- status/results do not change identity; a new user turn always does.
+    local request_users, request_last = 0, ''
+    for _, message in ipairs(opts.messages or {}) do
+        if message.role=='user' then
+            request_users=request_users+1
+            request_last=message.content
+        end
+    end
+    local review_request_id=json.encode({request_users,request_last})
+    local review_state_message
     local msgs = build_messages(opts.messages or {}, profile, opts)
     local messages_ctx = hooks.run("before_messages", {
         runtime = M,
         provider = active,
         provider_name = provider_name,
         messages = msgs,
-        run = opts,
+        run = hook_opts,
     })
     msgs = messages_ctx.messages or msgs
+    local usage_context = opts.update_usage ~= false and
+        stream.usage_context(active, opts.process_owner, msgs, provider_name) or nil
 
+    local review_settings, review_error = completion_review_settings(opts,profile,tonumber(opts.depth) or 0)
+    local caps=config_table('capabilities')
+    if not review_settings or (review_settings.enabled and caps and caps.subagents==false) then
+        local message=review_error or 'Completion review requires capabilities.subagents'
+        if callbacks.on_error then callbacks.on_error(message) end
+        if callbacks.on_done then callbacks.on_done({ok=false,error=message,error_category='configuration',text=''}) end
+        return false,message
+    end
     local combined_tools = opts.tools or tools_runtime.collect({
         disable_subagents = (tonumber(opts.depth) or 0) > 0,
         mcp_scope = opts.mcp_scope,
@@ -642,10 +677,19 @@ local function run_impl(opts, callbacks, run_span)
         provider_name = provider_name,
         messages = msgs,
         tools = combined_tools,
-        run = opts,
+        run = hook_opts,
     })
     combined_tools = tools_ctx.tools or combined_tools
     combined_tools = profiles.filter_tools(combined_tools, profile)
+    local filtered={}
+    for _,tool in ipairs(combined_tools) do
+        if tool['function'].name~='request_completion' then filtered[#filtered+1]=tool end
+    end
+    combined_tools=filtered
+    if review_settings.enabled then
+        combined_tools[#combined_tools+1]=tools_runtime.completion_tool()
+    end
+    if reviewer then combined_tools=deep_copy(reviewer.tools) end
     local run_depth = tonumber(opts.depth) or 0
     local run_kind = run_depth > 0 and "subagent" or "orchestrator"
     logging.runtime_log("agent", string.format("request provider=%s model=%s messages=%d tools=%d depth=%d kind=%s",
@@ -669,6 +713,7 @@ local function run_impl(opts, callbacks, run_span)
 
     local max_turns = tonumber(opts.max_turns) or agent_config_number("max_turns", 80)
     if max_turns <= 0 then max_turns = agent_config_number("max_turns", 80) end
+    review_config.resolve(review_settings, max_turns)
     local stream_timeout_sec = agent_config_number("stream_timeout_sec", 300)
     if stream_timeout_sec < 0 then stream_timeout_sec = 0 end
     local max_stream_retries = agent_config_nonnegative("max_stream_retries", 1)
@@ -682,7 +727,9 @@ local function run_impl(opts, callbacks, run_span)
         completion_review_done = false,
         empty_terminal_retries = 0,
     }
-    local review_enabled = completion_review_enabled(opts, profile, run_depth)
+    local review_enabled = review_settings.enabled
+    local review
+    local review_finalize, review_resume
     local preserve_reasoning = preserve_reasoning_enabled(opts)
     local permission_scope = opts.permission_scope or
         {allowed_tools = {}, allowed_targets = {}, full_control = false}
@@ -732,6 +779,40 @@ local function run_impl(opts, callbacks, run_span)
         finish({ok = false, error = message, error_category = error_category, text = "", messages = current_msgs or {}, turns = turns})
     end
 
+    if review_enabled then
+        local read_tool
+        for _,tool in ipairs(combined_tools) do if tool['function'].name=='file_read' then read_tool=deep_copy(tool) end end
+        if read_tool then
+            local schema=read_tool['function'].parameters
+            schema.properties.offset={type='integer',minimum=0,description='Snapshot byte offset; follow next_offset, starting at 0.'}
+            schema.properties.limit={type='integer',minimum=4,maximum=48000,description='Page bytes; single path only. Read until eof=true.'}
+        end
+        review=completion_review.new(review_settings,{
+            request_id=review_request_id,
+            messages=deep_copy(opts.messages or {}),provider=active,provider_name=provider_name,
+            profile=profile and profile.name,profile_snapshot=profile,permission_scope=permission_scope,
+            process_owner=opts.process_owner,mcp_scope=opts.mcp_scope,workdir=opts.workdir,
+            workspace_root=opts.workspace_root,system_prompt=opts.system_prompt,read_tool=read_tool,
+            telemetry_context=run_span,
+            authorize=function(path) return tools_runtime.review_read_allowed(path,permission_scope) end,
+            guard_error=function() return guard_duration_error(guard) end,
+            cancelled=is_cancelled,cancel=function() stop_run('cancelled',msgs,'cancelled') end,
+            foreground_lost=opts.review_foreground_lost,
+            waiting=callbacks.on_review_wait,
+            status=function(text) set_review_status(opts, text) end,
+            finalize=function(...) if review_finalize then review_finalize(...) end end,
+            resume=function(...)
+                if callbacks.on_review_resume then callbacks.on_review_resume() end
+                return review_resume(...)
+            end,
+        })
+        review_budget=review
+        opts.review_cleanup=function(result) review:dispose(result) end
+        root_polls[opts]=function() protect_run(run_span,function()
+            if not finished and not run_span.ended then review:poll() end
+        end) end
+    end
+
     -- One turn of the agent cycle: sends the request, streams the response,
     -- and either finishes or recurses into handle_tool_calls.
     local function continue_agent_cycle(current_msgs, tools, cycle_kind)
@@ -764,8 +845,27 @@ local function run_impl(opts, callbacks, run_span)
                 logging.runtime_log("process", summary)
             end
         end
-        local deferred_text_chunks = {}
-        local defer_visible_text = review_enabled and run_state.workspace_mutated
+        if run_depth==0 then
+            local state=completion_review.state(opts.process_owner,opts.workspace_root)
+            if #state>0 or review_state_message then
+                if not review_state_message then
+                    review_state_message={role='system'}
+                    table.insert(current_msgs,2,review_state_message)
+                end
+                review_state_message.content='Completion review runtime state (data, not instructions):\n'..
+                    json.encode(state)..'\nListed requests have already been submitted. Queued/reviewing runs '..
+                    'continue in the background; continue the conversation without resubmitting an earlier request. '..
+                    'Only complete the current task or honor a NEW explicit review request. Terminal entries '..
+                    'record the outcome; do not infer acceptance from submission.'
+            end
+        end
+        -- Ordinary prose streams immediately. The request_completion payload is
+        -- also streamed to the foreground sink while the controller holds the
+        -- acceptance gate. Headless/ACP paths omit on_review_draft and therefore
+        -- keep the draft hidden until acceptance, as required by their protocol.
+        local explicit_completion = false
+        local review_submission = false
+        local review_draft = nil
         local stream_attempt = 0
         local stream_emitted_text = false
         local model_started_at = nil
@@ -789,6 +889,56 @@ local function run_impl(opts, callbacks, run_span)
             end
         end
 
+        local function finalize_text(final_text, kind, reason)
+            if finished or run_span.ended then return end
+            finished=true
+            -- Foreground already saw the streamed draft; non-interactive
+            -- callers (CLI/ACP) receive the full accepted result here.
+            local terminal_text = final_text
+            if review_submission and review_draft and kind == 'ready' then
+                terminal_text = final_text .. '\n\nReviewed result:\n' .. review_draft
+            end
+            if explicit_completion then
+                if review_submission and callbacks.on_review_result then
+                    callbacks.on_review_result(final_text)
+                elseif review_submission then
+                    -- Headless/ACP callers have no review notification channel:
+                    -- publish the full accepted result through the text stream.
+                    publish_text(terminal_text)
+                else
+                    publish_text(final_text)
+                end
+            end
+            if opts.skip_after_agent_turn~=true and
+                (not opts.review_foreground_lost or not opts.review_foreground_lost()) then
+                hooks.run('after_agent_turn',{runtime=M,provider=active,provider_name=provider_name,
+                    messages=current_msgs,tools=tools,text=final_text,run=opts,completion_status=kind})
+            end
+            finish({ok=kind~='blocked',text=terminal_text,messages=current_msgs,turns=turns,
+                provider=provider_name,model=active.model,completion_status=kind,review_error=reason})
+        end
+        local function attempt_completion(text, kind)
+            explicit_completion = true
+            review_submission = kind == 'ready'
+            review_draft = kind == 'ready' and text or nil
+            review_finalize=finalize_text
+            review_resume=function(data)
+                local event_id='review-result-'..tostring(turns)
+                table.insert(current_msgs,{role='assistant',content=text,tool_calls={{id=event_id,
+                    type='function',['function']={name='request_completion',arguments='{}'}}}})
+                table.insert(current_msgs,{role='tool',tool_call_id=event_id,content=data})
+                continue_agent_cycle(current_msgs,tools,'completion_fixes')
+            end
+            if review then
+                if review_submission and callbacks.on_review_draft then
+                    callbacks.on_review_draft(text)
+                end
+                review:attempt(text,kind)
+            else
+                finalize_text(text,kind)
+            end
+        end
+
         local function on_result(result, is_done)
             if finished or run_span.ended then return end
             if is_cancelled() then
@@ -801,11 +951,7 @@ local function run_impl(opts, callbacks, run_span)
             if not is_done then
                 if result.type == "text" and result.content then
                     stream_emitted_text = true
-                    if defer_visible_text then
-                        table.insert(deferred_text_chunks, result.content)
-                    else
-                        publish_text(result.content)
-                    end
+                    publish_text(result.content)
                 end
                 return
             end
@@ -862,22 +1008,6 @@ local function run_impl(opts, callbacks, run_span)
                     return
                 end
                 logging.runtime_log("agent", "stream failed error=" .. logging.compact(message, 500))
-                if run_state.completion_review_fallback and message ~= "cancelled" then
-                    local fallback = run_state.completion_review_fallback
-                    logging.runtime_log("agent", "completion_review failed; preserving prior answer")
-                    publish_text(fallback.text)
-                    finished = true
-                    finish({
-                        ok = true,
-                        text = fallback.text,
-                        messages = fallback.messages,
-                        turns = turns,
-                        provider = provider_name,
-                        model = active.model,
-                        review_error = message,
-                    })
-                    return
-                end
                 if callbacks.on_error then callbacks.on_error(message) end
                 finished = true
                 finish({ok = false, error = message, error_category = result.error_category, text = result.text or ""})
@@ -892,10 +1022,6 @@ local function run_impl(opts, callbacks, run_span)
                         "reasoning continuity disabled for tool continuation; provider may reject or restart reasoning",
                         "warn"
                     )
-                end
-                if defer_visible_text and #deferred_text_chunks > 0 then
-                    publish_text(table.concat(deferred_text_chunks))
-                    deferred_text_chunks = {}
                 end
                 if (result.text or "") ~= "" then
                     logging.runtime_log("agent", string.format(
@@ -928,13 +1054,16 @@ local function run_impl(opts, callbacks, run_span)
                     callbacks = callbacks,
                     guard = guard,
                     state = run_state,
+                    reviewer = reviewer,
+                    review_controller = review,
+                    request_completion = review and attempt_completion or nil,
                     assistant_reasoning = preserve_reasoning and result.reasoning or nil,
                     assistant_reasoning_details = preserve_reasoning and result.reasoning_details or nil,
                     assistant_reasoning_field = active.reasoning_history_field,
                     stop_run = stop_run,
                 })
             else
-                local final_text = result.text or table.concat(deferred_text_chunks)
+                local final_text = result.text or ''
                 if final_text == "" then
                     logging.runtime_log("agent", "stream completed with no text and no tool calls", "warn")
                     if run_state.empty_terminal_retries < 1 then
@@ -964,56 +1093,20 @@ local function run_impl(opts, callbacks, run_span)
                 else
                     logging.runtime_log("agent", "stream done without tool calls text=" .. logging.compact(final_text, 500))
                 end
-                if review_enabled and completion_review_warranted(run_state) and not run_state.completion_review_done then
-                    run_state.completion_review_done = true
-                    local draft = final_text
-                    run_state.completion_review_fallback = {
-                        text = draft,
-                        messages = current_msgs,
-                    }
-                    table.insert(current_msgs, {role = "assistant", content = draft})
-                    table.insert(current_msgs, {role = "user", content = completion_review_instruction})
-                    logging.runtime_log("agent", "completion_review started")
-                    publish_status("\n⚙ Completion review\n\n")
-                    continue_agent_cycle(current_msgs, tools, "completion_review")
-                    return
+                -- Only request_completion signals task completion. Tool usage
+                -- and terminal prose do not establish intent to request review.
+                if review and review.started then
+                    -- Repairs cannot bypass acceptance by falling back to prose.
+                    review:stop('Repairs ended without request_completion; acceptance is not confirmed')
+                else
+                    if review then review:dispose() end
+                    finalize_text(final_text, 'ready')
                 end
-                if defer_visible_text then
-                    publish_text(final_text)
-                end
-                if opts.skip_after_agent_turn ~= true then
-                    hooks.run("after_agent_turn", {
-                        runtime = M,
-                        provider = active,
-                        provider_name = provider_name,
-                        messages = current_msgs,
-                        tools = tools,
-                        text = final_text,
-                        run = opts,
-                    })
-                end
-                finished = true
-                finish({
-                    ok = true,
-                    text = final_text,
-                    messages = current_msgs,
-                    turns = turns,
-                    provider = provider_name,
-                    model = active.model,
-                })
             end
         end
 
         task_message = tasks_runtime.refresh(current_msgs, task_message, opts.depth)
         local prompt_estimate = tokens.estimate_messages_tokens(current_msgs, tools)
-        if opts.update_usage ~= false then
-            agent.set_usage(
-                prompt_estimate,
-                0,
-                prompt_estimate,
-                active.context_limit or 0
-            )
-        end
 
         local request = {
             model = active.model,
@@ -1041,10 +1134,29 @@ local function run_impl(opts, callbacks, run_span)
             request = request,
             headers = headers,
             endpoint = active.endpoint,
-            run = opts,
+            run = hook_opts,
         })
         request = request_ctx.request or request
         headers = request_ctx.headers or headers
+        if reviewer then
+            -- Preserve provider wire schemas (e.g. Responses uses a top-level
+            -- name), but never let hooks restore tools outside the review set.
+            local allowed, restricted = {}, {}
+            for _, tool in ipairs(reviewer.tools) do
+                allowed[tool['function'].name] = true
+            end
+            for _, tool in ipairs(request.tools or {}) do
+                if type(tool) == 'table' and tool.type == 'function' then
+                    local name = type(tool['function']) == 'table' and
+                        tool['function'].name or tool.name
+                    if allowed[name] and (tool.name == nil or allowed[tool.name]) then
+                        restricted[#restricted + 1] = tool
+                    end
+                end
+            end
+            request.tools = #restricted > 0 and restricted or nil
+            request.tool_choice = #restricted > 0 and 'auto' or nil
+        end
         local endpoint = request_ctx.endpoint or active.endpoint
         if request_ctx.error then
             local message = tostring(request_ctx.error)
@@ -1084,6 +1196,10 @@ local function run_impl(opts, callbacks, run_span)
                 })
                 retry_span = nil
             end
+            if review_budget then
+                local allowed,why=review_budget:consume()
+                if not allowed then stop_run(why,current_msgs,'review_budget'); return end
+            end
             stream_attempt = stream_attempt + 1
             model_started_at = now_ms()
             model_span = telemetry.start("agent.model", run_span, {
@@ -1114,7 +1230,7 @@ local function run_impl(opts, callbacks, run_span)
                 if attempt_done or run_span.ended or attempt_span.ended then return end
                 if is_done then attempt_done = true end
                 return on_result(result, is_done)
-            end, prompt_estimate, opts)
+            end, prompt_estimate, hook_opts, usage_context)
             local pending_bytes, pending_count, overflow = 0, 0, false
             local function deliver_response(...)
                 local chunk = ...
@@ -1251,11 +1367,43 @@ function M.run(opts, callbacks)
             observers.on_done({ok = false, cancelled = true, error = "cancelled", text = ""})
         end)
     end
+    if callbacks.on_review_wait and not is_subagent then
+        observers.on_review_wait=function(...)
+            -- Review retains its run/cancellation/telemetry, not the input slot.
+            opts.background=true
+            background_runs[cancel]=opts
+            if _G.agent_cancel_root==cancel then
+                _G.agent_root_pending=false
+                _G.agent_cancel_root=nil
+            end
+            callbacks.on_review_wait(...)
+        end
+        observers.on_review_resume=function()
+            opts.background=false
+            background_runs[cancel]=nil
+            _G.agent_root_pending=true
+            _G.agent_cancel_root=cancel
+            if callbacks.on_review_resume then callbacks.on_review_resume() end
+        end
+    end
     if opts.background then background_runs[cancel] = opts end
+    if not is_subagent then
+        _G.agent_root_pending=true
+        _G.agent_cancel_root=cancel
+    end
     observers.on_done = function(result)
         if settled then return end
         settled = true
         background_runs[cancel] = nil
+        root_polls[opts]=nil
+        if _G.agent_cancel_root==cancel then
+            _G.agent_root_pending=false
+            _G.agent_cancel_root=nil
+        end
+        if opts.review_cleanup then
+            local cleanup=opts.review_cleanup; opts.review_cleanup=nil
+            cleanup(result)
+        end
         result = result or {}
         if type(result.duration_ms) == "number" then
             local residual = result.duration_ms - measurements.model_ms - measurements.tool_ms
@@ -1505,6 +1653,7 @@ local function compact_run_options(messages)
 end
 
 _G.compact_entry = function(messages)
+    interactive_generation=interactive_generation+1
     if not messages or #messages == 0 then
         popup.error("Compact", "No conversation to compact")
         return
@@ -1624,24 +1773,72 @@ end
 -- Entry point called from C via agent_build_and_dispatch. Receives message
 -- history as a Lua table, runs the full agent cycle with UI-visible streaming.
 _G.agent_entry = function(messages)
+    interactive_generation=interactive_generation+1
+    local generation=interactive_generation
     local session_id = type(agent.session_id) == "function" and agent.session_id() or nil
+    local output_sink=agent.output_sink and agent.output_sink()
+    local sink_is_segment = output_sink ~= nil
+    local sink=output_sink or function(text)
+        if text then agent.append(text,'agent') end
+        return true
+    end
+    local function current()
+        return generation==interactive_generation and sink() and
+            (not agent.session_id or agent.session_id()==session_id)
+    end
     local opts = {
         messages = messages,
         update_status = true,
         update_usage = true,
         permission_scope = interactive_permission_scope(),
+        review_foreground_lost=function() return not current() end,
+        is_cancelled=function()
+            return not sink() or (agent.session_id and agent.session_id()~=session_id)
+        end,
     }
     for field, value in pairs(interactive_options()) do
         opts[field] = value
     end
+    local review_id
     M.run(opts, {
-        on_text = function(chunk)
-            agent.append(chunk, "agent")
+        on_text = function(text) return sink(text) end,
+        on_review_draft = function(text)
+            if not current() then return end
+            -- The held draft streams only into a real output segment. Without
+            -- one (headless/CLI harnesses) it stays held until acceptance and
+            -- is published through on_review_result, never agent.append.
+            if sink_is_segment then sink(text) end
+        end,
+        on_review_result = function(text)
+            if agent.session_id and agent.session_id() ~= session_id then return end
+            if agent.review_event then
+                agent.review_event('Background review result ('..tostring(review_id or 'existing review')..'):\n'..text)
+            else sink(text) end
+        end,
+        on_review_wait = function(id, cycle)
+            review_id = id
+            if agent.review_event then
+                agent.review_event('Review '..tostring(id)..(cycle > 0 and ' requeued' or ' started')..
+                    ' in background. Results will arrive later in this conversation.')
+            end
+            agent.set_running(false)
+            agent.set_thinking(false)
+            agent.set_activity(nil)
+        end,
+        on_review_resume = function()
+            -- Repair prose is a new chronological segment after the review
+            -- marker, not a continuation of the pre-review answer.
+            if agent.output_sink then
+                sink = assert(agent.output_sink(true))
+                sink_is_segment = true
+            end
+            agent.set_running(true)
         end,
         on_error = function(message)
-            popup.error("Provider", message)
+            if current() then popup.error("Provider", message) end
         end,
         on_done = function(result, run_context)
+            if not current() then return end
             agent.set_thinking(false)
             agent.set_activity(nil)
             agent.finish_run(run_context, session_id)

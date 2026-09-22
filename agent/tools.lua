@@ -10,6 +10,11 @@ local telemetry = require("agent.telemetry")
 
 local M = {}
 
+function M.completion_tool()
+    local spec=require('plugins.completion_review').tool
+    return {type='function',['function']={name=spec.name,description=spec.description,parameters=spec.parameters}}
+end
+
 local function config_table(name)
     if _G.capstan and type(_G.capstan.runtime_options) == "table" and
        _G.capstan.runtime_options.isolated then return nil end
@@ -92,7 +97,7 @@ function M.collect(opts)
         for _, p in pairs(_G.plugins) do
             if workspace.wiki_enabled() or tostring(p.id or "") ~= "wiki" then
                 for _, tool in ipairs(plugin_tool_specs(p)) do
-                    if not (opts.disable_subagents and tool.name == "tasks") then
+                    if tool.name~='request_completion' and not (opts.disable_subagents and (tool.name == "tasks" or tool.name == "issues")) then
                     table.insert(tools, {
                         type = "function",
                         ["function"] = {
@@ -314,6 +319,9 @@ end
 local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
     if tool_name == "tasks" and (tonumber(run_ctx and run_ctx.depth) or 0) > 0 then
         return "Parent task plans are not accessible to subagents", false
+    end
+    if tool_name == "issues" and (tonumber(run_ctx and run_ctx.depth) or 0) > 0 then
+        return "Parent review issues are not accessible to subagents", false
     end
     if tool_name == "subagents" then
         return require("agent.subagents").run(args, run_ctx)
@@ -782,6 +790,16 @@ local function scope_allows_target(scope, permission_tool, target)
     return false
 end
 
+-- Snapshot construction never asks for additional access. Native read repeats
+-- the persistent permission check; run scope cannot override an explicit deny.
+function M.review_read_allowed(path, scope)
+    if workspace.is_sensitive_path(path) then return false end
+    if not path_is_within_workspace(path) then return false end
+    local permission=permit.check('file_read',path)
+    return permission ~= 'deny' and (permission == 'allow' or
+        scope_allows_target(scope, 'file_read', path))
+end
+
 local function apply_prompt_decision(decision, scope, permission_tool, target)
     if decision == "allow_session" or decision == "always" then
         if scope and permission_tool then
@@ -908,6 +926,22 @@ end
 -- arguments, checks permissions, executes handlers, appends results, then
 -- recurses via continue_fn.
 function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant_text, continue_fn, run_ctx)
+    local reviewer=run_ctx and run_ctx.reviewer
+    local controller=run_ctx and run_ctx.review_controller
+    local hook_run={}
+    for key,value in pairs(run_ctx or {}) do
+        if key~='reviewer' and key~='review_controller' and key~='request_completion' then hook_run[key]=value end
+    end
+    if run_ctx and run_ctx.request_completion and #tool_calls==1 and
+        tool_calls[1].name=='request_completion' and tool_available(combined_tools,'request_completion') then
+        local args,err=decode_tool_arguments(tool_calls[1].arguments,run_ctx)
+        if not err and type(args)=='table' and ({ready=true,question=true,blocked=true})[args.status] and
+            type(args.text)=='string' and #args.text<=128*1024 and args.text:find('%S') and not args.text:find('%z') then
+            local extra=false
+            for key in pairs(args) do if key~='status' and key~='text' then extra=true end end
+            if not extra then return run_ctx.request_completion(args.text,args.status) end
+        end
+    end
     logging.runtime_log("tools", string.format(
         "received %d tool call(s) assistant_text_bytes=%d",
         #tool_calls,
@@ -1062,7 +1096,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                     permission_tool = permission_tool,
                     raw_arguments = tc.arguments,
                     tool_call = tc,
-                    run = run_ctx or {},
+                    run = hook_run,
                 })
                 local tool_name = call_ctx.name or tc.name
                 args = call_ctx.args or args
@@ -1077,7 +1111,23 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 end
                 if not start_tool_event(tool_name, args) then return end
 
-                if not tool_available(combined_tools, tool_name) then
+                if reviewer then
+                    -- Enforce AFTER hooks/routing. Never invoke a plugin, MCP, shell,
+                    -- permission prompt or live file adapter inside a reviewer.
+                    if tool_name~='file_read' or not tool_available(combined_tools,tool_name) then
+                        error_category='permission'; result_content='Reviewer tools are read-only snapshot adapters'
+                    else
+                        local text,err,category=reviewer.snapshot:read(args)
+                        event_ok=text~=nil
+                        local recoverable=category=='size' or category=='invalid_arguments'
+                        result_content=text or ((recoverable and 'Snapshot read retry required: ' or
+                            'Snapshot access denied: ')..tostring(err))
+                        if not event_ok then error_category=recoverable and category or 'permission' end
+                    end
+                elseif require('agent.review_snapshot').blocked(workspace.configured_workspace_root()) and
+                    not ({file_read=true,logs=true,processes=true,vcs=true,issues=true,tasks=true})[tool_name] then
+                    error_category='permission'; result_content='Completion review write barrier: managed operation deferred'
+                elseif not tool_available(combined_tools, tool_name) then
                     error_category = "tool_unavailable"
                     result_content = "Tool " .. tostring(tool_name) .. " is not available in the active profile"
                     logging.runtime_log("tool", string.format("unavailable name=%s", tostring(tool_name)))
@@ -1195,11 +1245,18 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                             ::next_target::
                         end
                         if authorized then
+                            if controller and controller.before_tool then
+                                local proceed,why=controller:before_tool()
+                                if not proceed then result_content=why; stop_after_event=true; return end
+                            end
                             local tool_ok, error_summary
                             result_content, tool_ok, error_summary = execute_tool(tool_name, args, run_ctx,
                                         tool_permission_context(permission_tool, target, tool_name, args),
                                         display_command)
                             event_ok = tool_ok == true
+                            if controller and controller.after_tool then
+                                controller:after_tool(permission_tool=='file_write' or permission_tool=='shell' or permission_tool=='mcp')
+                            end
                             if not event_ok then error_category = "tool" end
                             mark_workspace_mutation(run_ctx, permission_tool, target, tool_ok)
                             mark_validation(run_ctx, tool_name, args, tool_ok)
@@ -1219,7 +1276,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                         permission_tool = permission_tool,
                         result = result_content,
                         tool_call = tc,
-                        run = run_ctx or {},
+                        run = hook_run,
                     })
                     result_content = result_ctx.result
                 end
@@ -1236,6 +1293,9 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
             result_content = "Tool " .. tostring(event_tool_call.name) ..
                 " failed: " .. tostring(body_error)
         end
+        if reviewer and not event_ok and error_category~='invalid_arguments' and error_category~='size' then
+            reviewer.access_error=reviewer.access_error or result_content
+        end
         if not finish_tool_event() then return end
         if not body_ok then error(body_error, 0) end
         if stop_after_event then
@@ -1249,7 +1309,19 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
 
         if result_content then
             local result_text = tool_result_text(result_content)
-            local bounded, truncated, invalid_bytes = tool_output.bound(result_text)
+            local bounded, truncated, invalid_bytes
+            if reviewer and event_ok then
+                -- Snapshot reads already enforce their byte budget. A second
+                -- line/byte cut would invalidate the snapshot's coverage ledger.
+                bounded,invalid_bytes=require('agent.utf8').sanitize(result_text)
+                truncated=false
+                if invalid_bytes>0 then
+                    reviewer.access_error=reviewer.access_error or
+                        'Snapshot evidence incomplete: invalid UTF-8 bytes replaced'
+                end
+            else
+                bounded,truncated,invalid_bytes=tool_output.bound(result_text)
+            end
             if invalid_bytes > 0 then
                 logging.runtime_log("tool", string.format(
                     "replaced_invalid_utf8_bytes=%d name=%s",

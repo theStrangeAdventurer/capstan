@@ -56,8 +56,9 @@ existing C `prepare_tasks` override and persist as optional `tasks_view`
 metadata (0: automatic default, 1: collapsed, 2: expanded), independently of the task plan.
 Legacy or invalid view values use the automatic default. Save failures preserve the old view
 and show an error. Scroll offsets are transient and reset on session reload.
-Users can ask the agent to revise the plan. There is no background reviewer in
-this version and `completed` means executor-finished, never independently reviewed.
+Users can ask the agent to revise the plan. `completed` means executor-finished,
+not independently reviewed. Optional [completion review](completion-review.md)
+uses a separate issue registry and does not change task statuses into acceptance.
 
 Each record has a stable ASCII `id`, `title`, `status`, optional acceptance
 `criteria`, and `result`. Statuses: `pending`, `in_progress`, `completed`,

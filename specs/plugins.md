@@ -116,3 +116,20 @@ constraints, no need to teach the agent.
 The embedded smoke test verifies built-in plugin availability. Runtime reload is
 covered by the application build path; future C integration tests should cover
 watcher edge cases if the plugin loader is split away from Lua/TUI dependencies.
+
+## Review issues adapter
+
+Built-in `/issues` displays the separate [issue registry](issues.md) without
+history or a model request. Its `issues` model tool permits read/respond only;
+manual `/issues accept <id> <reason>` is deliberately not a model operation.
+The adapter does not start completion review or use `after_agent_turn` to launch
+nested runs.
+
+## Completion gate adapter
+
+The built-in completion-review plugin declares `request_completion`; runtime
+advertises it only for enabled root runs and owns dispatch, suspension and
+finalization. It is not an `after_agent_turn` nested-run hook. A sole valid call
+accepts `status = ready | question | blocked` and nonblank `text`; ordinary
+terminal text falls back to ready. See [completion review](completion-review.md)
+for strict snapshot tools, configuration and fail-closed behavior.

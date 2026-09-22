@@ -184,6 +184,13 @@ The panel/modal never dispatches Lua, so cancellation is confirmed only after
 returning to a safe poll boundary. Finishing a parent answer leaves detached
 children running; owner cleanup and shutdown explicitly cancel them.
 
+Internal scheduler groups may opt out of completion events while remaining
+visible in this facade. Their owner can explicitly release terminal task/group
+records; released IDs disappear and cannot be used again. Active records are
+never released, and this operation does not release or stop OS processes.
+Public detached groups retain their existing inspection history. See
+[completion review](completion-review.md) for the internal API.
+
 `processes({action="wait", id=..., timeout=30})` accepts an opaque process,
 task or group ID. It returns the current native snapshot when terminal or after
 a bounded timeout in **seconds** (default 30, cap 300; zero is a nonblocking
@@ -197,3 +204,14 @@ explicit wait and output inspection before necessary final conclusions.
 
 Offline plugin/scheduler checks: `test/test_process_tools.lua` and
 `test/test_background_subagents.lua` with the vendored Lua interpreter.
+
+## Completion review barrier
+
+The [review gate](completion-review.md) retains a cooperative workspace write
+barrier while waiting for visible potential managed writers to become terminal.
+It prevents new managed write-capable work from extending that wait; it does
+not kill independent writers or lock the filesystem against external programs.
+The common review deadline includes this queue. The owned reviewer is visible
+while registered, suppresses ordinary detached-group completion notifications,
+and releases terminal records during cleanup. Cancelling the root cancels only
+its owned review group; stopping the reviewer makes acceptance incomplete.

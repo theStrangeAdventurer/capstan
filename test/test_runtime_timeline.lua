@@ -50,6 +50,20 @@ end
 permit = {check = function() return 'ask' end, prompt = function()
     clock = clock + 37; return 'allow'
 end}
+-- Snapshot authorization inherits run grants without prompting or widening scope.
+do
+    capstan.workspace_root = '/work'
+    local grant = {allowed_targets = {file_read = {['/work/file.txt'] = true}}}
+    assert(tools.review_read_allowed('/work/file.txt', grant))
+    assert(not tools.review_read_allowed('/work/other.txt', grant))
+    assert(not tools.review_read_allowed('/elsewhere/file.txt', {yolo = true}))
+    assert(not tools.review_read_allowed('/work/.env', {yolo = true}))
+    local saved_check = permit.check
+    permit.check = function() return 'deny' end
+    assert(not tools.review_read_allowed('/work/file.txt', grant))
+    permit.check = saved_check
+    capstan.workspace_root = nil
+end
 assert(call('probe'))
 local wait = find('permission_wait')[1]
 assert(wait.ended and wait.ok and wait.final.duration_ms == 37)
@@ -168,6 +182,66 @@ do
     agent.set_usage = saved
 end
 
+-- Context display across requests: old measurements are UI-only, not a floor.
+do
+    local saved = agent.set_usage
+    local latest, result
+    agent.set_usage = function(...) latest = {...} end
+    local provider = {model = 'one', endpoint = 'fixture'}
+    local history = {{role = 'user', content = 'first'}}
+    local context = stream.usage_context(provider, 'session-a', history)
+    local function start(ctx, p)
+        return stream.stream(p or provider, function(r, done) if done then result = r end end,
+            26000, nil, ctx)
+    end
+    local function report(callback, count)
+        callback('data: ' .. json.encode({usage = {prompt_tokens = count}}) .. '\n\n', false)
+    end
+    local callback = start(context)
+    report(callback, 112000)
+    callback(nil, true)
+    history[#history + 1] = {role = 'assistant', content = 'answer'}
+    history[#history + 1] = {role = 'user', content = 'continue'}
+    context = stream.usage_context(provider, 'session-a', history)
+    callback = start(context)
+    assert(latest[1] == 112000 and latest[2] == 0)
+    callback('data: {"choices":[{"delta":{"content":"hello"}}]}\n\n', false)
+    assert(latest[1] == 112000 and latest[2] > 0)
+    callback(nil, true)
+    assert(result.metrics.usage == nil)
+    callback = start(context) -- Tool continuation/retry shares the same context.
+    assert(latest[1] == 112000 and latest[2] == 0)
+    report(callback, 24000)
+    assert(latest[1] == 24000) -- Real context reduction must remain visible.
+    report(callback, 0)
+    assert(latest[1] == 0)
+    callback(nil, true)
+    callback = start(context)
+    assert(latest[1] == 0)
+    report(callback, 112000)
+    callback(nil, true)
+    local child = {model = 'child', suppress_agent_state = true}
+    assert(stream.usage_context(child, 'child', {}) == nil)
+    callback = start(stream.usage_context(provider, 'session-a', history))
+    assert(latest[1] == 112000)
+    callback(nil, true)
+    -- Compaction/replaced history, session and model/provider changes reset reuse.
+    for _, change in ipairs({'history', 'session', 'model', 'endpoint', 'provider'}) do
+        context = stream.usage_context(provider, 'session-a', history)
+        callback = start(context); report(callback, 112000); callback(nil, true)
+        local p = {model = provider.model, endpoint = provider.endpoint}
+        if change == 'model' then p.model = 'other' end
+        if change == 'endpoint' then p.endpoint = 'other' end
+        local messages = change == 'history' and {{role = 'user', content = 'summary'}} or history
+        context = stream.usage_context(p, change == 'session' and 'session-b' or 'session-a', messages,
+            change == 'provider' and 'other-provider' or nil)
+        callback = start(context, p)
+        assert(latest[1] == 26000, change)
+        callback(nil, true)
+    end
+    agent.set_usage = saved
+end
+
 -- Actual run loop, mocked provider/config and transport only.
 package.loaded['agent.provider_config'] = {build = function() return {
     provider = 'fixture', providers = {fixture = {model = 'fixture',
@@ -179,6 +253,128 @@ package.loaded['agent.tasks'] = {refresh = noop}
 local runtime = require('agent.runtime')
 local callbacks = {}
 http.post_stream = function(_, _, _, callback) callbacks[#callbacks + 1] = callback end
+-- Reviewer restrictions preserve provider wire format after before_request.
+do
+    local hooks = package.loaded['agent.hooks']
+    local saved_hook, saved_post = hooks.run, http.post_stream
+    local read = {type = 'function', ['function'] = {name = 'file_read',
+        parameters = {type = 'object', properties = {}}}}
+    for _, format in ipairs({'chat', 'responses', 'empty'}) do
+        local sent, done
+        hooks.run = function(stage, ctx)
+            if stage ~= 'before_request' then return ctx end
+            assert(#ctx.request.tools == 1 and ctx.request.tools[1]['function'].name == 'file_read')
+            local definition = format == 'chat' and read or {type = 'function',
+                name = 'file_read', parameters = read['function'].parameters, strict = true}
+            ctx.request.tools = format == 'empty' and {} or {definition,
+                {type = 'function', name = 'shell'},
+                {type = 'function', ['function'] = {name = 'file_write'}},
+                {type = 'web_search'}, {type = 'function'},
+                {type = 'custom', name = 'file_read'}}
+            ctx.request.tool_choice = {type = 'function', name = 'shell'}
+            return ctx
+        end
+        http.post_stream = function(_, body, _, callback)
+            sent = json.decode(body)
+            callback('data: {"choices":[{"delta":{"content":"review done"}}]}\n\n', false)
+            callback(nil, true)
+        end
+        assert(runtime.run({depth = 1, tools = {}, reviewer = {tools = {read}},
+            update_status = false, update_usage = false}, {on_done = function(r) done = r end}))
+        assert(done.ok)
+        if format == 'empty' then
+            assert(sent.tools == nil and sent.tool_choice == nil)
+        else
+            assert(#sent.tools == 1 and sent.tool_choice == 'auto')
+            if format == 'responses' then
+                assert(sent.tools[1].name == 'file_read' and sent.tools[1]['function'] == nil)
+                assert(sent.tools[1].strict == true and sent.tools[1].parameters.type == 'object')
+            else
+                assert(sent.tools[1]['function'].name == 'file_read')
+            end
+        end
+    end
+    hooks.run, http.post_stream = saved_hook, saved_post
+end
+-- Runtime cancellation must propagate its reason into review cleanup, not
+-- leave a released review advertised as active to the next conversation turn.
+do
+    local review = require('agent.completion_review')
+    local snapshots = require('agent.review_snapshot')
+    local saved_new, saved_capture = review.new, snapshots.capture
+    local controller
+    snapshots.capture = function()
+        return {version='cleanup-snapshot', release=noop}
+    end
+    review.new = function(...)
+        controller=saved_new(...)
+        return controller
+    end
+    local _, _, cancel = runtime.run({tools={},completion_review=true,
+        process_owner='runtime-cleanup-test',update_status=false,update_usage=false}, {})
+    controller:attempt('held draft','ready')
+    cancel()
+    local state=review.state('runtime-cleanup-test',controller.context.workspace_root)
+    assert(#state==1 and state[1].stage=='cancelled' and state[1].result=='cancelled')
+    review.new, snapshots.capture = saved_new, saved_capture
+    callbacks={}
+end
+-- Review-enabled conversation streams each delta before transport completion;
+-- explicit completion alone is held and delivered via the event callback.
+do
+    local review = require('agent.completion_review')
+    local saved_new = review.new
+    local context, attempted
+    review.new = function(_, ctx)
+        context = ctx
+        return {dispose=noop, poll=noop, consume=function() return true end,
+            attempt=function(_, text, kind) attempted={text,kind}; ctx.waiting('fixture-review',0) end}
+    end
+    callbacks={}
+    local visible, events, done, waiting = '', {}, false, false
+    local opts={tools={}, completion_review=true, update_status=false, update_usage=false}
+    local observers={on_text=function(s) visible=visible..s end,
+        on_review_result=function(s) events[#events+1]=s end,
+        on_review_wait=function(id,cycle) assert(id=='fixture-review' and cycle==0); waiting=true end,
+        on_done=function() done=true end}
+    assert(runtime.run(opts,observers))
+    callbacks[1]('data: {"choices":[{"delta":{"content":"first "}}]}\n\n',false)
+    assert(visible=='first ' and not done and not attempted)
+    callbacks[1]('data: {"choices":[{"delta":{"content":"second"}}]}\n\n',false)
+    assert(visible=='first second' and not done)
+    callbacks[1](nil,true)
+    assert(done and visible=='first second' and #events==0)
+    callbacks={}; done=false; visible=''
+    assert(runtime.run(opts,observers))
+    callbacks[1]('data: '..json.encode({choices={{delta={tool_calls={{index=0,id='complete',
+        type='function',['function']={name='request_completion',
+        arguments=json.encode({status='ready',text='held result'})}}}}}}})..'\n\n',false)
+    callbacks[1](nil,true)
+    assert(waiting and not done and attempted[1]=='held result' and visible=='')
+    context.finalize('Review fixture-review completed','ready')
+    assert(done and visible=='' and #events==1 and events[1]=='Review fixture-review completed')
+    review.new=saved_new
+    callbacks={}
+end
+-- Actual consecutive user turns must not clear usage before starting SSE.
+do
+    local saved, latest = agent.set_usage
+    agent.set_usage = function(...) latest = {...} end
+    local messages = {{role = 'user', content = 'first'}}
+    assert(runtime.run({messages = messages, tools = {}, process_owner = 'conversation'}, {}))
+    callbacks[1]('data: {"usage":{"prompt_tokens":112000}}\n\n', false)
+    callbacks[1]('data: {"choices":[{"delta":{"content":"answer"}}]}\n\n', false)
+    callbacks[1](nil, true)
+    messages[#messages + 1] = {role = 'assistant', content = 'answer'}
+    messages[#messages + 1] = {role = 'user', content = 'next'}
+    assert(runtime.run({messages = messages, tools = {}, process_owner = 'conversation'}, {}))
+    assert(latest[1] == 112000 and latest[2] == 0)
+    callbacks[2]('data: {"choices":[{"delta":{"content":"answer two"}}]}\n\n', false)
+    assert(latest[1] == 112000)
+    callbacks[2](nil, true)
+    agent.set_usage = saved
+    callbacks = {}
+end
 -- Exercise the actual scheduler and run loop together with interleaved child
 -- responses: model/tool descendants must remain beneath their own child.
 first = #records + 1

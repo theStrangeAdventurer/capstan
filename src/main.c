@@ -257,6 +257,21 @@ static void flash_copy_active_selection(void) {
 }
 
 static int stop_active_stream(void) {
+  if (agent_root_pending(L)) {
+    /* The runtime cancels only its root/reviewer, then finalizes once. */
+    int top = lua_gettop(L);
+    lua_getglobal(L, "agent_cancel_root");
+    if (!lua_isfunction(L, -1)) {
+      lua_settop(L, top);
+      popup_show_message("Stop", "Root cancellation handler is unavailable", 1);
+      return 0;
+    }
+    int ok = lua_pcall(L, 0, 0, 0) == LUA_OK;
+    if (!ok)
+      popup_show_message("Stop", "Root cancellation failed", 1);
+    lua_settop(L, top);
+    return ok;
+  }
   if (!http_is_loading())
     return 0;
   int compacting = strcmp(agent_activity(), "Compacting") == 0;
@@ -1205,7 +1220,8 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
     return 1;
   }
 
-  while (!g_headless_run.done && http_is_loading()) {
+  while (!g_headless_run.done &&
+         (http_is_loading() || agent_root_pending(L))) {
     process_manager_poll();
     http_poll(L);
     background_work_poll_lua(L);
@@ -1276,7 +1292,7 @@ static int run_embedded_self_test(void) {
   const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
                             "/logs", "/skills", "/models", "/info", "/mcp",
                             "/plan", "/implement", "/auth",
-                            "/logout", "/connect", "/vcs"};
+                            "/logout", "/connect", "/vcs", "/issues"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);
@@ -1666,6 +1682,12 @@ int main(int argc, char *argv[]) {
       }
       continue;
     }
+
+    /* Key/resize events must not starve background reviews or HTTP streams.
+       The idle branch above also polls; keep the same driving cadence here so
+       a continuous resize or paste cannot block background completion. */
+    http_poll_limited(L, 2);
+    if (!popup_is_active()) background_work_poll_lua(L);
 
     if (tui_handle_process_input(ch)) {
       render_all();

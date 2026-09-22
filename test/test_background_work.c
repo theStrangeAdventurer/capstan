@@ -71,7 +71,48 @@ static MunitResult bounds(const MunitParameter params[], void *data) {
   background_work_shutdown();
   return MUNIT_OK;
 }
+static MunitResult release_records(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  background_work_shutdown();
+  char ids[128][PROCESS_ID_SIZE], stale[PROCESS_ID_SIZE] = "unknown";
+  BackgroundSnapshot s;
+  munit_assert_false(background_work_release(NULL));
+  for (int cycle = 0; cycle < 10; cycle++) {
+    for (int i = 0; i < 128; i++)
+      munit_assert_true(background_work_register_ex("owner", "subagent_group", "muted", ".", 0, ids[i]));
+    munit_assert_false(background_work_get(stale, &s));
+    munit_assert_false(background_work_update(stale, "completed", NULL, 1));
+    munit_assert_false(background_work_stop(stale));
+    munit_assert_false(background_work_release(stale));
+    munit_assert_false(background_work_release(ids[0]));
+    munit_assert_true(background_work_stop(ids[0]));
+    munit_assert_false(background_work_release(ids[0]));
+    for (int i = 0; i < 128; i++) {
+      munit_assert_true(background_work_update(ids[i], "completed", "retained output", 1));
+      munit_assert_true(background_work_get(ids[i], &s));
+      munit_assert_false(s.running);
+      munit_assert_true(background_work_at((size_t)i, &s));
+      munit_assert_string_equal(s.id, ids[i]);
+    }
+    munit_assert_size(background_work_count(), ==, 128);
+    munit_assert_false(background_work_completion("owner", &s));
+    char extra[PROCESS_ID_SIZE];
+    munit_assert_false(background_work_register("owner", "subagent", "full", ".", extra));
+    for (int i = 0; i < 128; i++) {
+      char *out = background_work_output(ids[i], 0);
+      munit_assert_string_equal(out, "retained output"); free(out);
+      munit_assert_true(background_work_release(ids[i]));
+      munit_assert_false(background_work_get(ids[i], &s));
+      munit_assert_false(background_work_release(ids[i]));
+      munit_assert_size(background_work_count(), ==, (size_t)(127 - i));
+    }
+    strcpy(stale, ids[0]);
+  }
+  background_work_shutdown();
+  return MUNIT_OK;
+}
 static MunitTest tests[] = {
+  {"/release", release_records, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/registry", registry, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/bounds", bounds, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL}

@@ -367,7 +367,8 @@ static char *json_field_string(const char *line, const char *field) {
       decoded = value <= 0x7f ? (char)value : '?';
       p += 4;
     }
-    if (decoded == '\0' && strcmp(field, "tasks_json") == 0) goto fail;
+    if (decoded == '\0' && (strcmp(field, "tasks_json") == 0 ||
+                            strcmp(field, "issues_json") == 0)) goto fail;
     if (!append_char(&out, &len, &cap, decoded)) goto fail;
     p++;
   }
@@ -486,13 +487,38 @@ int session_save(const Session *session) {
   char *id = json_escape(session->id);
   char *title = json_escape(session->title);
   char *tasks = session->tasks_json ? json_escape(session->tasks_json) : NULL;
+  int chunk_issues = session->issues_json && strlen(session->issues_json) > SESSION_ISSUES_MAX_BYTES;
+  char *issues = session->issues_json && !chunk_issues ? json_escape(session->issues_json) : NULL;
   int ok = id && title && (!session->tasks_json || tasks) &&
+           (!session->issues_json || chunk_issues || issues) &&
            fprintf(f, "{\"version\":%d,\"id\":%s,\"title\":%s,"
-                      "\"title_generated\":%d,\"created_at\":%lld,\"updated_at\":%lld,\"tasks_view\":%d%s%s}\n",
+                      "\"title_generated\":%d,\"created_at\":%lld,\"updated_at\":%lld,\"tasks_view\":%d%s%s%s%s}\n",
                    SESSION_VERSION, id, title, session->title_generated,
                    (long long)session->created_at,
                    (long long)session->updated_at, session->tasks_view,
-                   tasks ? ",\"tasks_json\":" : "", tasks ? tasks : "") >= 0;
+                   tasks ? ",\"tasks_json\":" : "", tasks ? tasks : "",
+                   issues ? ",\"issues_json\":" : "", issues ? issues : "") >= 0;
+  free(issues);
+  if (chunk_issues) {
+    size_t total = strlen(session->issues_json);
+    for (size_t offset = 0; ok && offset < total;) {
+      size_t length = total - offset;
+      if (length > SESSION_ISSUES_MAX_BYTES) length = SESSION_ISSUES_MAX_BYTES;
+      while (offset + length < total &&
+             ((unsigned char)session->issues_json[offset + length] & 0xc0) == 0x80)
+        length--;
+      char *chunk = malloc(length + 1);
+      if (!chunk) { ok = 0; break; }
+      memcpy(chunk, session->issues_json + offset, length);
+      chunk[length] = '\0';
+      char *escaped = json_escape(chunk);
+      free(chunk);
+      offset += length;
+      ok = escaped && fprintf(f, "{\"type\":\"issues_chunk\",\"issues_json\":%s,\"final\":%d}\n",
+                              escaped, offset == total) >= 0;
+      free(escaped);
+    }
+  }
   if (ok)
     ok = fprintf(f, "{\"type\":\"usage\",\"prompt_tokens\":%d,"
                     "\"completion_tokens\":%d,\"total_tokens\":%d,"
@@ -511,7 +537,8 @@ int session_save(const Session *session) {
                                               : (message->text ? message->text : ""));
     ok = text && raw &&
          fprintf(f, "{\"role\":\"%s\",\"text\":%s,\"raw_text\":%s}\n",
-                 message->role == SESSION_ROLE_USER ? "user" : "assistant",
+                 message->role == SESSION_ROLE_USER ? "user" :
+                 message->role == SESSION_ROLE_REVIEW ? "review" : "assistant",
                  text, raw) >= 0;
     free(text);
     free(raw);
@@ -628,6 +655,7 @@ void session_free(Session *session) {
   }
   free(session->messages);
   free(session->tasks_json);
+  free(session->issues_json);
   memset(session, 0, sizeof(*session));
 }
 
@@ -706,14 +734,20 @@ int session_load(const char *id, Session *session) {
         strlen(session->tasks_json) > SESSION_TASKS_MAX_BYTES)
       ok = 0;
   }
+  if (ok && session_json_field(line, "issues_json")) {
+    session->issues_json = json_field_string(line, "issues_json");
+    if (!session->issues_json ||
+        strlen(session->issues_json) > SESSION_ISSUES_MAX_BYTES)
+      ok = 0;
+  }
   free(stored_id);
   free(title);
   free(line);
-  int image_complete = 1;
+  int image_complete = 1, issues_complete = 1, issues_started = session->issues_json != NULL;
   while (ok) {
     line = read_line(f, &line_status);
     if (line_status == SESSION_LINE_EOF) {
-      if (!image_complete)
+      if (!image_complete || !issues_complete)
         ok = 0;
       break;
     }
@@ -728,6 +762,29 @@ int session_load(const char *id, Session *session) {
       break;
     }
     char *type = json_field_string(line, "type");
+    if (type && strcmp(type, "issues_chunk") == 0) {
+      char *chunk = json_field_string(line, "issues_json");
+      long long final = json_field_integer(line, "final", -1);
+      size_t old = session->issues_json ? strlen(session->issues_json) : 0;
+      size_t added = chunk ? strlen(chunk) : 0;
+      ok = image_complete && session->message_count == 0 &&
+           !(issues_started && issues_complete) && added > 0 &&
+           added <= SESSION_ISSUES_MAX_BYTES && old <= SIZE_MAX - added - 1 &&
+           (final == 0 || final == 1);
+      char *grown = ok ? realloc(session->issues_json, old + added + 1) : NULL;
+      if (!grown) ok = 0;
+      if (ok) {
+        session->issues_json = grown;
+        memcpy(grown + old, chunk, added + 1);
+        issues_started = 1;
+        issues_complete = final == 1;
+      }
+      free(chunk); free(type); free(line);
+      continue;
+    }
+    if (!issues_complete) {
+      free(type); free(line); ok = 0; break;
+    }
     if (type && strcmp(type, "usage") == 0) {
       const char *fields[] = {"prompt_tokens", "completion_tokens",
                               "total_tokens", "context_limit"};
@@ -794,7 +851,8 @@ int session_load(const char *id, Session *session) {
     char *text = json_field_string(line, "text");
     char *raw = json_field_string(line, "raw_text");
     if (!role || !text || !raw ||
-        (strcmp(role, "user") != 0 && strcmp(role, "assistant") != 0) ||
+        (strcmp(role, "user") != 0 && strcmp(role, "assistant") != 0 &&
+         strcmp(role, "review") != 0) ||
         session->message_count >= SESSION_MAX_MESSAGES) {
       free(role); free(text); free(raw); free(line); ok = 0; break;
     }
@@ -807,8 +865,9 @@ int session_load(const char *id, Session *session) {
     session->messages = grown;
     SessionMessage *message = &session->messages[session->message_count++];
     memset(message, 0, sizeof(*message));
-    message->role = strcmp(role, "user") == 0 ? SESSION_ROLE_USER
-                                               : SESSION_ROLE_ASSISTANT;
+    message->role = strcmp(role, "user") == 0 ? SESSION_ROLE_USER :
+                    strcmp(role, "review") == 0 ? SESSION_ROLE_REVIEW :
+                                                 SESSION_ROLE_ASSISTANT;
     message->text = text;
     message->raw_text = raw;
     free(role);

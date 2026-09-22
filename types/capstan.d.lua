@@ -104,6 +104,60 @@
 ---@field profiles fun(): string[]
 ---@field reasoning_effort fun(profile_name?: string): string?
 
+-- Internal scheduler API returned by require("agent.subagents"), not a model tool.
+---@class CapstanSubagentHandle
+
+---@class CapstanSubagentSubmitOptions
+---@field is_cancelled? fun(): boolean
+---@field notify? boolean Defaults to false for internal groups.
+---@field telemetry_parent? table
+
+---@class CapstanSubagentSnapshot
+---@field done boolean True only after terminal publication.
+---@field status "queued"|"running"|"completed"|"failed"|"cancelled"
+---@field result? table Copied, bounded aggregate; never a validated review verdict.
+---@field publication_error? string
+
+---@class CapstanSubagentsApi
+---@field run fun(args: table, run_ctx: table): string, boolean
+---@field submit fun(args: table, run_ctx: table, options?: CapstanSubagentSubmitOptions): CapstanSubagentHandle?, string?
+---@field result fun(handle: CapstanSubagentHandle): CapstanSubagentSnapshot?, string?
+---@field cancel fun(handle: CapstanSubagentHandle): boolean, string?
+---@field release fun(handle: CapstanSubagentHandle): boolean, string?
+---@field poll fun()
+---@field cancel_owner fun(owner: string)
+---@field shutdown fun()
+
+-- Internal review ledger API returned by require("agent.issues").
+---@class CapstanIssueHandle
+
+---@class CapstanReviewFinding
+---@field id? string Existing issue ID only on re-review.
+---@field severity "critical"|"high"|"medium"|"low"
+---@field description string
+---@field evidence string
+---@field file? string
+---@field start_line? integer
+---@field end_line? integer
+
+---@class CapstanReviewReport
+---@field verdict "clean"|"findings"|"inconclusive"
+---@field summary string
+---@field findings CapstanReviewFinding[]
+---@field checks {id:string,status:"open"|"resolved",evidence:string}[]
+
+---@class CapstanIssuesApi
+---@field use_store fun(store?: table) ACP serialized-session adapter.
+---@field read fun(): table?, string?
+---@field begin fun(run_id:string, baseline:string, snapshot:string, revision:integer): CapstanIssueHandle?, table|string
+---@field snapshot fun(handle:CapstanIssueHandle, revision:integer, previous:string, next_snapshot:string): table?, string?
+---@field record fun(handle:CapstanIssueHandle, revision:integer, snapshot:string, raw:string, transport:{ok:boolean,truncated:boolean}): table?, string?
+---@field finish fun(handle:CapstanIssueHandle, revision:integer, snapshot:string, reason:string): table?, string?
+---@field release fun(handle:CapstanIssueHandle)
+---@field respond fun(args:table): table?, string?
+---@field accept_risk fun(args:table): table?, string? Manual user action, not a model tool operation.
+---@field display fun(id?:string): string
+
 ---@class CapstanMcpApi
 ---@field tick fun(max_steps?: integer): integer
 
@@ -119,11 +173,28 @@
 ---@field post_stream fun(url: string, body: string, headers: table<string, string>, callback: fun(raw: string?, done: boolean, err?: string, body?: string)): integer?
 
 ---@class AgentGlobal
+---@field issues_get fun(): string, integer Returns opaque session JSON and generation token.
+---@field issues_set fun(json: string, token: integer): boolean Transactional, generation-checked session metadata write.
 ---@field append fun(text: string, role?: string)
 ---@field set_info fun(provider: string, model: string)
+---@field set_review_status fun(label?: string) Separate upper purple review status; nil/empty hides it. Runtime owns labels.
+---@field review_event fun(text: string) Append a purple, persisted background-review event at the end of history without changing foreground output sinks. Model receives labeled runtime data.
+---@field set_running fun(active: boolean) Internal foreground input-slot control; does not clear review status.
+---@field output_sink fun(new_segment?: boolean): (fun(text?: string): boolean)? Internal message-bound append; true creates a new assistant segment (e.g. repair resume). Calling the returned sink without text queries validity. History reset invalidates sink.
 ---@field set_profile_info fun(profile: string)
 ---@field set_usage fun(prompt_tokens: integer, completion_tokens: integer, total_tokens: integer, context_limit?: integer)
 ---@field set_thinking fun(active: boolean)
+
+---Runtime-owned root lifecycle flag, not the independent background queue.
+---Set while a root is deferred; clear before on_done. Native polls via
+---agent_background_poll even without HTTP and preserves queued TUI input.
+---@type boolean|nil
+agent_root_pending = agent_root_pending
+
+---Runtime cancellation entrypoint when agent_root_pending is true.
+---Cancel only the current root and its owned reviewer; finalize exactly once.
+---@type fun()|nil
+agent_cancel_root = agent_cancel_root
 
 ---@class PermitGlobal
 ---@field check fun(tool: string, target: string): string
@@ -162,3 +233,23 @@ popup = popup
 
 ---@type McpGlobal
 mcp = mcp
+
+-- Completion-review configuration, normalized once for each root run.
+-- Run options > agent config > profile; false/nil disables, true uses defaults.
+-- Nested runs do not review; enabled review requires capabilities.subagents.
+---@class CapstanCompletionReviewConfig
+---@field enabled? boolean Table default true; global feature default false.
+---@field max_fix_cycles? integer Default 2; 0..30, zero reviews without repairs.
+---@field max_duration_sec? number Default 900; positive finite, includes queue/repairs.
+---@field max_requests? integer Default reviewer turns * (fix cycles + 1) + parent turns; shared requests including retries.
+---@field reviewer? CapstanCompletionReviewerConfig
+
+---@class CapstanCompletionReviewerConfig
+---@field max_turns? integer Defaults to effective orchestrator max_turns; independent of public subagent turn caps.
+
+---@alias CapstanCompletionReviewSetting boolean|CapstanCompletionReviewConfig
+---@alias CapstanCompletionStatus 'ready'|'question'|'blocked'
+
+---@class CapstanCompletionRequest
+---@field status CapstanCompletionStatus Explicit ready requests review; question/blocked bypass it. Tool-free dialogue should use plain text.
+---@field text string Nonblank, no NUL, at most 128 KiB; must be the sole tool call.

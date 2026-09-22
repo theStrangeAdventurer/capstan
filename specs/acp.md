@@ -202,3 +202,13 @@ cannot answer a server-initiated request.
   approval, stdio process termination, HTTP session deletion, and rich tool
   updates.
 - Runtime callback changes are exercised by the existing Lua/tool test suite.
+
+## Completion review
+
+ACP uses the same opt-in [completion gate](completion-review.md) as TUI/CLI.
+The parent prompt remains pending through review and repairs; reviewer output
+is internal rather than streamed as parent text. Completion waits for runtime
+finalization, not merely the end of a provider stream. Explicit question and
+blocked statuses do not launch review; unstructured terminal text is ready.
+Cancellation is scoped to the root and its owned reviewer, not unrelated groups.
+Issues remain session-local; active-review restoration is not supported.

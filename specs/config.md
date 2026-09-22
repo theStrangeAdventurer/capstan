@@ -148,13 +148,21 @@ return {
   server failure only before it has emitted text, so a stalled transport cannot
   leave an agent run waiting indefinitely or duplicate a visible answer. Their
   defaults are 300 seconds and one retry.
-- `agent.completion_review` controls one final, bounded review pass after a
-  multi-file implementation phase without successful validation. It defaults
-  to disabled; enable it explicitly in `agent` config or a custom profile when
-  the extra model pass is preferred. Successful validation suppresses the pass
-  until another workspace write invalidates that evidence. The review shares
-  the same conversation and tools, runs at most once per root agent run, and is
-  not run for subagents.
+- `agent.completion_review` enables the independent [completion gate](completion-review.md).
+  It defaults to `false`; `true` enables defaults. A table enables review unless
+  `enabled = false`: `{ enabled = true, max_fix_cycles = 2,
+  max_duration_sec = 900 }`. Omitted `reviewer.max_turns` inherits the effective
+  orchestrator `max_turns` (including run overrides), not public subagent limits.
+  Omitted `max_requests` is `reviewer.max_turns * (max_fix_cycles + 1) + parent.max_turns`.
+  Explicit request and reviewer turn limits retain priority.
+  Run options override agent config, then profile settings; values are selected,
+  not merged. Fix cycles must be integers in 0–30 (zero still reviews, but does
+  not repair); duration must be positive and finite, and request/turn limits
+  positive integers. Unknown fields and invalid values fail explicitly.
+  Subagents do not recursively review. Enabled review with
+  `capabilities.subagents = false` is a configuration error. Successful tests
+  never suppress review. The deadline includes queueing, review and repairs;
+  the request budget includes reviewer/repair requests and retries.
 - `agent.auto_compact_percent` controls automatic conversation compaction in
   the interactive TUI. Before an ordinary submission, Capstan estimates the
   complete next prompt, including the system/profile instructions, current

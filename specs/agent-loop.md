@@ -56,6 +56,14 @@ present (including measured zero); missing counters fall back to local estimates
 rather than resetting the display to zero. Estimates remain UI-only and are not
 exported as measured usage in stream metrics. Suppressed child streams do not
 update the parent UI. Each new model request starts its own output count.
+Request start uses this same streaming policy, without clearing usage first.
+While awaiting fresh input usage, an extending conversation retains its last
+provider-measured input count rather than replacing it with a lower local estimate.
+This is a last-known UI value, not a new measurement or an accumulated session
+bill. Fresh measurements may decrease (including to zero). A changed session,
+provider/model/endpoint, or replaced/compacted history invalidates reuse; without
+a valid measurement the display uses the local estimate. The in-memory cache
+retains only the latest visible conversation, never child usage or telemetry.
 Regression coverage lives in `test/test_runtime_timeline.lua`.
 
 ## Sequence
@@ -105,7 +113,10 @@ submissions are held in the bounded FIFO described in
 [Queued input](queued-input.md); they do not create another placeholder or call
 Lua concurrently. When the run's `on_done` callback clears the active state,
 the main loop adds the queued items as separate consecutive user messages,
-creates one placeholder, and dispatches one batch run.
+creates one placeholder, and dispatches one batch run. Completion review is an
+exception: TUI yields the foreground slot while the immutable reviewer runs, so
+new input can dispatch immediately. The old review cannot resume repairs or clear
+the foreground state after newer input; see [completion review](completion-review.md).
 
 ```text
 add_message(text, MSG_USER)
@@ -144,12 +155,15 @@ The runtime:
 6. Appends text chunks to the current agent placeholder.
 7. If the final stream result contains tool calls, executes tools and recurses
    with appended `{role="tool"}` messages.
-8. When completion review is explicitly enabled, an unvalidated multi-file
-   implementation phase starts one bounded review continuation before exposing
-   the final answer. Successful validation suppresses the redundant pass, and a
-   later workspace write clears that suppression. The review may fix a concrete
-   issue but cannot trigger another review. Built-in profiles leave this extra
-   model pass disabled by default.
+8. When [completion review](completion-review.md) is enabled (default false),
+   `request_completion` with `ready` holds the draft for an independent snapshot
+   reviewer. The model must request `ready` for completed tasks and explicit
+   user review requests, regardless of tool usage or edits. Plain terminal prose
+   is conversation and never starts review, even after tools. During repairs it
+   stops with blocked/unconfirmed acceptance instead of bypassing re-review.
+   Explicit `question` and `blocked` finish without review; blocked is not success.
+   Successful validation does not bypass the gate. Findings resume the parent
+   for bounded repairs and re-review; incomplete review fails closed.
 
 Headless `capstan run` builds the same message shape and calls
 `capstan.agent.run` directly, with callbacks that buffer final stdout instead of
@@ -179,8 +193,8 @@ must not be changed solely to construct an ad-hoc validation harness.
 
 For user-visible progress, the model gives one short intent line before a
 non-trivial tool batch or phase change. Text accompanying tool calls is shown
-immediately, including after workspace mutations; only a no-tool draft that is
-about to enter completion review remains deferred. Tool status blocks also use
+immediately, including after workspace mutations; a no-tool draft or text paired
+with `request_completion` remains deferred for the completion gate. Tool status blocks also use
 deterministic phase labels such as `Reading`, `Editing`, and `Validating` when
 the model emits no annotation. Their muted gray italic styling remains lighter
 than fully dimmed secondary UI text and continues across internal
