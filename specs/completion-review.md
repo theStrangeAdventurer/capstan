@@ -34,18 +34,19 @@ new requests, owner isolation, and state delivery during concurrent TUI dialogue
 
 ## Completion gate and budgets
 
-`request_completion({status="ready", text="..."})` holds the draft for review.
-Explicit `question` and `blocked` finish without reviewing unfinished work;
-blocked is not success. The model must call `ready` for a finished requested task
-(including repairs), or an explicit user request to review a result or changes.
-The tool description supplies this contract, including manual review scope in
-`text`. Plain terminal prose finishes as conversation without starting review,
-regardless of prior tools, validation or edits. Conversation, clarifications and
-progress updates may use tools without requesting completion. No tool-count,
-workspace-change or natural-language classifier guesses intent. Explicit `ready`
-always requests review, including tasks without tools or edits. After a review
-has requested repairs, terminal prose without the completion handshake stops
-with blocked/unconfirmed acceptance; it cannot silently bypass re-review. A valid completion
+`request_completion({status="review", text="..."})` starts a background review of
+the requested scope. Only this explicit `review` status launches review.
+`ready` finishes the turn and returns the final answer without review;
+`question` and `blocked` finish without reviewing unfinished work. The model
+must use `ready` for ordinary completion and `review` only when the user
+explicitly asks to review a result or changes. The tool description supplies
+this contract, including manual review scope in `text`. Plain terminal prose
+finishes as conversation without starting review, regardless of prior tools,
+validation or edits. Conversation, clarifications and progress updates may use
+tools without requesting completion. No tool-count, workspace-change or
+natural-language classifier guesses intent. After a review has requested
+repairs, terminal prose without the completion handshake stops with
+blocked/unconfirmed acceptance; it cannot silently bypass re-review. A valid
 request must be the sole tool call, with only status and nonblank text (at most
 128 KiB, no NUL). Successful tests and the number of changed files do not bypass
 review. Disabled review retains ordinary completion and does not add a reviewer.
@@ -116,11 +117,21 @@ plans and corrupted storage. They validate transport/policy, not model judgment.
 
 ## Snapshot boundary and limitations
 
-The baseline is captured at root-run creation, not from the VCS commit. Existing
-dirty changes therefore have unknown authorship; the reviewer must not attribute
-the entire repository diff to the executor. Missing baseline or changed permission
-scope is incomplete review, not guessed attribution. Renames are deletion plus
-addition at the original paths.
+Explicit review captures the configured VCS adapter's committed baseline as its
+immutable baseline at first submission, then compares it with the working-copy
+snapshot, including pre-existing staged, unstaged, nonignored untracked and
+deleted files. Changes carry full before/after bytes; the reviewer does not need
+live VCS access. Rechecks retain that baseline. The review controller queries
+`agent.vcs` for the baseline rather than assuming Git; the built-in Git adapter
+owns the native blob reader. Authorship remains unknown: do not attribute all
+working-copy changes to the executor. Committed blobs use bounded native reads
+with file-read authorization and sensitive-path exclusions before opening blobs.
+A missing baseline (including an unborn or unsupported-adapter workspace), failed
+authorization or capture fails explicitly; there is no fallback to an empty
+turn-relative diff. Non-Git adapters currently fail closed unless they later
+declare a baseline capability. Renames are deletion plus
+addition. File-mode-only changes and submodule contents are outside this byte-based
+review scope.
 
 Native descriptor-relative no-follow opens confine reads to regular files under
 the workspace, including checks on root ancestors. Captures compare two scans;
@@ -129,6 +140,19 @@ reviewer has only snapshot-backed `file_read`, with no live filesystem fallback,
 MCP, shell, writes, tasks, issues mutation or nested subagents. Tool restrictions
 are reapplied after hooks. Task text, draft, source and issue responses are
 untrusted review data, not instructions overriding the verdict protocol.
+
+The verdict itself is delivered through a structured `submit_review` tool rather
+than free-form prose. Its JSON-schema arguments are exactly the validated report
+shape (`verdict`, `summary`, `findings`, `checks`), so a model cannot smuggle a
+verdict into a text block that the strict parser must reject. The dispatcher
+captures the tool arguments, re-encodes them as the reviewer's terminal text and
+ends the run immediately; the same strict `review_verdict` decoder still validates
+the result, so structured transport is a reliability improvement, not a weaker
+boundary. Reviewer instructions forbid prose/markdown and require exactly one
+`submit_review` call. Before accepting a submission, the dispatcher checks the
+snapshot's coverage ledger; a premature verdict with unread pages is rejected as a
+recoverable tool error (not a terminal run failure), so the reviewer can finish
+paging and retry rather than losing the whole cycle.
 
 Limits: 4 MiB per file, 32 MiB aggregate file bytes, 20,000 entries, native walk
 depth 128, and snapshot read output 64 KiB. Oversized capture fails closed.
@@ -199,12 +223,20 @@ New input transfers foreground ownership but does not cancel queued or running
 review. Queueing appends a purple background-review event with the review ID and
 an explicit promise of a later result. Completion appends a new purple event at
 the current end of the transcript, tied to that ID; it never rewrites the original
-answer. With an unchanged workspace, a clean result includes the review summary,
-absence of open findings and accepted draft. Findings are retained in `/issues` with the terminal
-reason `repairs_deferred`: review completed, but automatic repairs require a new
-user request rather than resuming the old executor. This is blocked completion of
-the task, not incomplete review or workspace drift. Neither outcome clears the
-new foreground run's state or runs its completion hooks.
+answer. With an unchanged workspace, a clean result is a one-line verdict —
+`clean` plus rechecked issue IDs and statuses — followed by the absence of open
+findings and the accepted draft. The reviewer's `summary` is capped at 200
+characters and is not echoed into the user-facing result; full finding detail
+lives in `/issues` and is referenced by issue ID rather than re-described. When
+findings arrive for a review
+whose foreground slot has been transferred to a newer request, the TUI shows a
+modal choice (`popup.choice`): **Fix now** resumes the reviewed executor with
+explicit user consent, or **Ask later** retains findings in `/issues` with the
+terminal reason `repairs_deferred` — automatic repairs deferred because a newer
+request owns the foreground. This is blocked completion of the task, not
+incomplete review or workspace drift. Neither outcome clears the new foreground
+run's state or runs its completion hooks. Headless/ACP callers have no choice
+modal and always follow the `repairs_deferred` path when foreground is lost.
 Without new input, findings reacquire the foreground slot for automatic repairs.
 Resuming repairs creates a new assistant output segment after the launch event;
 subsequent repair deltas never append to the original pre-review answer. Each

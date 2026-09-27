@@ -123,4 +123,4 @@ build/test_process_bindings: test/test_process_bindings.c src/permit.c src/revie
 
 build/test_review_snapshot_native: src/review_snapshot.c include/review_snapshot.h test/test_review_snapshot_native.c
 	mkdir -p build
-	$(CC) $(HTTP_LUA_FLAGS) src/review_snapshot.c test/test_review_snapshot_native.c $(LUA_DIR)/src/liblua.a -lm -o $@
+	$(CC) $(HTTP_LUA_FLAGS) -DREVIEW_SNAPSHOT_TEST src/review_snapshot.c test/test_review_snapshot_native.c $(LUA_DIR)/src/liblua.a -lm -o $@

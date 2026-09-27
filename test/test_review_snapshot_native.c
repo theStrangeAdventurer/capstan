@@ -10,13 +10,17 @@
 #include <lauxlib.h>
 #include <assert.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+
+int review_snapshot_test_reap(pid_t pid, time_t deadline);
 
 static PermState permission = PERM_ALLOW;
 PermState permit_check(const char *tool, const char *target) {
@@ -127,6 +131,19 @@ int main(void) {
   call(L,"review_snapshot_list",root,NULL,0);
   assert(has(L,"plain","file") && has(L,"dir/nested","file"));
   assert(!has(L,"a.skip","file") && !has(L,"ignored/data","file") && !has(L,".git","directory"));
+  pid_t commit_pid=fork(); assert(commit_pid>=0);
+  if (!commit_pid) {
+    execl("/usr/bin/git","git","-c","user.name=Test","-c","user.email=test@example.invalid",
+          "-c","core.hooksPath=/dev/null","commit","-qm","baseline",(char *)NULL); _exit(127);
+  }
+  int commit_status; assert(waitpid(commit_pid,&commit_status,0)==commit_pid);
+  assert(WIFEXITED(commit_status) && !WEXITSTATUS(commit_status));
+  put("plain","dirty",5);
+  lua_settop(L,0); lua_getglobal(L,"tools"); lua_getfield(L,-1,"review_snapshot_head"); lua_remove(L,-2);
+  lua_pushstring(L,root); lua_pushcfunction(L,grant_read);
+  assert(lua_pcall(L,2,LUA_MULTRET,0)==LUA_OK && lua_istable(L,1));
+  lua_getfield(L,1,"plain"); bytes=lua_tolstring(L,-1,&n);
+  assert(bytes && n==4 && !memcmp(bytes,"a\0b\n",4));
   assert(!rename("plain","renamed")); assert(!unlink("dir/nested")); put("added","new",3);
   call(L,"review_snapshot_list",root,NULL,0);
   assert(!has(L,"plain","file") && !has(L,"dir/nested","file"));
@@ -156,6 +173,16 @@ int main(void) {
   assert(!rmdir("dir")); assert(!symlink("ignored","dir"));
   call(L,"review_snapshot_list",root,NULL,0); assert(lua_istable(L,1));
   call(L,"review_snapshot_read",root,"dir/data",3); assert(lua_isnil(L,1));
+  /* Reap-after-kill regression: a child killed on an expired deadline must be
+   * waited for, not left as a zombie. A zombie would still be reported by
+   * waitpid(WNOHANG) here. */
+  {
+    pid_t child = fork(); assert(child >= 0);
+    if (!child) { for (;;) pause(); }
+    assert(review_snapshot_test_reap(child, time(NULL) - 1) == 0);
+    int status; errno = 0;
+    assert(waitpid(child, &status, WNOHANG) == -1 && errno == ECHILD);
+  }
   lua_close(L); assert(!chdir(cwd)); remove_tree(template);
   puts("review snapshot native: passed"); return 0;
 }

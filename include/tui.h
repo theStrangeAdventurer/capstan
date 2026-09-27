@@ -57,5 +57,7 @@ void buffer_plugin_result(const char *label, char *ui_result, char *raw_result,
 void buffered_results_clear(void);
 
 const char *tui_permit_prompt(const char *tool, const char *target);
+const char *tui_choice_prompt(const char *title, const char *message,
+                              const char *const *choices, int count);
 
 #endif

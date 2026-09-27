@@ -111,7 +111,7 @@ class Script:
 
 
 @contextmanager
-def fixture(cancel=False, script=None, completion_review='false'):
+def fixture(cancel=False, script=None, completion_review='false', git=False):
     script = script if script is not None else Script(cancel)
 
     class Handler(BaseHTTPRequestHandler):
@@ -171,6 +171,23 @@ def fixture(cancel=False, script=None, completion_review='false'):
         workspace.mkdir()
         (home / '.local/state').mkdir(parents=True)
         (workspace / 'independent.txt').write_text('independent-ok\n')
+        if git:
+            subprocess.run(['git', 'init', '-q'], cwd=workspace, check=True,
+                           env={**os.environ, 'HOME': str(home),
+                                'GIT_CONFIG_NOSYSTEM': '1',
+                                'GIT_CONFIG_GLOBAL': '/dev/null'})
+            subprocess.run(['git', '-c', 'user.name=Fixture', '-c',
+                            'user.email=fixture@example.invalid', 'add',
+                            'independent.txt'], cwd=workspace, check=True,
+                           env={**os.environ, 'HOME': str(home),
+                                'GIT_CONFIG_NOSYSTEM': '1',
+                                'GIT_CONFIG_GLOBAL': '/dev/null'})
+            subprocess.run(['git', '-c', 'user.name=Fixture', '-c',
+                            'user.email=fixture@example.invalid',
+                            'commit', '-qm', 'baseline'], cwd=workspace,
+                           check=True, env={**os.environ, 'HOME': str(home),
+                                'GIT_CONFIG_NOSYSTEM': '1',
+                                'GIT_CONFIG_GLOBAL': '/dev/null'})
         (config / 'config.lua').write_text(f'''return {{
  provider = "fixture",
  providers = {{fixture = {{endpoint = "http://127.0.0.1:{server.server_port}/v1/chat/completions",

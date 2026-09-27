@@ -156,14 +156,15 @@ The runtime:
 7. If the final stream result contains tool calls, executes tools and recurses
    with appended `{role="tool"}` messages.
 8. When [completion review](completion-review.md) is enabled (default false),
-   `request_completion` with `ready` holds the draft for an independent snapshot
-   reviewer. The model must request `ready` for completed tasks and explicit
-   user review requests, regardless of tool usage or edits. Plain terminal prose
-   is conversation and never starts review, even after tools. During repairs it
-   stops with blocked/unconfirmed acceptance instead of bypassing re-review.
-   Explicit `question` and `blocked` finish without review; blocked is not success.
-   Successful validation does not bypass the gate. Findings resume the parent
-   for bounded repairs and re-review; incomplete review fails closed.
+   `request_completion` with `review` starts a background snapshot reviewer.
+   The model uses `review` only when the user explicitly asks to review a
+   result or changes; `ready` finishes the turn without review. Plain terminal
+   prose is conversation and never starts review, even after tools. During
+   repairs it stops with blocked/unconfirmed acceptance instead of bypassing
+   re-review. Explicit `question` and `blocked` finish without review; blocked
+   is not success. Successful validation does not bypass the gate. Findings
+   resume the parent for bounded repairs and re-review; incomplete review
+   fails closed.
 
 Headless `capstan run` builds the same message shape and calls
 `capstan.agent.run` directly, with callbacks that buffer final stdout instead of
@@ -193,8 +194,9 @@ must not be changed solely to construct an ad-hoc validation harness.
 
 For user-visible progress, the model gives one short intent line before a
 non-trivial tool batch or phase change. Text accompanying tool calls is shown
-immediately, including after workspace mutations; a no-tool draft or text paired
-with `request_completion` remains deferred for the completion gate. Tool status blocks also use
+immediately, including after workspace mutations; a no-tool draft streams like
+ordinary assistant text. Explicit review scope is never streamed as a draft —
+the verdict arrives separately. Tool status blocks also use
 deterministic phase labels such as `Reading`, `Editing`, and `Validating` when
 the model emits no annotation. Their muted gray italic styling remains lighter
 than fully dimmed secondary UI text and continues across internal

@@ -130,6 +130,7 @@ nested runs.
 The built-in completion-review plugin declares `request_completion`; runtime
 advertises it only for enabled root runs and owns dispatch, suspension and
 finalization. It is not an `after_agent_turn` nested-run hook. A sole valid call
-accepts `status = ready | question | blocked` and nonblank `text`; ordinary
-terminal text falls back to ready. See [completion review](completion-review.md)
+accepts `status = ready | review | question | blocked` and nonblank `text`; only
+`review` starts review, while `ready` and ordinary terminal text finish the turn
+without review. See [completion review](completion-review.md)
 for strict snapshot tools, configuration and fail-closed behavior.

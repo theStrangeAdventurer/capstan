@@ -11,6 +11,7 @@
 -- authorize receives absolute paths, must be a non-prompting permission query.
 -- This is cooperative, not an OS lock. External writers can race either scan.
 local workspace = require("agent.workspace")
+local vcs = require("agent.vcs")
 local M = {}
 local barriers, states = {}, setmetatable({}, {__mode = "k"})
 local MAX_FILE, MAX_TOTAL, MAX_FILES, MAX_OUTPUT = 4*1024*1024, 32*1024*1024, 20000, 65536
@@ -103,14 +104,20 @@ local function same(a,b)
 end
 local function stable(a,b) return same(a.files,b.files) and same(a.denied,b.denied) end
 
-function M.capture(root,authorize)
+function M.capture(root,authorize,head)
     if type(authorize) ~= "function" then return nil,"non-prompting authorization query required" end
     local resolved,err=root_path(root)
     if not resolved then return nil,err end
     if sensitive(resolved) then return nil,"sensitive workspace root excluded" end
-    local first; first,err=scan(resolved,authorize)
+    local function capture_scan()
+        if not head then return scan(resolved,authorize) end
+        local files,problem=vcs.review_baseline(resolved,authorize)
+        if not files then return nil,problem end
+        return {files=files,denied={}}
+    end
+    local first; first,err=capture_scan()
     if not first then return nil,err end
-    local second; second,err=scan(resolved,authorize)
+    local second; second,err=capture_scan()
     if not second then return nil,err end
     if not stable(first,second) then return nil,"workspace changed during snapshot capture" end
     local paths, hashes, version_parts = {}, {}, {}
@@ -125,6 +132,17 @@ function M.capture(root,authorize)
         files=immutable(first.files),digests=immutable(hashes),paths=immutable(paths),
         complete=next(first.denied)==nil}
     local snapshot
+    function methods.full_fingerprint()
+        if state.released then return nil end
+        -- Exact dedup identity: path + byte length + full contents, sorted.
+        -- Never fall back to the short djb2 version for correctness decisions.
+        local parts={}
+        for _,path in ipairs(paths) do
+            local content=state.files[path]
+            parts[#parts+1]=#path .. ":" .. path .. ":" .. #content .. ":" .. content
+        end
+        return table.concat(parts,"\n")
+    end
     function methods.check()
         if state.released then return false,"snapshot released" end
         local current,problem=scan(resolved,authorize)

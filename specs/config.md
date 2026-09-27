@@ -148,12 +148,14 @@ return {
   server failure only before it has emitted text, so a stalled transport cannot
   leave an agent run waiting indefinitely or duplicate a visible answer. Their
   defaults are 300 seconds and one retry.
-- `agent.completion_review` enables the independent [completion gate](completion-review.md).
-  It defaults to `false`; `true` enables defaults. A table enables review unless
-  `enabled = false`: `{ enabled = true, max_fix_cycles = 2,
-  max_duration_sec = 900 }`. Omitted `reviewer.max_turns` inherits the effective
-  orchestrator `max_turns` (including run overrides), not public subagent limits.
-  Omitted `max_requests` is `reviewer.max_turns * (max_fix_cycles + 1) + parent.max_turns`.
+- `agent.completion_review` enables the independent [completion gate](completion-review.md),
+  triggered only by an explicit `request_completion` `review` status, never by
+  ordinary `ready` completion. It defaults to `false`; `true` enables defaults.
+  A table enables review unless `enabled = false`: `{ enabled = true,
+  max_fix_cycles = 2, max_duration_sec = 900 }`. Omitted `reviewer.max_turns`
+  inherits the effective orchestrator `max_turns` (including run overrides), not
+  public subagent limits. Omitted `max_requests` is
+  `reviewer.max_turns * (max_fix_cycles + 1) + parent.max_turns`.
   Explicit request and reviewer turn limits retain priority.
   Run options override agent config, then profile settings; values are selected,
   not merged. Fix cycles must be integers in 0–30 (zero still reviews, but does

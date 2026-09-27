@@ -1702,3 +1702,136 @@ done:
 
   return permit_prompt_result(choice);
 }
+
+/* Generic single-choice modal. Returns the selected choice string, or NULL on
+ * Escape. Keys: j/k and arrows move, number keys 1..9 select directly, Enter
+ * or Tab confirms, Esc cancels. */
+const char *tui_choice_prompt(const char *title, const char *message,
+                              const char *const *choices, int count) {
+  if (!choices || count <= 0)
+    return NULL;
+
+  int rows, cols;
+  getmaxyx(stdscr, rows, cols);
+
+  int popup_w = 60;
+  if (cols < popup_w + 4)
+    popup_w = cols - 4;
+  if (popup_w < 30)
+    popup_w = 30;
+
+  int popup_h = 5 + count;
+  if (popup_h > rows - 2 && rows > 2)
+    popup_h = rows - 2;
+  if (popup_h < 5)
+    popup_h = 5;
+
+  int popup_x = (cols - popup_w) / 2;
+  int popup_y = (rows - popup_h) / 2;
+  if (popup_y < 0)
+    popup_y = 0;
+
+  WINDOW *win = newwin(popup_h, popup_w, popup_y, popup_x);
+  if (!win)
+    return NULL;
+  keypad(win, input_paste_active() ? FALSE : TRUE);
+  wtimeout(win, 100);
+
+  wattron(win, COLOR_PAIR(5));
+  werase(win);
+  box(win, 0, 0);
+  mvwprintw(win, 0, 2, " %s ", title ? title : "");
+
+  if (message && message[0]) {
+    int msg_w = popup_w - 6;
+    if (msg_w < 1)
+      msg_w = 1;
+    mvwprintw(win, 2, 2, "%.*s", msg_w, message);
+  }
+
+  int choice = 0;
+  int list_y = 4;
+  int visible = count;
+  if (list_y + visible > popup_h - 1)
+    visible = popup_h - 1 - list_y;
+  if (visible < 1)
+    visible = 1;
+
+  while (1) {
+    for (int i = 0; i < visible; i++) {
+      int y = list_y + i;
+      if (i == choice)
+        wattron(win, A_REVERSE);
+      mvwhline(win, y, 1, ' ', popup_w - 2);
+      mvwprintw(win, y, 2, "[%d] %.*s", i + 1, popup_w - 8,
+                choices[i] ? choices[i] : "");
+      if (i == choice)
+        wattroff(win, A_REVERSE);
+    }
+    wmove(win, list_y + choice, 2);
+    wnoutrefresh(win);
+    doupdate();
+
+    process_manager_poll();
+    int ch = wgetch(win);
+    if (ch == ERR)
+      continue;
+    if (tui_feed_paste(win, ch))
+      continue;
+    if (ch == KEY_MOUSE) {
+      MEVENT event;
+      if (getmouse(&event) == OK) {
+        int rel_y = event.y - popup_y;
+        int rel_x = event.x - popup_x;
+        int clicked = rel_y - list_y;
+        if (rel_x >= 1 && rel_x < popup_w - 1 && clicked >= 0 &&
+            clicked < visible &&
+            (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED |
+                             BUTTON1_RELEASED))) {
+          choice = clicked;
+          goto done;
+        }
+      }
+      continue;
+    }
+    switch (ch) {
+    case KEY_UP:
+    case 'k':
+      if (choice > 0)
+        choice--;
+      break;
+    case KEY_DOWN:
+    case 'j':
+      if (choice < visible - 1)
+        choice++;
+      break;
+    case '\t':
+    case '\n':
+    case '\r':
+      goto done;
+    case 27:
+      werase(win);
+      wnoutrefresh(win);
+      delwin(win);
+      return NULL;
+    default:
+      if (ch >= '1' && ch <= '9') {
+        int n = ch - '1';
+        if (n < visible) {
+          choice = n;
+          goto done;
+        }
+      }
+      break;
+    }
+  }
+
+done:
+  werase(win);
+  wnoutrefresh(win);
+  delwin(win);
+
+  if (choice < 0 || choice >= count)
+    return NULL;
+  return choices[choice];
+}

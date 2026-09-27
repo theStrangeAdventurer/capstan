@@ -208,7 +208,8 @@ cannot answer a server-initiated request.
 ACP uses the same opt-in [completion gate](completion-review.md) as TUI/CLI.
 The parent prompt remains pending through review and repairs; reviewer output
 is internal rather than streamed as parent text. Completion waits for runtime
-finalization, not merely the end of a provider stream. Explicit question and
-blocked statuses do not launch review; unstructured terminal text is ready.
+finalization, not merely the end of a provider stream. Only the explicit
+`review` status launches review; `ready`, `question`, `blocked` and unstructured
+terminal text complete without review.
 Cancellation is scoped to the root and its owned reviewer, not unrelated groups.
 Issues remain session-local; active-review restoration is not supported.

@@ -62,11 +62,11 @@ local schema = plugin.tool.parameters
 assert(schema.type == 'object' and schema.additionalProperties == false)
 assert(schema.required[1] == 'status' and schema.required[2] == 'text')
 assert(schema.properties.text.type == 'string' and schema.properties.status.type == 'string')
-assert(table.concat(schema.properties.status.enum, ',') == 'ready,question,blocked')
+assert(table.concat(schema.properties.status.enum, ',') == 'ready,review,question,blocked')
 local old_entry, old_agent = _G.agent_entry, _G.agent
 _G.agent_entry = function() error('must not dispatch a nested run') end
 _G.agent = setmetatable({}, {__index=function() error('must not call global completion') end})
-for _, status in ipairs({'ready', 'question', 'blocked'}) do
+for _, status in ipairs({'ready', 'review', 'question', 'blocked'}) do
     local ui, llm, ok = plugin.handler({tool_args={status=status,text='Result'}})
     assert(ok == false and ui == llm and ui:find('runtime', 1, true))
 end

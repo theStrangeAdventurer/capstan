@@ -304,7 +304,8 @@ do
     local saved_new, saved_capture = review.new, snapshots.capture
     local controller
     snapshots.capture = function()
-        return {version='cleanup-snapshot', release=noop}
+        return {version='cleanup-snapshot', release=noop,
+            full_fingerprint = function() return 'cleanup-fingerprint' end}
     end
     review.new = function(...)
         controller=saved_new(...)
@@ -312,7 +313,7 @@ do
     end
     local _, _, cancel = runtime.run({tools={},completion_review=true,
         process_owner='runtime-cleanup-test',update_status=false,update_usage=false}, {})
-    controller:attempt('held draft','ready')
+    controller:attempt('held draft','review')
     cancel()
     local state=review.state('runtime-cleanup-test',controller.context.workspace_root)
     assert(#state==1 and state[1].stage=='cancelled' and state[1].result=='cancelled')
@@ -348,7 +349,7 @@ do
     assert(runtime.run(opts,observers))
     callbacks[1]('data: '..json.encode({choices={{delta={tool_calls={{index=0,id='complete',
         type='function',['function']={name='request_completion',
-        arguments=json.encode({status='ready',text='held result'})}}}}}}})..'\n\n',false)
+        arguments=json.encode({status='review',text='held result'})}}}}}}})..'\n\n',false)
     callbacks[1](nil,true)
     assert(waiting and not done and attempted[1]=='held result' and visible=='')
     context.finalize('Review fixture-review completed','ready')

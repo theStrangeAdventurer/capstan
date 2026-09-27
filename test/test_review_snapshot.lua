@@ -246,3 +246,63 @@ local complete,detail=diagnostic:access_complete()
 assert(not complete and #detail<2000 and detail:find('offset=0',1,true))
 assert(detail:find('and 12 more files',1,true) and not detail:find('xxxxx',1,true))
 print('review_snapshot: categories, monotonic coverage and bounded diagnostics passed')
+
+-- Full dedup identity is byte-exact, sorted and independent of the short version.
+setup()
+disk={a='alpha', b='beta'}
+local f1=capture()
+local fp1=f1:full_fingerprint()
+assert(type(fp1)=='string' and fp1:find('1:a',1,true) and fp1:find('5:alpha',1,true))
+assert(fp1:find('4:beta',1,true) and fp1:find('a',1,true) < fp1:find('b',1,true))
+local f2=capture()
+assert(f2:full_fingerprint()==fp1, 'same bytes must produce the same identity')
+disk.a='altered'
+local f3=capture()
+assert(f3:full_fingerprint()~=fp1, 'changed bytes must change the identity')
+f3:release()
+assert(f3:full_fingerprint()==nil, 'released snapshots expose no identity')
+f1:release(); f2:release()
+print('review_snapshot: full dedup identity passed')
+
+
+-- Review includes dirty changes that predate the request, against HEAD.
+setup()
+tools.review_snapshot_head=function(root,auth)
+    assert(root=='/work' and auth('/work/existing.txt'))
+    return {['existing.txt']='committed', ['deleted.txt']='removed'}
+end
+local head=assert(review.capture('/work',authorize,true))
+local dirty=capture()
+local delta=assert(dirty:diff(head))
+assert(#delta==3)
+assert(delta[1].path=='context.txt' and delta[1].status=='added')
+assert(delta[2].path=='deleted.txt' and delta[2].before=='removed')
+assert(delta[3].before=='committed' and delta[3].after=='pre-existing user edits')
+head:release(); dirty:release()
+print('review_snapshot: pre-existing worktree changes versus HEAD passed')
+
+-- The baseline comes from the configured VCS adapter, never a hardcoded Git
+-- assumption. A non-Git adapter fails closed without touching the native blob
+-- reader; the built-in Git adapter still uses it.
+setup()
+local head_calls = 0
+tools.review_snapshot_head = function(root, auth)
+    assert(root == '/work' and auth('/work/existing.txt'))
+    head_calls = head_calls + 1
+    return {['existing.txt'] = 'committed'}
+end
+_G.capstan.config = { vcs = { adapters = {
+    hg = { label = 'Mercurial', commands = { status = { 'hg', 'status' } } },
+} } }
+_G.capstan.state = { vcs_by_workspace = { ['/work'] = 'hg' } }
+local ok, err = review.capture('/work', authorize, true)
+assert(not ok and err:find('hg', 1, true) and err:find('baseline', 1, true), tostring(err))
+assert(head_calls == 0, 'non-Git adapter must not invoke the native Git blob reader')
+_G.capstan.state.vcs_by_workspace['/work'] = nil
+local git_head = assert(review.capture('/work', authorize, true))
+assert(git_head.files['existing.txt'] == 'committed' and head_calls == 2,
+    'capture scans twice for drift')
+git_head:release()
+_G.capstan.config = nil
+_G.capstan.state = nil
+print('review_snapshot: baseline routes through the VCS adapter passed')

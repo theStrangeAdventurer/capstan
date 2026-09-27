@@ -1,6 +1,13 @@
 local issues=require('agent.issues')
 local verdict=require('agent.review_verdict')
 local json=require('vendor.rxi.json')
+local function equal(a,b)
+    if type(a) ~= type(b) then return false end
+    if type(a) ~= 'table' then return a == b end
+    for k,v in pairs(a) do if not equal(v,b[k]) then return false end end
+    for k,v in pairs(b) do if a[k] == nil then return false end end
+    return true
+end
 local function array(t) return json.array(t or {}) end
 local function report(kind,findings,checks)
     return json.encode({verdict=kind,summary='Review evidence',findings=array(findings),checks=array(checks)})
@@ -33,6 +40,8 @@ for _, change in ipairs({{severity='cosmetic'},{evidence=''},{start_line=0},{end
 end
 -- Location is optional for missing implementations; evidence is not.
 assert(verdict.parse(report('findings',{{severity='medium',description='Missing requested command',evidence='No handler'}})))
+-- Stale rechecks close a pre-existing issue without a new finding.
+assert(verdict.parse(report('clean',nil,{{id='one',status='stale',evidence='Context no longer exists'}})))
 local store={json=''}; issues.use_store(store)
 assert(issues.read().revision == 0 and issues.display() == 'No review issues.')
 local handle,ledger=issues.begin('run-1','baseline-1','snapshot-1',0)
@@ -247,9 +256,9 @@ cl=assert(issues.record(ch,cl.revision,'s2',report('findings',{finding()},rechec
 assert(#count_store.json<256*1024 and #cl.runs==1 and #cl.issues==51)
 local archived=issues.history()
 assert(#archived.runs==1 and archived.runs[1].id=='count-old' and #archived.issues==50)
-assert(json.encode(archived.issues[1])==accepted)
+assert(equal(archived.issues[1], json.decode(accepted)))
 issues.use_store({json=count_store.json})
-assert(json.encode(issues.history().issues[1])==accepted)
+assert(equal(issues.history().issues[1], json.decode(accepted)))
 
 -- Every unresolved status pins closed runs; exhaustion changes no persisted byte.
 for _, status in ipairs({'open','pending_verification','disputed'}) do
@@ -279,3 +288,25 @@ for _, status in ipairs({'open','pending_verification','disputed'}) do
 end
 issues.use_store(nil)
 print('issues: count-only eviction, archived risk and all pinned statuses passed')
+
+-- Explicit global recheck set: record() only enforces cross-run open issues when asked.
+local cross={json=''}; issues.use_store(cross)
+local ah,al=issues.begin('run-a','b','s1',0)
+al=assert(issues.record(ah,al.revision,'s1',report('findings',{finding()}),transport))
+assert(al.issues[1].id=='issue-1' and al.issues[1].status=='open')
+issues.release(ah)
+local bh,bl=issues.begin('run-b','b','s2',al.revision)
+-- Default enforcement stays scoped to the current run.
+bl=assert(issues.record(bh,bl.revision,'s2',report('findings',{finding()}),transport))
+assert(bl.issues[1].status=='open' and bl.issues[1].run_id=='run-a')
+assert(bl.issues[2].id=='issue-2')
+bl=assert(issues.snapshot(bh,bl.revision,'s2','s3'))
+local revision=bl.revision
+local bad,err=issues.record(bh,revision,'s3',report('findings',{finding()}),transport,{'issue-1'})
+assert(not bad and err:find('Review omitted an open issue',1,true))
+bl=assert(issues.record(bh,revision,'s3',report('findings',{finding('issue-1'),finding()}),transport,{'issue-1'}))
+assert(bl.issues[1].id=='issue-1' and bl.issues[1].status=='open' and bl.issues[1].snapshot=='s3')
+issues.release(bh)
+issues.use_store(nil)
+print('issues: explicit global recheck set passed')
+

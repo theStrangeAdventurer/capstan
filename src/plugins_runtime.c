@@ -11,6 +11,7 @@
 #include "log.h"
 #include "permit.h"
 #include "popup.h"
+#include "tui.h"
 #include "project_instructions.h"
 #include "skills.h"
 #include "wiki.h"
@@ -367,6 +368,34 @@ static int l_popup_info(lua_State *l) {
 static int l_popup_error(lua_State *l) {
   popup_show_message(luaL_checkstring(l, 1), luaL_checkstring(l, 2), 1);
   return 0;
+}
+
+static int l_popup_choice(lua_State *l) {
+  const char *title = luaL_checkstring(l, 1);
+  const char *message = luaL_checkstring(l, 2);
+  luaL_checktype(l, 3, LUA_TTABLE);
+  int count = (int)luaL_len(l, 3);
+  if (count <= 0) {
+    lua_pushnil(l);
+    return 1;
+  }
+  const char **choices = calloc((size_t)count, sizeof(char *));
+  if (!choices) {
+    lua_pushnil(l);
+    return 1;
+  }
+  for (int i = 0; i < count; i++) {
+    lua_rawgeti(l, 3, i + 1);
+    choices[i] = lua_tostring(l, -1);
+    lua_pop(l, 1);
+  }
+  const char *result = tui_choice_prompt(title, message, choices, count);
+  if (result)
+    lua_pushstring(l, result);
+  else
+    lua_pushnil(l);
+  free(choices);
+  return 1;
 }
 
 static int l_capstan_state_path(lua_State *l) {
@@ -786,6 +815,8 @@ void plugins_init_with_options(const PluginsInitOptions *options) {
   lua_setfield(L, -2, "info");
   lua_pushcfunction(L, l_popup_error);
   lua_setfield(L, -2, "error");
+  lua_pushcfunction(L, l_popup_choice);
+  lua_setfield(L, -2, "choice");
   lua_setglobal(L, "popup");
 
   load_system_prompt(options);

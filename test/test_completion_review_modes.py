@@ -30,7 +30,6 @@ VERDICT_INCOMPLETE = 'Review incomplete:'            # agent/completion_review.l
 VERDICT_EARLIER = 'Review completed for an earlier request.'  # agent/completion_review.lua stop()
 STALE_NOTICE = 'Workspace changed outside'           # agent/completion_review.lua stop()
 RESULT_COMPLETED_PREFIX = 'completed: '              # agent/completion_review.lua finalize()
-RESULT_SUFFIX = 'Reviewed result:\n'                 # agent/runtime.lua finalize_text()
 REPAIR_GATE = 'without request_completion'           # agent/runtime.lua
 REPAIR_ACCEPTANCE = 'acceptance is not confirmed'    # agent/completion_review.lua stop()
 STATE_MARKER = 'Completion review runtime state'     # agent/runtime.lua
@@ -66,7 +65,7 @@ class ReviewScript:
                        for m in messages)
         if reviewer:
             names = {t['function']['name'] for t in request.get('tools', [])}
-            assert names == {'file_read'}, names
+            assert names == {'file_read', 'submit_review'}, names
             results = [m for m in messages if m.get('role') == 'tool']
             if not results:
                 self.reviews += 1
@@ -105,17 +104,19 @@ class ReviewScript:
                 return call('request_completion', {'status': 'ready', 'text': DRAFT}, 'done')
             return answer(DRAFT)
         if self.parent == 1:
-            return call('request_completion', {'status': 'ready', 'text': DRAFT}, 'done')
+            if self.case == 'clean':
+                return call('request_completion', {'status': 'ready', 'text': DRAFT}, 'done')
+            return call('request_completion', {'status': 'review', 'text': DRAFT}, 'done')
         assert self.case in ('repairs', 'repair_prose') and self.parent == 2, (self.case, self.parent)
         assert 'issue-1' in str(messages)
         if self.case == 'repair_prose':
             return answer(REPAIRED)
-        return call('request_completion', {'status': 'ready', 'text': REPAIRED}, 'repaired')
+        return call('request_completion', {'status': 'review', 'text': REPAIRED}, 'repaired')
 
 
 def cli(binary, case, max_turns=80):
     script = ReviewScript(case)
-    with fixture(script=script, completion_review='true') as (_, workspace, env):
+    with fixture(script=script, completion_review='true', git=True) as (_, workspace, env):
         proc = subprocess.run([str(binary), 'run', '--json', '--yolo', '--no-mcp', '--no-wiki',
                                '--max-turns', str(max_turns),
                                '--prompt', 'Explain the independent fixture file'],
@@ -134,21 +135,35 @@ def cli(binary, case, max_turns=80):
                 assert MAX_TURNS_PREFIX + str(max_turns) in result['text'], result
         else:
             assert proc.returncode == 0 and result['ok'], (result, proc.stderr)
-            expected = QUESTION if case == 'question' else (
-                REPAIRED if case == 'repairs' else DRAFT)
-            if case in ('question', 'conversation', 'tool_work', 'write_conversation'):
+            if case in ('question', 'conversation', 'tool_work', 'tool_completion',
+                        'write_conversation', 'clean'):
+                expected = QUESTION if case == 'question' else DRAFT
                 assert result['text'] == expected, result
             else:
-                assert RESULT_COMPLETED_PREFIX + SUMMARY in result['text'], result
-                assert result['text'].endswith(RESULT_SUFFIX + expected), result
+                assert RESULT_COMPLETED_PREFIX + 'clean' in result['text'], result
         assert script.parent == (2 if case in ('repairs', 'repair_prose', 'tool_work', 'tool_completion', 'write_conversation') else 1), script.parent
-        assert script.reviews == (0 if case in ('question', 'conversation', 'tool_work', 'write_conversation') else 2 if case == 'repairs' else 1)
+        assert script.reviews == (0 if case in ('question', 'conversation', 'tool_work', 'tool_completion', 'write_conversation', 'clean') else 2 if case == 'repairs' else 1)
         assert script.reads == (min(7, max_turns - 1) if case == 'long_review' else script.reviews)
     print('CLI completion review ' + case + ': ok')
 
 
+def cli_no_head(binary):
+    script = ReviewScript('explicit')
+    with fixture(script=script, completion_review='true') as (_, workspace, env):
+        proc = subprocess.run([str(binary), 'run', '--json', '--yolo', '--no-mcp', '--no-wiki',
+                               '--prompt', 'Explain the independent fixture file'],
+                              cwd=workspace, env=env, stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=TIMEOUT)
+        assert not script.errors, script.errors
+        result = json.loads(proc.stdout)
+        assert not result['ok'] and VERDICT_INCOMPLETE in result['text'], result
+        assert 'HEAD baseline unavailable' in result['text'], result
+        assert script.parent == 1 and script.reviews == 0, (script.parent, script.reviews)
+    print('CLI completion review without HEAD: ok')
+
+
 def acp(binary, cancel):
-    script = ReviewScript('clean')
+    script = ReviewScript('explicit')
     waiting = threading.Event()
     original_reply = script.reply
 
@@ -160,7 +175,7 @@ def acp(binary, cancel):
         return events
 
     script.reply = delayed
-    with fixture(script=script, completion_review='true') as (_, workspace, env):
+    with fixture(script=script, completion_review='true', git=True) as (_, workspace, env):
         # Snapshot permissions never prompt: grant persistent read access via yolo.
         proc = subprocess.Popen([str(binary), 'acp', '--yolo'], cwd=workspace, env=env,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -194,13 +209,13 @@ def acp(binary, cancel):
             send(3, 'session/prompt', {'sessionId': session, 'prompt': [
                 {'type': 'text', 'text': 'Explain the independent fixture file'}]})
             assert waiting.wait(TIMEOUT), (script.errors, errors)
-            # Reviewer is outstanding: neither the draft nor end_turn may escape.
+            # Reviewer is outstanding: neither the verdict nor end_turn may escape.
             time.sleep(.1)
             while not inbox.empty():
                 msg = json.loads(inbox.get_nowait())
                 assert msg.get('id') != 3, msg
                 updates.append(msg)
-            assert DRAFT not in json.dumps(updates), updates
+            assert RESULT_COMPLETED_PREFIX + 'clean' not in json.dumps(updates), updates
             if cancel:
                 send(None, 'session/cancel', {'sessionId': session})
             else:
@@ -208,9 +223,9 @@ def acp(binary, cancel):
             result = receive(3)
             assert result['stopReason'] == ('cancelled' if cancel else 'end_turn'), result
             if cancel:
-                assert DRAFT not in json.dumps(updates), updates
+                assert RESULT_COMPLETED_PREFIX + 'clean' not in json.dumps(updates), updates
             else:
-                assert DRAFT in json.dumps(updates), updates
+                assert RESULT_COMPLETED_PREFIX + 'clean' in json.dumps(updates), updates
             assert script.parent == 1 and script.reviews == 1
             send(4, 'session/close', {'sessionId': session})
             receive(4)
@@ -225,7 +240,7 @@ def acp(binary, cancel):
 
 
 def tui(binary, concurrent=False, repair=False):
-    script = ReviewScript('repairs' if concurrent == 'findings' or repair else 'clean')
+    script = ReviewScript('repairs' if concurrent == 'findings' or repair else 'explicit')
     waiting = threading.Event()
     second_waiting, second_release = threading.Event(), threading.Event()
     second_finished = threading.Event()
@@ -256,7 +271,7 @@ def tui(binary, concurrent=False, repair=False):
                     return call('file_write', {'path': 'independent.txt', 'content': 'new contents'}, 'edit')
                 assert 'new contents' in str(request['messages'])
             if concurrent in ('write', 'review'):
-                return call('request_completion', {'status': 'ready' if concurrent == 'review' else 'question',
+                return call('request_completion', {'status': 'review' if concurrent == 'review' else 'question',
                                                    'text': reply_text}, 'done')
             return answer(reply_text)
         events = original_reply(request)
@@ -268,7 +283,7 @@ def tui(binary, concurrent=False, repair=False):
         return events
 
     script.reply = delayed
-    with fixture(script=script, completion_review='true') as (_, workspace, env):
+    with fixture(script=script, completion_review='true', git=True) as (_, workspace, env):
         env['LANG'] = 'en_US.UTF-8'
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 100, 0, 0))
@@ -297,8 +312,8 @@ def tui(binary, concurrent=False, repair=False):
             until(lambda: TUI_SHIFT_TAB in screen)
             os.write(master, b'Explain the independent fixture file\r')
             until(lambda: waiting.is_set() and STATUS_REVIEWING in plain())
-            # The draft streams at submission; only the verdict is held.
-            assert DRAFT in plain(), 'draft did not stream at submission'
+            # Explicit review never streams its scope text; only the verdict is held.
+            assert DRAFT not in plain(), 'review scope text must not stream'
             assert VERDICT_CLEAN not in plain()
             # Narrow terminal + resize must preserve the active indicator.
             start = len(screen)
@@ -314,12 +329,12 @@ def tui(binary, concurrent=False, repair=False):
                     proc.send_signal(signal.SIGWINCH)
                     until(lambda: STATUS_MULTIPLE in plain())
                     script.release.set()
-                    until(lambda: second_waiting.is_set() and DRAFT in plain())
+                    until(lambda: second_waiting.is_set())
+                    # First owner completed; the second review remains active.
                     redraw = len(screen)
                     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 60, 120, 0, 0))
                     proc.send_signal(signal.SIGWINCH)
-                    until(lambda: DRAFT in plain(redraw) and STATUS_REVIEWING in plain(redraw)
-                                 and SECOND_DRAFT in plain(redraw))
+                    until(lambda: STATUS_REVIEWING in plain(redraw))
                     assert STATUS_MULTIPLE not in plain(redraw), 'first owner was not removed'
                     second_release.set()
                     until(lambda: second_finished.is_set())
@@ -340,7 +355,7 @@ def tui(binary, concurrent=False, repair=False):
                                 screen.extend(os.read(master, 65536))
                             assert not script.errors, script.errors
                             assert proc.poll() is None, bytes(screen[-2000:])
-                            if reply_text in plain(redraw):
+                            if STATUS_REVIEWING not in plain(redraw):
                                 break
                         if STATUS_REVIEWING not in plain(redraw):
                             break
@@ -359,9 +374,12 @@ def tui(binary, concurrent=False, repair=False):
                 redraw = len(screen)
                 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 31, 101, 0, 0))
                 proc.send_signal(signal.SIGWINCH)
-                until(lambda: reply_text in plain(redraw) and STATUS_REVIEWING in plain(redraw))
-                assert STATUS_REVIEWING in plain(redraw), ('background review indicator disappeared', plain(redraw))
-                assert STATUS_MULTIPLE not in plain(redraw), 'completed review left a stale status'
+                until(lambda: reply_text in plain(redraw))
+                # The live-review indicator persists across resizes, but ncurses
+                # only re-emits changed cells: an unchanged row-0 status may be
+                # absent from the PTY diff. Assert against the full transcript.
+                assert STATUS_REVIEWING in plain(), ('background review indicator disappeared', plain())
+                assert STATUS_MULTIPLE not in plain(), 'completed review left a stale status'
                 assert script.reviews == (2 if concurrent == 'review' else 1), 'unexpected review count'
                 script.release.set()
                 # The draft streams at submission; the verdict arrives later as
@@ -371,10 +389,15 @@ def tui(binary, concurrent=False, repair=False):
                 verdict = (VERDICT_INCOMPLETE if concurrent == 'write' else
                            VERDICT_EARLIER if concurrent == 'findings' else
                            VERDICT_CLEAN)
+                if concurrent == 'findings':
+                    # Foreground was transferred to the newer request, so the
+                    # choice modal asks fix-now vs ask-later before repairs
+                    # can defer to /issues.
+                    until(lambda: 'Ask later' in plain())
+                    os.write(master, b'2')
                 until(lambda: verdict in plain())
                 if concurrent == 'write':
                     assert VERDICT_CLEAN not in plain(), 'stale draft accepted'
-                    assert DRAFT in plain(), 'draft streamed at submission'
                 else:
                     assert VERDICT_INCOMPLETE not in plain()
                     assert STALE_NOTICE not in plain()
@@ -385,21 +408,18 @@ def tui(binary, concurrent=False, repair=False):
                     proc.send_signal(signal.SIGWINCH)
                     until(lambda: verdict in plain(redraw) and reply_text in plain(redraw))
                     transcript = plain(redraw)
-                    assert transcript.find(DRAFT) < transcript.find(reply_text) < transcript.find(verdict), 'result rewrote history'
-                    assert 0 <= transcript.find(MARKER_LAUNCH) < transcript.find(reply_text), 'missing launch marker'
+                    assert 0 <= transcript.find(MARKER_LAUNCH) < transcript.find(reply_text) < transcript.find(verdict), 'result rewrote history'
                     if concurrent != 'findings':
                         assert STATUS_REVIEWING not in plain(redraw), 'finished review left its indicator'
                 assert script.parent == (3 if concurrent in ('write', 'tools') else 2)
                 assert script.reviews == (2 if concurrent == 'review' else 1)
                 return
             script.release.set()
-            expected = REPAIRED if repair else DRAFT
-            # The draft streams at submission; wait for the verdict, not the draft.
             until(lambda: VERDICT_CLEAN in plain())
             start = len(screen)
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 60, 120, 0, 0))
             proc.send_signal(signal.SIGWINCH)
-            until(lambda: VERDICT_CLEAN in plain(start) and expected in plain(start))
+            until(lambda: VERDICT_CLEAN in plain(start))
             assert STATUS_REVIEWING not in plain(start), plain(start)
             assert script.parent == (2 if repair else 1) and script.reviews == (2 if repair else 1)
             if repair:
@@ -409,14 +429,14 @@ def tui(binary, concurrent=False, repair=False):
                 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 61, 121, 0, 0))
                 proc.send_signal(signal.SIGWINCH)
                 until(lambda: MARKER_LAUNCH in plain(redraw) and APPLYING_FIXES in plain(redraw)
-                             and expected in plain(redraw) and MARKER_REQUEUE in plain(redraw))
+                             and MARKER_REQUEUE in plain(redraw))
                 transcript = plain(redraw)
                 # The PTY buffer may retain an earlier partial frame; verify the
                 # chronological order only inside the last full repaint.
                 base = transcript.rfind('Explain the independent fixture file')
                 transcript = transcript[base:]
                 assert 0 <= transcript.find(MARKER_LAUNCH) < transcript.find(APPLYING_FIXES), transcript
-                assert transcript.find(APPLYING_FIXES) < transcript.find(expected) < transcript.find(MARKER_REQUEUE), transcript
+                assert transcript.find(APPLYING_FIXES) < transcript.find(MARKER_REQUEUE), transcript
         finally:
             second_release.set()
             script.release.set()
@@ -437,6 +457,7 @@ if __name__ == '__main__':
         cli(binary, case)
     cli(binary, 'long_review', max_turns=9)
     cli(binary, 'long_review', max_turns=6)
+    cli_no_head(binary)
     for cancel in (False, True):
         acp(binary, cancel)
     tui(binary)

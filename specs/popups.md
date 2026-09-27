@@ -50,6 +50,15 @@ row count. The scrollbar is drawn inside the popup's right edge and does not
 change the popup width. Filterable popups start the scrollbar below the `Find:`
 input row.
 
+## Choice modal
+
+`popup.choice(title, message, choices)` renders a blocking single-choice modal.
+The title is drawn in the border, the message is shown as a single clipped line,
+and each choice is a `[N]` row. `j`/`k` and arrow keys move the highlight,
+`1`–`9` select a row directly, `Enter` or `Tab` confirms, and `Esc` cancels
+returning `nil`. It is the synchronous modal used for review outcomes that need
+an explicit user decision (for example fix now versus ask later).
+
 ## Message popups
 
 Message popups close with `Enter` or `Esc` and scroll with arrows, `j`/`k`,

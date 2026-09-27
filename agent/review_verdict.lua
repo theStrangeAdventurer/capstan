@@ -102,7 +102,7 @@ function M.parse(raw)
     if not report then return nil, err end
     if not fields(report, {verdict=true,summary=true,findings=true,checks=true}) or
         not ({clean=true,findings=true,inconclusive=true})[report.verdict] or
-        not M.text(report.summary,4096,true) or not M.array(report.findings,100) or
+        not M.text(report.summary,200,true) or not M.array(report.findings,100) or
         not M.array(report.checks,100) then return nil, 'Invalid review report schema' end
     if (report.verdict == 'findings') ~= (#report.findings > 0) then
         return nil, 'Verdict does not match findings'
@@ -115,8 +115,8 @@ function M.parse(raw)
     for _, check in ipairs(report.checks) do
         if not fields(check, {id=true,status=true,evidence=true}) or
             not M.text(check.id,64,true) or seen[check.id] or
-            not ({resolved=true,open=true})[check.status] or not M.text(check.evidence,4096,true) or
-            (report.verdict == 'clean' and check.status ~= 'resolved') or
+            not ({resolved=true,open=true,stale=true})[check.status] or not M.text(check.evidence,4096,true) or
+            (report.verdict == 'clean' and not ({resolved=true,stale=true})[check.status]) or
             report.verdict == 'inconclusive' then return nil, 'Invalid or duplicate recheck' end
         seen[check.id] = true
     end

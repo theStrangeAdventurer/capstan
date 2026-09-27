@@ -6,7 +6,7 @@ local M = {}
 local scoped_store
 local handles = setmetatable({}, {__mode='k'})
 local MAX_BYTES = 256 * 1024
-local states = {open=true,pending_verification=true,disputed=true,resolved=true,accepted_risk=true}
+local states = {open=true,pending_verification=true,disputed=true,resolved=true,accepted_risk=true,stale=true}
 local function copy(value) return json.decode(json.encode(value)) end
 local function id(value) return verdict.text(value,64,true) and value:match('^[a-zA-Z0-9_-]+$') end
 local function empty() return {revision=0,next_id=1,runs=json.array({}),issues=json.array({})} end
@@ -29,7 +29,19 @@ local function bind()
 end
 function M.use_store(store) scoped_store=store end
 
-local function unresolved(issue) return issue.status ~= 'resolved' and issue.status ~= 'accepted_risk' end
+local function unresolved(issue) return issue.status ~= 'resolved' and issue.status ~= 'accepted_risk' and issue.status ~= 'stale' end
+-- Reports are validated against the current protocol on write (verdict.parse in
+-- M.record). On read, accept any stored report that round-trips through JSON
+-- cleanly, regardless of whether the current protocol schema has tightened since
+-- the report was written. This avoids backward-incompatible valid() failures
+-- that block reviews, /issues, and the whole issue registry.
+local function stored_report_ok(report)
+    if type(report) ~= 'table' or report.report == nil then return false end
+    local encoded = json.encode(report.report)
+    if type(encoded) ~= 'string' or #encoded == 0 then return false end
+    local decoded = json.decode(encoded)
+    return type(decoded) == 'table' and decoded.verdict ~= nil
+end
 local function valid(ledger, unlimited)
     if type(ledger) ~= 'table' or not verdict.integer(ledger.revision,0,2147483646) or
         not verdict.integer(ledger.next_id,1,2147483646) or not verdict.array(ledger.runs,unlimited and math.huge or 100) or
@@ -42,8 +54,7 @@ local function valid(ledger, unlimited)
             not verdict.text(run.reason,4096,false) then return false end
         runs[run.id] = run
         for _, report in ipairs(run.reports) do
-            if type(report) ~= 'table' or not verdict.text(report.snapshot,128,true) or
-                not verdict.parse(json.encode(report.report)) then return false end
+            if not stored_report_ok(report) then return false end
         end
     end
     for _, issue in ipairs(ledger.issues) do
@@ -168,7 +179,7 @@ function M.snapshot(handle, revision, previous, next_snapshot)
     return save(store,ledger)
 end
 -- Only the runtime may call this; never expose report publication as a model tool.
-function M.record(handle, revision, snapshot, raw, transport)
+function M.record(handle, revision, snapshot, raw, transport, expected_open)
     if type(transport) ~= 'table' or transport.ok ~= true or transport.truncated ~= false then
         return nil, 'Incomplete reviewer transport; not a clean verdict'
     end
@@ -180,7 +191,17 @@ function M.record(handle, revision, snapshot, raw, transport)
     end
     local by_id,seen={},{}
     for _, issue in ipairs(ledger.issues) do
-        if issue.run_id == run.id then by_id[issue.id]=issue end
+        if unresolved(issue) then by_id[issue.id]=issue end
+    end
+    local required={}
+    if expected_open then
+        for _, issue_id in ipairs(expected_open) do
+            if by_id[issue_id] then required[issue_id]=true end
+        end
+    else
+        for issue_id, issue in pairs(by_id) do
+            if issue.run_id == run.id then required[issue_id]=true end
+        end
     end
     for _, finding in ipairs(report.findings) do
         local issue=finding.id and by_id[finding.id]
@@ -206,8 +227,8 @@ function M.record(handle, revision, snapshot, raw, transport)
         seen[issue.id]=true
     end
     if report.verdict ~= 'inconclusive' then
-        for issue_id,issue in pairs(by_id) do
-            if unresolved(issue) and not seen[issue_id] then return nil,'Review omitted an open issue' end
+        for issue_id in pairs(required) do
+            if not seen[issue_id] then return nil,'Review omitted an open issue' end
         end
     end
     table.insert(run.reports,{snapshot=snapshot,report=report})

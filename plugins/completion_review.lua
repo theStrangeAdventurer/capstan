@@ -9,12 +9,12 @@ local plugin = {
 plugin.tool = {
     name = 'request_completion',
     permission = false,
-    description = 'Request completion, not unconditional acceptance. You MUST call this with ready when a requested task is finished (including after review repairs), or when the user explicitly asks to review a result or changes; put the result or requested review scope in text. This starts independent review even with no edits or prior tools. Use question when task completion needs user input, or blocked when work cannot proceed. For ordinary conversation, clarifications and progress updates, reply directly in text, even if you used tools to answer. Tool usage and plain terminal text never trigger review automatically.',
+    description = 'Finish the turn or request a review. Use ready when a requested task is finished; it returns your final answer and never starts a review. Use review ONLY when the user explicitly asks you to review a result or changes; put the review scope in text. Review runs in the background and its findings are reported back to you later. Use question when task completion needs user input, or blocked when work cannot proceed. For ordinary conversation, clarifications and progress updates, reply directly in text, even if you used tools to answer. Tool usage and plain terminal text never trigger review automatically.',
     parameters = {
         type = 'object',
         properties = {
-            status = {type = 'string', enum = {'ready', 'question', 'blocked'}},
-            text = {type = 'string', description = 'Proposed final answer, question, or explanation of the blocker'},
+            status = {type = 'string', enum = {'ready', 'review', 'question', 'blocked'}},
+            text = {type = 'string', description = 'Final answer (ready), review scope (review), question, or blocker explanation'},
         },
         required = {'status', 'text'},
         additionalProperties = false,

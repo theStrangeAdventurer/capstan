@@ -859,13 +859,11 @@ local function run_impl(opts, callbacks, run_span)
                     'record the outcome; do not infer acceptance from submission.'
             end
         end
-        -- Ordinary prose streams immediately. The request_completion payload is
-        -- also streamed to the foreground sink while the controller holds the
-        -- acceptance gate. Headless/ACP paths omit on_review_draft and therefore
-        -- keep the draft hidden until acceptance, as required by their protocol.
+        -- Ordinary prose streams immediately. Explicit review requests never
+        -- stream their scope text; only the eventual verdict is published
+        -- through on_review_result (TUI) or the text stream (CLI/ACP).
         local explicit_completion = false
         local review_submission = false
-        local review_draft = nil
         local stream_attempt = 0
         local stream_emitted_text = false
         local model_started_at = nil
@@ -895,9 +893,6 @@ local function run_impl(opts, callbacks, run_span)
             -- Foreground already saw the streamed draft; non-interactive
             -- callers (CLI/ACP) receive the full accepted result here.
             local terminal_text = final_text
-            if review_submission and review_draft and kind == 'ready' then
-                terminal_text = final_text .. '\n\nReviewed result:\n' .. review_draft
-            end
             if explicit_completion then
                 if review_submission and callbacks.on_review_result then
                     callbacks.on_review_result(final_text)
@@ -919,8 +914,7 @@ local function run_impl(opts, callbacks, run_span)
         end
         local function attempt_completion(text, kind)
             explicit_completion = true
-            review_submission = kind == 'ready'
-            review_draft = kind == 'ready' and text or nil
+            review_submission = kind == 'review'
             review_finalize=finalize_text
             review_resume=function(data)
                 local event_id='review-result-'..tostring(turns)
@@ -930,9 +924,6 @@ local function run_impl(opts, callbacks, run_span)
                 continue_agent_cycle(current_msgs,tools,'completion_fixes')
             end
             if review then
-                if review_submission and callbacks.on_review_draft then
-                    callbacks.on_review_draft(text)
-                end
                 review:attempt(text,kind)
             else
                 finalize_text(text,kind)
@@ -1056,6 +1047,7 @@ local function run_impl(opts, callbacks, run_span)
                     state = run_state,
                     reviewer = reviewer,
                     review_controller = review,
+                    reviewer_verdict = reviewer and (function(text) finalize_text(text, 'ready') end) or nil,
                     request_completion = review and attempt_completion or nil,
                     assistant_reasoning = preserve_reasoning and result.reasoning or nil,
                     assistant_reasoning_details = preserve_reasoning and result.reasoning_details or nil,
@@ -1802,13 +1794,6 @@ _G.agent_entry = function(messages)
     local review_id
     M.run(opts, {
         on_text = function(text) return sink(text) end,
-        on_review_draft = function(text)
-            if not current() then return end
-            -- The held draft streams only into a real output segment. Without
-            -- one (headless/CLI harnesses) it stays held until acceptance and
-            -- is published through on_review_result, never agent.append.
-            if sink_is_segment then sink(text) end
-        end,
         on_review_result = function(text)
             if agent.session_id and agent.session_id() ~= session_id then return end
             if agent.review_event then

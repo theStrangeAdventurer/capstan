@@ -131,6 +131,32 @@ function M.resolve_path(path)
     return resolved
 end
 
+-- Completion-review baseline: immutable committed content of tracked files.
+-- The review controller never assumes Git; the configured adapter owns whether
+-- and how a baseline can be produced. Only the built-in Git adapter currently
+-- provides one (via the safe native blob reader). Other adapters fail closed
+-- rather than falling back to a worktree snapshot or a Git-specific command.
+function M.review_baseline(root, authorize)
+    local adapters = M.adapters()
+    local name = state.vcs_for_workspace(root)
+    if not (type(name) == "string" and adapters[name]) then
+        local configured = config().default
+        if type(configured) == "string" and adapters[configured] then
+            name = configured
+        else
+            name = "git"
+        end
+    end
+    if adapters[name] ~= builtin.git then
+        return nil, "VCS adapter '" .. tostring(name) ..
+            "' does not support completion-review baseline"
+    end
+    if not _G.tools or type(_G.tools.review_snapshot_head) ~= "function" then
+        return nil, "safe HEAD snapshot primitive unavailable"
+    end
+    return _G.tools.review_snapshot_head(root, authorize)
+end
+
 function M.run(operation, path, authorized_path)
     local reported_operation = operation
     if path ~= nil then

@@ -25,6 +25,7 @@
 #define RS_BYTES (4 * 1024 * 1024)
 #define RS_ENTRIES 20000
 #define RS_DEPTH 128
+#define RS_BATCH_LIMIT (40 * 1024 * 1024)
 
 static int failure(lua_State *L, const char *reason) {
   lua_pushnil(L); lua_pushstring(L, reason); return 2;
@@ -197,7 +198,7 @@ static int git_present(int root) {
 }
 /* Git supplies names only. No shell, hooks, pagers, inherited Git overrides or
  * user/system config. Output and wall time are bounded; errors fail closed. */
-static char *git_names(int root, size_t *length) {
+static char *git_output(int root, char *const argv[], size_t *length, int nul) {
   int pipes[2];
   if (pipe(pipes)) return NULL;
   pid_t pid = fork();
@@ -207,7 +208,6 @@ static char *git_names(int root, size_t *length) {
     if (nullfd < 0 || fchdir(root) || dup2(pipes[1],STDOUT_FILENO) < 0 ||
         dup2(nullfd,STDIN_FILENO) < 0 || dup2(nullfd,STDERR_FILENO) < 0) _exit(127);
     close(nullfd); close(pipes[1]);
-    char *const argv[] = {"git","-c","core.fsmonitor=false","ls-files","--cached","--others","--exclude-standard","-z",NULL};
     char *const env[] = {"PATH=/usr/bin:/bin","GIT_CONFIG_NOSYSTEM=1","GIT_CONFIG_GLOBAL=/dev/null","GIT_TERMINAL_PROMPT=0","LC_ALL=C",NULL};
     execve("/usr/bin/git",argv,env); _exit(127);
   }
@@ -238,7 +238,7 @@ static char *git_names(int root, size_t *length) {
     if (time(NULL) >= deadline) { kill(pid,SIGKILL); ok = 0; }
     struct timespec pause = {0,10000000}; nanosleep(&pause,NULL);
   }
-  if (!ok || !done || !WIFEXITED(status) || WEXITSTATUS(status) || (used && buf[used-1])) { free(buf); return NULL; }
+  if (!ok || !done || !WIFEXITED(status) || WEXITSTATUS(status) || (nul && used && buf[used-1])) { free(buf); return NULL; }
   *length = used; return buf;
 }
 static int l_snapshot_list(lua_State *L) {
@@ -250,7 +250,8 @@ static int l_snapshot_list(lua_State *L) {
   if (git == 0) ok = walk(L,fd,"",0,&count);
   else if (git > 0) {
     size_t length = 0;
-    char *names = git_names(fd,&length);
+    char *const argv[] = {"git","-c","core.fsmonitor=false","ls-files","--cached","--others","--exclude-standard","-z",NULL};
+    char *names = git_output(fd,argv,&length,1);
     ok = names != NULL;
     /* Git can report duplicate names for unmerged index stages. */
     lua_newtable(L);
@@ -292,7 +293,177 @@ static int l_snapshot_list(lua_State *L) {
   if (!ok) { lua_pop(L,1); return failure(L,"snapshot enumeration incomplete"); }
   return 1;
 }
+/* Immutable HEAD blobs, never worktree filters, textconv or external diff. */
+static int feed_stdin(int fd, const char *buf, size_t len, time_t deadline) {
+  size_t off = 0;
+  while (off < len && time(NULL) < deadline) {
+    struct pollfd p = {fd, POLLOUT, 0};
+    int ready = poll(&p, 1, 100);
+    if (ready < 0) { if (errno == EINTR) continue; return 0; }
+    if (!ready) continue;
+    ssize_t n = write(fd, buf + off, len - off);
+    if (n < 0) { if (errno == EINTR) continue; return 0; }
+    off += (size_t)n;
+  }
+  return off == len;
+}
+static char *drain_stdout(int fd, size_t cap, size_t *length, time_t deadline) {
+  char *buf = malloc(cap + 1);
+  size_t used = 0;
+  int ok = buf != NULL;
+  while (ok && used < cap && time(NULL) < deadline) {
+    struct pollfd p = {fd, POLLIN, 0};
+    int ready = poll(&p, 1, 100);
+    if (ready < 0) { if (errno == EINTR) continue; ok = 0; break; }
+    if (!ready) continue;
+    ssize_t n = read(fd, buf + used, cap - used);
+    if (n < 0) { if (errno == EINTR) continue; ok = 0; break; }
+    if (!n) break;
+    used += (size_t)n;
+  }
+  if (!ok) { free(buf); return NULL; }
+  *length = used;
+  return buf;
+}
+static int reap_child_ok(pid_t pid, time_t deadline) {
+  int status = 0;
+  for (;;) {
+    pid_t waited = waitpid(pid, &status, WNOHANG);
+    if (waited == pid) return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    if (waited < 0 && errno != EINTR) return 0;
+    if (time(NULL) >= deadline) {
+      kill(pid, SIGKILL);
+      /* SIGKILL cannot be caught or ignored, so the child must exit; block
+       * until it is reaped rather than leaving a zombie behind. */
+      while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+      return 0;
+    }
+    struct timespec pause = {0, 10000000}; nanosleep(&pause, NULL);
+  }
+}
+#ifdef REVIEW_SNAPSHOT_TEST
+/* Test seam: lets the native adapter regression test drive the reap-after-kill
+ * path directly without substituting /usr/bin/git. */
+int review_snapshot_test_reap(pid_t pid, time_t deadline) {
+  return reap_child_ok(pid, deadline);
+}
+#endif
+/* Single `git cat-file --batch` process for all requested blobs. Pushes each
+ * object into the Lua table already on top of the stack. Enforces the per-file
+ * and aggregate byte budgets here so the whole capture shares one deadline. */
+static int git_batch_blobs(int root, char (*oids)[65], char *const paths[],
+                           size_t count, size_t *total, lua_State *L) {
+  size_t input_len = 0;
+  for (size_t i = 0; i < count; i++) input_len += strlen(oids[i]) + 1;
+  char *input = malloc(input_len ? input_len : 1);
+  if (!input) return 0;
+  size_t at = 0;
+  for (size_t i = 0; i < count; i++) {
+    size_t n = strlen(oids[i]);
+    memcpy(input + at, oids[i], n);
+    input[at + n] = '\n';
+    at += n + 1;
+  }
+  int in[2], out[2];
+  if (pipe(in) || pipe(out)) { free(input); return 0; }
+  pid_t pid = fork();
+  if (!pid) {
+    close(in[1]); close(out[0]);
+    int nullfd = open("/dev/null", O_RDWR);
+    if (nullfd < 0 || fchdir(root) || dup2(in[0], STDIN_FILENO) < 0 ||
+        dup2(out[1], STDOUT_FILENO) < 0 || dup2(nullfd, STDERR_FILENO) < 0) _exit(127);
+    close(nullfd); close(in[0]); close(out[1]);
+    char *const argv[] = {"git", "cat-file", "--batch", NULL};
+    char *const env[] = {"PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C", NULL};
+    execve("/usr/bin/git", argv, env); _exit(127);
+  }
+  close(in[0]); close(out[1]);
+  if (pid < 0) { close(in[1]); close(out[0]); free(input); return 0; }
+  time_t deadline = time(NULL) + 5;
+  int ok = feed_stdin(in[1], input, input_len, deadline);
+  close(in[1]); free(input);
+  size_t out_len = 0;
+  char *stream = ok ? drain_stdout(out[0], RS_BATCH_LIMIT, &out_len, deadline) : NULL;
+  close(out[0]);
+  if (!stream) kill(pid, SIGKILL);
+  /* Reap unconditionally: the `||` chain above would otherwise skip waitpid
+   * when feed_stdin or drain_stdout failed and leave the killed child as a
+   * zombie. */
+  int child_ok = reap_child_ok(pid, deadline);
+  if (!ok || !stream || !child_ok) { free(stream); return 0; }
+  size_t off = 0;
+  for (size_t i = 0; i < count; i++) {
+    char *nl = memchr(stream + off, '\n', out_len - off);
+    if (!nl) { free(stream); return 0; }
+    *nl = 0;
+    char got_oid[65], got_type[16];
+    long long size = 0;
+    if (sscanf(stream + off, "%64s %15s %lld", got_oid, got_type, &size) != 3 ||
+        strcmp(got_oid, oids[i]) || strcmp(got_type, "blob") ||
+        size < 0 || (unsigned long long)size > RS_BYTES) { free(stream); return 0; }
+    off = (size_t)(nl - stream) + 1;
+    if (off + (size_t)size + 1 > out_len) { free(stream); return 0; }
+    *total += (size_t)size;
+    if (*total > 32 * 1024 * 1024) { free(stream); return 0; }
+    lua_pushlstring(L, stream + off, (size_t)size);
+    lua_setfield(L, -2, paths[i]);
+    off += (size_t)size;
+    if (stream[off] != '\n') { free(stream); return 0; }
+    off += 1;
+  }
+  free(stream);
+  return 1;
+}
+/* Built-in Git adapter's review baseline: immutable HEAD blobs, never worktree
+ * filters, textconv or external diff. Reached only through agent.vcs.review_baseline,
+ * not by the review controller directly. */
+static int l_snapshot_head(lua_State *L) {
+  const char *root = string_arg(L,1);
+  int fd = root ? root_open(root) : -1;
+  if (fd < 0) return failure(L,"unsafe snapshot root");
+  char *const argv[] = {"git","ls-tree","-r","-z","HEAD","--",".",NULL};
+  size_t length = 0, total = 0;
+  char *tree = git_output(fd,argv,&length,1);
+  if (!tree) { close(fd); return failure(L,"HEAD baseline unavailable"); }
+  lua_newtable(L);
+  int ok = 1, count = 0;
+  char (*oids)[65] = NULL;
+  char **paths = NULL;
+  for (size_t i = 0; ok && i < length;) {
+    char *record = tree+i; i += strlen(record)+1;
+    char *tab = strchr(record,'\t');
+    if (!tab) { ok=0; break; }
+    *tab=0;
+    char *path=tab+1, oid[65], mode[7], type[16];
+    if (sscanf(record,"%6s %15s %64s",mode,type,oid)!=3) { ok=0; break; }
+    if (!valid(path,0) || strcmp(type,"blob") ||
+        (strcmp(mode,"100644") && strcmp(mode,"100755"))) continue;
+    if (count >= RS_ENTRIES) { ok=0; break; }
+    char full[PATH_MAX];
+    int n=snprintf(full,sizeof(full),"%s/%s",root,path);
+    if (n<0 || (size_t)n>=sizeof(full) || permit_check("file_read",full)==PERM_DENY ||
+        !lua_isfunction(L,2)) { ok=0; break; }
+    lua_pushvalue(L,2); lua_pushstring(L,full);
+    if (lua_pcall(L,1,1,0)!=LUA_OK) { lua_pop(L,1); ok=0; break; }
+    int allowed=lua_isboolean(L,-1) && lua_toboolean(L,-1); lua_pop(L,1);
+    if (!allowed) { ok=0; break; }
+    char (*new_oids)[65] = realloc(oids, (size_t)(count+1)*sizeof(*new_oids));
+    if (!new_oids) { ok=0; break; }
+    oids = new_oids;
+    char **new_paths = realloc(paths, (size_t)(count+1)*sizeof(char *));
+    if (!new_paths) { ok=0; break; }
+    paths = new_paths;
+    memcpy(oids[count], oid, sizeof(oids[count]));
+    paths[count] = path;
+    count++;
+  }
+  if (ok && count) ok = git_batch_blobs(fd, oids, paths, (size_t)count, &total, L);
+  free(oids); free(paths); free(tree); close(fd);
+  if (!ok) { lua_pop(L,1); return failure(L,"HEAD snapshot incomplete or unauthorized"); }
+  return 1;
+}
 void review_snapshot_init(lua_State *L) {
+  lua_pushcfunction(L,l_snapshot_head); lua_setfield(L,-2,"review_snapshot_head");
   lua_pushcfunction(L,l_snapshot_list); lua_setfield(L,-2,"review_snapshot_list");
   lua_pushcfunction(L,l_snapshot_read); lua_setfield(L,-2,"review_snapshot_read");
 }

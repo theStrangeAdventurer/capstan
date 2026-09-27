@@ -5011,7 +5011,7 @@ static void install_completion_review_stub(lua_State *L) {
       "    dispose = function() end,\n"
       "    poll = function() end,\n"
       "    attempt = function(self, text, kind)\n"
-      "      assert(kind == 'ready')\n"
+      "      assert(kind == 'review')\n"
       "      REVIEW_ATTEMPTS = REVIEW_ATTEMPTS + 1\n"
       "      REVIEW_DRAFT = text\n"
       "      REVIEW_CLEAN = function() context.finalize(text, 'ready') end\n"
@@ -5143,7 +5143,7 @@ static MunitResult test_streamed_file_edit_tool_edits_file(
   munit_assert_true(strstr(captured_agent_appends, "Validating") != NULL);
   int requests = post_stream_calls;
   send_tool_call(L, "complete", "request_completion",
-                 "{\\\"status\\\":\\\"ready\\\",\\\"text\\\":\\\"draft answer\\\"}");
+                 "{\\\"status\\\":\\\"review\\\",\\\"text\\\":\\\"draft answer\\\"}");
   assert_completion_review_clean_publishes_draft(L, requests);
 
   reset_captures(L);
@@ -5188,7 +5188,7 @@ static MunitResult test_unvalidated_multi_file_write_starts_completion_review(
                  "{\\\"path\\\":\\\"two.txt\\\",\\\"old_text\\\":\\\"old-two\\\",\\\"new_text\\\":\\\"new-two\\\"}");
   int requests = post_stream_calls;
   send_tool_call(L, "complete", "request_completion",
-                 "{\\\"status\\\":\\\"ready\\\",\\\"text\\\":\\\"draft answer\\\"}");
+                 "{\\\"status\\\":\\\"review\\\",\\\"text\\\":\\\"draft answer\\\"}");
   assert_completion_review_clean_publishes_draft(L, requests);
 
   reset_captures(L);
@@ -5236,7 +5236,7 @@ static MunitResult test_write_after_validation_restores_completion_review(
                  "{\\\"path\\\":\\\"two.txt\\\",\\\"old_text\\\":\\\"old-two\\\",\\\"new_text\\\":\\\"new-two\\\"}");
   int requests = post_stream_calls;
   send_tool_call(L, "complete", "request_completion",
-                 "{\\\"status\\\":\\\"ready\\\",\\\"text\\\":\\\"draft answer\\\"}");
+                 "{\\\"status\\\":\\\"review\\\",\\\"text\\\":\\\"draft answer\\\"}");
   assert_completion_review_clean_publishes_draft(L, requests);
 
   reset_captures(L);
@@ -6225,6 +6225,44 @@ static MunitResult test_tool_guard_stops_max_turns_before_continuation_request(
   call_agent_entry(L);
   munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
   send_tool_call(L, "call_fetch_max_turns", "fetch",
+                 "{\\\"url\\\":\\\"https://example.com\\\"}");
+
+  munit_assert_int(permit_check_calls, ==, 1);
+  munit_assert_true(strstr(captured_agent_appends,
+                           "[stopped: max agent turns exceeded: 1") != NULL);
+  munit_assert_true(strstr(captured_logs,
+                           "[tool_guard] max agent turns exceeded: 1") != NULL);
+
+  reset_captures(L);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_agent_max_turns_option_overrides_config(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  lua_State *L = new_provider_state();
+  reset_captures(L);
+  set_permit_decision("allow");
+  set_agent_config_number(L, "max_turns", 50);
+
+  int rc = luaL_dofile(L, "agent/runtime.lua");
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_pop(L, 1);
+
+  rc = luaL_dostring(
+      L,
+      "local ok, err = capstan.agent.run({"
+      "messages = {{role = 'user', content = 'Fetch https://example.com'}}, "
+      "max_turns = 1, update_status = false, update_usage = false}, {"
+      "on_text = function() end}) "
+      "assert(ok, err)");
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int(stream_callback_ref, !=, LUA_NOREF);
+
+  send_tool_call(L, "call_max_turns_override", "fetch",
                  "{\\\"url\\\":\\\"https://example.com\\\"}");
 
   munit_assert_int(permit_check_calls, ==, 1);
@@ -8241,6 +8279,9 @@ static MunitTest tests[] = {
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/tool_guard_stops_max_turns_before_continuation_request",
      test_tool_guard_stops_max_turns_before_continuation_request, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
+    {"/agent_max_turns_option_overrides_config",
+     test_agent_max_turns_option_overrides_config, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/shell_always_allow_is_session_scoped",
      test_shell_always_allow_is_session_scoped, NULL, NULL,

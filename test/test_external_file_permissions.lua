@@ -96,3 +96,30 @@ assert(opens == 0 and writes == 0 and #prompts == 0)
 run('file_read', {paths = {'note.md', path}})
 assert(opens == 0 and #prompts == 0)
 assert(capstan.workdir == '/repo/project' and capstan.workspace_root == '/repo/project')
+
+-- Persistent external grants (permit.check returning an explicit allow) must
+-- apply to batch reads exactly like single reads, without re-prompting.
+permit.check = function(_, target)
+    if target == denied then return 'deny' end
+    if target:sub(1, #'/repo/project') == '/repo/project' then return 'allow' end
+    if target:sub(1, #'/outside/granted') == '/outside/granted' then return 'allow', true end
+    return 'ask'
+end
+decision = 'deny'
+scope.yolo = false
+scope.workdir_only = false
+scope.full_control = false
+scope.allowed_targets = {}
+scope.allowed_tools = {}
+files['/outside/granted/a.txt'] = 'granted-a'
+files['/outside/granted/b.txt'] = 'granted-b'
+
+result = run('file_read', {paths = {'note.md', '/outside/granted/a.txt', '/outside/granted/b.txt'}})
+assert(#prompts == 0 and opens == 3)
+assert(result:find('granted-a', 1, true) and result:find('granted-b', 1, true))
+
+-- An ungranted external path in the same batch still prompts and, when denied,
+-- blocks the whole read before any file is opened.
+result = run('file_read', {paths = {'note.md', '/outside/granted/a.txt', '/outside/other.lua'}})
+assert(#prompts == 1 and opens == 0)
+assert(result:find('User denied', 1, true))

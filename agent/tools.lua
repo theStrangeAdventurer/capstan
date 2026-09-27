@@ -935,7 +935,7 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
     if run_ctx and run_ctx.request_completion and #tool_calls==1 and
         tool_calls[1].name=='request_completion' and tool_available(combined_tools,'request_completion') then
         local args,err=decode_tool_arguments(tool_calls[1].arguments,run_ctx)
-        if not err and type(args)=='table' and ({ready=true,question=true,blocked=true})[args.status] and
+        if not err and type(args)=='table' and ({ready=true,review=true,question=true,blocked=true})[args.status] and
             type(args.text)=='string' and #args.text<=128*1024 and args.text:find('%S') and not args.text:find('%z') then
             local extra=false
             for key in pairs(args) do if key~='status' and key~='text' then extra=true end end
@@ -1114,7 +1114,36 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
                 if reviewer then
                     -- Enforce AFTER hooks/routing. Never invoke a plugin, MCP, shell,
                     -- permission prompt or live file adapter inside a reviewer.
-                    if tool_name~='file_read' or not tool_available(combined_tools,tool_name) then
+                    if tool_name=='submit_review' and tool_available(combined_tools,'submit_review') then
+                        local complete,detail
+                        if reviewer.snapshot and type(reviewer.snapshot.access_complete)=='function' then
+                            complete,detail=reviewer.snapshot:access_complete()
+                        else
+                            complete=true
+                        end
+                        if not complete then
+                            -- Fail recoverably: the reviewer can read the unread
+                            -- pages and retry instead of the whole review dying
+                            -- only after the subagent has already ended.
+                            event_ok=false
+                            error_category='invalid_arguments'
+                            result_content='Snapshot read incomplete: '..(detail or 'unread pages remain')..
+                                '. Read every unread page with file_read (follow next_offset to EOF), then call submit_review again.'
+                        else
+                            reviewer.submitted=args
+                            reviewer.submitted_raw=json.encode(args)
+                            event_ok=true
+                            result_content='Review received.'
+                            -- Terminate the reviewer run immediately with the
+                            -- structured verdict as terminal text. Otherwise the
+                            -- subagent loop continues and the model can call
+                            -- submit_review again, leaving the final child.text
+                            -- as prose that verdict.parse rejects.
+                            if run_ctx.reviewer_verdict then
+                                run_ctx.reviewer_verdict(reviewer.submitted_raw)
+                            end
+                        end
+                    elseif tool_name~='file_read' or not tool_available(combined_tools,tool_name) then
                         error_category='permission'; result_content='Reviewer tools are read-only snapshot adapters'
                     else
                         local text,err,category=reviewer.snapshot:read(args)
@@ -1287,6 +1316,14 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
         end)
 
         if observer_aborted then return end
+        if reviewer and reviewer.submitted_raw then
+            event_ok = true
+            if not finish_tool_event() then return end
+            if run_ctx and type(run_ctx.reviewer_verdict) == 'function' then
+                run_ctx.reviewer_verdict(reviewer.submitted_raw)
+            end
+            return
+        end
         if not body_ok then
             event_ok = false
             error_category = "exception"

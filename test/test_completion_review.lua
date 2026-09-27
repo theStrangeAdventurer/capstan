@@ -4,15 +4,20 @@ local issues = require('agent.issues')
 local tasks = require('agent.tasks')
 local env
 package.loaded['agent.review_snapshot'] = {
-    capture = function(root)
+    capture = function(root, _, head)
         assert(root == '/workspace')
+        if head then env.head_captures=(env.head_captures or 0)+1 end
         if env.enumeration_error then return nil, env.enumeration_error end
-        local s = {version = env.version, paths = {'src/example.c'}, complete = true, releases = 0}
-        function s:diff(baseline) assert(baseline); return json.array({'src/example.c'}) end
+        local s = {version = env.version, paths = {'src/example.c'}, complete = env.complete, releases = 0}
+        function s:diff(baseline) assert(baseline)
+            if env.complete == false then return nil, 'permission scope changed; attribution unknown' end
+            return json.array({'src/example.c'})
+        end
         function s:check()
             if env.enumeration_error then return false, env.enumeration_error end
             return not env.drift, 'external workspace drift'
         end
+        function s:full_fingerprint() return env.full_fp or ('fp:'..env.version) end
         function s:release() self.releases = self.releases + 1; assert(self.releases == 1) end
         env.snapshots[#env.snapshots + 1] = s
         return s
@@ -30,11 +35,13 @@ package.loaded['agent.telemetry'] = {
         env.telemetry = {ok = ok, cancelled = cancelled, attrs = attrs}
     end,
 }
+local controller = require('agent.completion_review')
 package.loaded['agent.subagents'] = {
     submit = function(args, ctx, opts)
         assert(opts.notify == false and opts.reviewer.budget == env.controller)
-        assert(#ctx.tools == 1 and ctx.tools[1] == env.tool)
-        assert(#args.tasks == 1 and args.tasks[1].tools[1] == 'file_read')
+        assert(#ctx.tools == 2 and ctx.tools[1] == env.tool and ctx.tools[2] == controller.submit_review_tool)
+        assert(#args.tasks == 1 and args.tasks[1].tools[1] == 'file_read' and args.tasks[1].tools[2] == 'submit_review')
+        env.submitted_system_prompt = ctx.system_prompt
         local h = {args = args, ctx = ctx, opts = opts}
         env.groups[#env.groups + 1] = h
         return h
@@ -48,7 +55,6 @@ package.loaded['agent.subagents'] = {
     release = function(h) assert(not h.released); h.released = true; return true end,
     discard = function() error('unexpected discard') end,
 }
-local controller = require('agent.completion_review')
 local function report(kind, findings, checks)
     return json.encode({verdict = kind, summary = 'Review evidence unavailable or checked',
         findings = json.array(findings or {}), checks = json.array(checks or {})})
@@ -58,7 +64,7 @@ local function finding(id)
 end
 local clean = report('clean')
 local function setup(overrides)
-    env = {version = 'v1', snapshots = {}, groups = {}, finals = {}, resumes = {},
+    env = {version = 'v1', complete = true, snapshots = {}, groups = {}, finals = {}, resumes = {},
         clock = 0, starts = 0, finishes = 0, cancels = 0, store = {json = ''},
         tool = {['function'] = {name = 'file_read'}}}
     issues.use_store(env.store)
@@ -80,8 +86,11 @@ local function setup(overrides)
     return c
 end
 local function queue(c, draft)
-    c:attempt(draft or 'held draft', 'ready'); c:poll()
+    c:attempt(draft or 'held draft', 'review'); c:poll()
     assert(c.stage == 'reviewing')
+    assert(env.head_captures==1, 'review and rechecks must use the captured HEAD baseline')
+    assert(env.submitted_system_prompt == controller.reviewer_system_prompt,
+        'reviewer must use the dedicated verdict-only system prompt, not the orchestrator prompt')
     return env.groups[#env.groups]
 end
 local function deliver(c, raw, fields)
@@ -108,12 +117,12 @@ local tests = {}
 function tests.submission_identity_and_state()
     local c=setup()
     c.context.process_owner='identity-test'; c.context.request_id='request-1'
-    c:attempt('first draft','ready')
+    c:attempt('first draft', 'review')
     assert(controller.state('identity-test','/workspace')[1].stage=='queued')
-    assert(c:attempt('duplicate draft','ready')==c.id and c.draft=='first draft')
+    assert(c:attempt('duplicate draft', 'review')==c.id and c.draft=='first draft')
     c:poll()
     assert(controller.state('identity-test','/workspace')[1].stage=='reviewing')
-    assert(c:attempt('duplicate','ready')==c.id and #env.groups==1)
+    assert(c:attempt('duplicate', 'review')==c.id and #env.groups==1)
     local function duplicate(request, owner)
         local ctx={}
         for k,v in pairs(c.context) do ctx[k]=v end
@@ -121,25 +130,49 @@ function tests.submission_identity_and_state()
         return controller.new(c.config,ctx)
     end
     local other=duplicate('request-1')
-    assert(other:attempt('retry','ready')==c.id and other.disposed)
+    assert(other:attempt('retry', 'review')==c.id and other.disposed)
     assert(#env.groups==1)
     deliver(c,clean)
     local state=controller.state('identity-test','/workspace')
     assert(state[1].stage=='finalized' and state[1].result:find('clean',1,true))
     assert(#controller.state('another-session','/workspace')==0)
     other=duplicate('request-1')
-    assert(other:attempt('retry completed','ready')==c.id and other.disposed)
+    assert(other:attempt('retry completed', 'review')==c.id and other.disposed)
     for _,case in ipairs({{'request-2','identity-test'}, {'request-1','other-owner'}}) do
-        other=duplicate(case[1],case[2]); other:attempt('new request','ready')
+        other=duplicate(case[1],case[2]); other:attempt('new request', 'review')
         assert(other.stage=='queued'); other:dispose()
     end
     other=duplicate('request-1') -- starts on v1, writes before ready
     env.version='v2'
-    other:attempt('changed snapshot','ready')
+    other:attempt('changed snapshot', 'review')
     assert(other.stage=='queued'); other:dispose()
     other=duplicate('request-1') -- starts on v2, restores v1 before ready
     env.version='v1'
-    assert(other:attempt('restored snapshot','ready')==c.id and other.disposed)
+    assert(other:attempt('restored snapshot', 'review')==c.id and other.disposed)
+end
+function tests.dedup_compares_full_snapshot_bytes()
+    local c=setup()
+    c.context.process_owner='dedup-owner'; c.context.request_id='request-1'
+    env.version='v1'; env.full_fp='full-a'
+    c:attempt('first draft', 'review')
+    assert(c.stage=='queued')
+    local function duplicate()
+        local ctx={}
+        for k,v in pairs(c.context) do ctx[k]=v end
+        return controller.new(c.config,ctx)
+    end
+    -- Same short djb2 version, different full contents: must not deduplicate.
+    env.version='v1'; env.full_fp='full-b'
+    local other=duplicate()
+    other:attempt('second draft', 'review')
+    assert(other.stage=='queued' and not other.disposed)
+    other:dispose()
+    -- Matching full contents still deduplicates against the first record.
+    env.full_fp='full-a'
+    local same=duplicate()
+    assert(same:attempt('third draft', 'review')==c.id and same.disposed)
+    c:dispose()
+    disposed(c)
 end
 function tests.runtime_cleanup_state()
     for _,stage in ipairs({'queued','reviewing','parent_fixes'}) do
@@ -147,7 +180,7 @@ function tests.runtime_cleanup_state()
             local c=setup()
             local owner='cleanup-'..stage..tostring(cancelled)
             c.context.process_owner=owner; c.context.request_id='request'
-            c:attempt('draft','ready'); c.stage=stage
+            c:attempt('draft', 'review'); c.stage=stage
             c:dispose({cancelled=cancelled,error=cancelled and 'cancelled' or 'transport failure'})
             local state=controller.state(owner,'/workspace')[1]
             assert(state.stage==(cancelled and 'cancelled' or 'failed'))
@@ -171,7 +204,7 @@ end
 function tests.concurrent_input_clean()
     for _,phase in ipairs({'queued','reviewing'}) do
         local c=setup()
-        c:attempt('held draft','ready')
+        c:attempt('held draft', 'review')
         if phase=='reviewing' then c:poll() end
         env.foreground_lost=true
         c:poll()
@@ -181,6 +214,41 @@ function tests.concurrent_input_clean()
         assert(issues.read().runs[1].reason=='accepted' and #env.resumes==0)
         disposed(c)
     end
+end
+function tests.foreground_lost_choice_fix_now()
+    local c=setup(); queue(c)
+    env.foreground_lost=true
+    local saved=rawget(_G,'popup')
+    _G.popup={choice=function(title,msg,choices)
+        assert(title=='Review finished' and choices[1]=='Fix now' and choices[2]=='Ask later')
+        assert(msg:find('issue',1,true) ~= nil)
+        return 'Fix now'
+    end}
+    deliver(c,report('findings',{finding()}))
+    _G.popup=saved
+    assert(c.stage=='parent_fixes' and c.fixing and #env.finals==0 and #env.resumes==1)
+    local data=env.resumes[1]
+    assert(data.issues[1].id=='issue-1')
+    assert(issues.read().issues[1].status=='open')
+    assert(issues.respond({id='issue-1',run_id=c.id,revision=data.revision,
+        snapshot=data.snapshot,status='pending_verification',response='Fixed'}))
+    env.version='v2'
+    queue(c,'repaired draft')
+    deliver(c,report('clean',nil,{{id='issue-1',status='resolved',evidence='Verified fix'}}))
+    assert(env.finals[1].kind=='ready')
+    assert(issues.read().issues[1].status=='resolved')
+    disposed(c)
+end
+function tests.foreground_lost_choice_ask_later()
+    local c=setup(); queue(c)
+    env.foreground_lost=true
+    local saved=rawget(_G,'popup')
+    _G.popup={choice=function() return 'Ask later' end}
+    deliver(c,report('findings',{finding()}))
+    _G.popup=saved
+    blocked(c,'automatic repairs deferred')
+    assert(c.stage=='repairs_deferred' and #env.resumes==0)
+    assert(issues.read().issues[1].status=='open')
 end
 function tests.partial_read()
     local c=setup(); queue(c)
@@ -199,10 +267,57 @@ function tests.clean()
     local c = setup(); queue(c)
     c:poll(); assert(#env.finals == 0)
     deliver(c, clean)
-    assert(#env.finals == 1 and env.finals[1].text == 'Review '..c.id..' completed: Review evidence unavailable or checked\nNo open findings.' and env.finals[1].kind == 'ready')
+    assert(#env.finals == 1 and env.finals[1].text == 'Review '..c.id..' completed: clean. No open findings.' and env.finals[1].kind == 'ready')
     assert(#env.resumes == 0 and #env.groups == 1 and c.requests == 0)
     assert(issues.read().runs[1].reason == 'accepted' and env.telemetry.ok)
     disposed(c)
+end
+function tests.incomplete_snapshot_reports_incomplete_not_permission_change()
+    local c = setup()
+    env.complete = false
+    c:attempt('held draft', 'review')
+    c:poll()
+    blocked(c, 'permission-filtered snapshot is incomplete')
+    assert(#env.groups == 0)
+end
+function tests.global_open_findings_mentioned()
+    local c = setup()
+    -- An earlier review run left an open issue in the shared store.
+    local earlier, ledger = issues.begin('earlier-run', 'baseline-old', 'snap-old', 0)
+    ledger = assert(issues.record(earlier, ledger.revision, 'snap-old', report('findings', {finding()}), {ok = true, truncated = false}))
+    assert(#ledger.issues == 1 and ledger.issues[1].status == 'open')
+    issues.release(earlier)
+    queue(c)
+    -- The reviewer rechecks the earlier issue and confirms it still reproduces.
+    deliver(c, report('findings', {finding('issue-1')}))
+    assert(env.finals[1].kind == 'ready')
+    assert(env.finals[1].text:find('Review '..c.id..' completed:', 1, true))
+    assert(env.finals[1].text:find('No open findings from this review.', 1, true))
+    assert(env.finals[1].text:find('1 open finding(s) from earlier reviews remain in /issues.', 1, true))
+    assert(not env.finals[1].text:find('\nNo open findings.', 1, true))
+    local ledger = issues.read()
+    assert(#env.resumes == 0 and #ledger.runs == 2)
+    assert(ledger.runs[1].id == 'earlier-run' and ledger.runs[1].reason == '')
+    assert(ledger.runs[2].id == c.id and ledger.runs[2].reason == 'accepted')
+    assert(ledger.issues[1].id == 'issue-1' and ledger.issues[1].status == 'open')
+    disposed(c)
+end
+function tests.global_open_issues_rechecked_resolved_and_stale()
+    for _, status in ipairs({'resolved', 'stale'}) do
+        local c = setup()
+        local earlier, ledger = issues.begin('earlier-run', 'baseline-old', 'snap-old', 0)
+        ledger = assert(issues.record(earlier, ledger.revision, 'snap-old', report('findings', {finding()}), {ok = true, truncated = false}))
+        issues.release(earlier)
+        queue(c)
+        local evidence = status == 'resolved' and 'Fixed in current snapshot' or 'Context no longer exists'
+        deliver(c, report('clean', nil, {{id = 'issue-1', status = status, evidence = evidence}}))
+        assert(env.finals[1].kind == 'ready')
+        assert(env.finals[1].text:find('No open findings.', 1, true))
+        local ledger = issues.read()
+        assert(ledger.issues[1].status == status and ledger.issues[1].recheck == evidence)
+        assert(ledger.runs[2].id == c.id and ledger.runs[2].reason == 'accepted')
+        disposed(c)
+    end
 end
 function tests.large_input_preserved()
     for _, unit in ipairs({'a', 'Я', '\"\\\n'}) do
@@ -272,7 +387,7 @@ function tests.empty_and_invalid_task_plans()
     assert(h.args.tasks[1].task:find('"tasks":[]', 1, true))
     deliver(c, clean); disposed(c)
     c = setup(); env.task_store.json = '{invalid'
-    c:attempt('held draft', 'ready'); c:poll()
+    c:attempt('held draft', 'review'); c:poll()
     blocked(c, 'Stored task plan is invalid'); assert(#env.groups == 0)
     assert(env.task_store.json == '{invalid')
 end
@@ -299,6 +414,27 @@ function tests.two_repairs_and_rechecks()
     end
     assert(#env.resumes == 2 and #env.groups == 3)
     assert(issues.read().issues[1].status == 'resolved'); disposed(c)
+end
+function tests.ready_after_repairs_requires_recheck()
+    local c = setup(); queue(c); deliver(c, report('findings', {finding()}))
+    assert(c.stage == 'parent_fixes' and c.fixing and #env.finals == 0)
+    local data = env.resumes[1]
+    assert(data.issues[1].id == 'issue-1')
+    assert(issues.respond({id = 'issue-1', run_id = c.id, revision = data.revision,
+        snapshot = data.snapshot, status = 'pending_verification', response = 'Fixed'}))
+    env.version = 'v2'
+    -- A plain ready during repairs must not finalize with open issues.
+    c:attempt('repaired draft', 'ready')
+    assert(c.stage == 'queued' and #env.finals == 0 and c.draft == 'repaired draft')
+    c:poll()
+    assert(c.stage == 'reviewing')
+    local h = env.groups[#env.groups]
+    local input = json.decode(h.args.tasks[1].task)
+    assert(input.cycle == 1 and #input.open_issues == 1)
+    deliver(c, report('clean', nil, {{id = 'issue-1', status = 'resolved', evidence = 'Verified fix'}}))
+    assert(env.finals[1].kind == 'ready')
+    assert(issues.read().issues[1].status == 'resolved')
+    disposed(c)
 end
 function tests.two_repairs_exhausted()
     local c = setup(); queue(c); deliver(c, report('findings', {finding()}))
@@ -340,7 +476,7 @@ function tests.enumeration_failure()
         local c = setup()
         if phase == 'acceptance' then queue(c) end
         env.enumeration_error = 'snapshot enumeration failed'
-        if phase == 'capture' then c:attempt('held draft', 'ready'); c:poll()
+        if phase == 'capture' then c:attempt('held draft', 'review'); c:poll()
         else deliver(c, clean) end
         blocked(c, 'snapshot enumeration failed')
         assert(#env.resumes == 0 and not env.telemetry.ok)
@@ -361,7 +497,7 @@ function tests.save_failures()
                 if writes >= fail_at then return false end
                 raw = next_raw; return true
             end}
-        c:attempt('held draft', 'ready'); c:poll()
+        c:attempt('held draft', 'review'); c:poll()
         if phase ~= 'begin' then deliver(c, clean) end
         blocked(c, 'Could not save issues'); assert(#env.resumes == 0)
         agent = nil
@@ -370,7 +506,7 @@ end
 function tests.timeout_without_http()
     for _, stage in ipairs({'queued', 'reviewing', 'parent_fixes'}) do
         local c = setup()
-        if stage == 'queued' then env.busy = true; c:attempt('held draft', 'ready'); c:poll()
+        if stage == 'queued' then env.busy = true; c:attempt('held draft', 'review'); c:poll()
         else queue(c); if stage == 'parent_fixes' then deliver(c, report('findings', {finding()})) end end
         assert(c.stage == stage)
         env.clock = 10000; c:poll(); blocked(c, 'deadline exceeded')
@@ -379,7 +515,7 @@ end
 function tests.cancellation()
     for _, stage in ipairs({'queued', 'reviewing', 'parent_fixes'}) do
         local c = setup()
-        if stage == 'queued' then c:attempt('held draft', 'ready')
+        if stage == 'queued' then c:attempt('held draft', 'review')
         else queue(c); if stage == 'parent_fixes' then deliver(c, report('findings', {finding()})) end end
         env.cancelled = true; c:poll()
         assert(c.stage == 'cancelled' and env.cancels == 1 and #env.finals == 0)
@@ -496,6 +632,39 @@ function tests.denial_sticky_dispatch()
     read({path='a',limit=3}); read({path='a'})
     assert(c.reviewer.access_error==fatal)
     deliver(c,clean); blocked(c,'path unavailable')
+end
+function tests.structured_verdict_tool_dispatch()
+    local reviewer = {}
+    local captured
+    local function reject_continue()
+        error('structured verdict must terminate the reviewer run, not continue')
+    end
+    dispatch.handle_tool_calls({}, {env.tool, controller.submit_review_tool},
+        {{id = 'submit', name = 'submit_review', arguments = json.encode({
+            verdict = 'clean', summary = 'ok',
+            findings = json.array({}), checks = json.array({}),
+        })}}, '', reject_continue,
+        {reviewer = reviewer, reviewer_verdict = function(raw) captured = raw end,
+         silent_tools = true, tools = {env.tool, controller.submit_review_tool}, callbacks = {}})
+    assert(captured ~= nil and json.decode(captured).verdict == 'clean')
+    assert(reviewer.submitted and reviewer.submitted.verdict == 'clean')
+    assert(reviewer.submitted_raw == captured)
+end
+function tests.submit_review_incomplete_is_recoverable()
+    local reviewer = { snapshot = { access_complete = function()
+        return false, '"agent/runtime.lua" offset=48000'
+    end } }
+    local continued = false
+    dispatch.handle_tool_calls({}, {env.tool, controller.submit_review_tool},
+        {{id = 'submit', name = 'submit_review', arguments = json.encode({
+            verdict = 'clean', summary = 'ok',
+            findings = json.array({}), checks = json.array({}),
+        })}}, '', function() continued = true end,
+        {reviewer = reviewer, reviewer_verdict = function() error('premature verdict must not finalize') end,
+         silent_tools = true, tools = {env.tool, controller.submit_review_tool}, callbacks = {}})
+    assert(continued, 'premature submit_review must continue, not terminate the run')
+    assert(reviewer.submitted_raw == nil and reviewer.submitted == nil,
+        'verdict must not be recorded while unread pages remain')
 end
 local names = {}; for name in pairs(tests) do names[#names + 1] = name end; table.sort(names)
 local failures = 0
