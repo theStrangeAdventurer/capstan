@@ -7,7 +7,9 @@ local M = {}
 
 -- One bounded UI cache, not request telemetry. Only extending the same owner's
 -- conversation/model may reuse a measured input count while awaiting fresh usage.
-local last_context
+-- Per-owner scoped so background reviews and subagents don't clobber the
+-- foreground run's cached prompt token count.
+local contexts = {}
 local function copy_value(value)
     if type(value) ~= 'table' then return value end
     local out = {}
@@ -22,8 +24,8 @@ local function equal(a, b)
 end
 function M.usage_context(provider, owner, messages, provider_name)
     if provider.suppress_agent_state then return nil end
-    local previous = last_context
-    local extends = previous and previous.owner == owner and previous.provider == provider_name and
+    local previous = contexts[owner]
+    local extends = previous and previous.provider == provider_name and
         previous.model == provider.model and previous.endpoint == provider.endpoint and
         #previous.messages > 0 and #messages >= #previous.messages
     if extends then
@@ -31,9 +33,9 @@ function M.usage_context(provider, owner, messages, provider_name)
             if not equal(message, messages[i]) then extends = false; break end
         end
     end
-    local context = {owner = owner, provider = provider_name, model = provider.model, endpoint = provider.endpoint,
+    local context = {provider = provider_name, model = provider.model, endpoint = provider.endpoint,
         messages = copy_value(messages), prompt = extends and previous.prompt or nil}
-    last_context = context
+    contexts[owner] = context
     return context
 end
 

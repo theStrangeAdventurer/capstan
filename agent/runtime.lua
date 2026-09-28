@@ -657,7 +657,7 @@ local function run_impl(opts, callbacks, run_span)
     })
     msgs = messages_ctx.messages or msgs
     local usage_context = opts.update_usage ~= false and
-        stream.usage_context(active, opts.process_owner, msgs, provider_name) or nil
+        stream.usage_context(active, opts.usage_owner or opts.process_owner, msgs, provider_name) or nil
 
     local review_settings, review_error = completion_review_settings(opts,profile,tonumber(opts.depth) or 0)
     local caps=config_table('capabilities')
@@ -1288,6 +1288,16 @@ function M.run(opts, callbacks)
     opts.process_owner = opts.process_owner or opts.mcp_scope or
         (agent and type(agent.session_id) == "function" and agent.session_id()) or
         ("unowned:" .. tostring(opts))
+    -- Usage cache is scoped so foreground conversation history isn't
+    -- overwritten by background reviews or subagents that share the
+    -- same process_owner but have different message sets.
+    if not opts.usage_owner then
+        if opts.background or (tonumber(opts.depth) or 0) > 0 then
+            opts.usage_owner = opts.process_owner .. ":" .. tostring({})
+        else
+            opts.usage_owner = opts.process_owner
+        end
+    end
     opts.workdir = opts.workdir or workspace.configured_workdir()
     opts.workspace_root = opts.workspace_root or workspace.configured_workspace_root()
     opts.system_prompt = opts.system_prompt or _G.system_prompt or ""
