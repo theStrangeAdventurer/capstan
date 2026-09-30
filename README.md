@@ -8,7 +8,7 @@
 
 *If you find this project interesting, consider giving it a ⭐ — it helps more people discover Capstan.*
 
-![Capstan terminal demo](docs/assets/demo.gif)
+![Capstan in different terminal themes](docs/assets/themes-demo.gif)
 
 Capstan combines a native ncurses interface, headless automation, explicit tool
 permissions, profiles, skills, ACP, MCP, and parallel subagents in one compact
@@ -17,17 +17,17 @@ without rebuilding the core.
 
 ## Competitive results, dramatically lower local overhead
 
-In the latest exploratory Aider Polyglot comparison, Capstan and OpenCode both
-passed **36/36** upstream test runs. Capstan used about **6.8x less median local
-CPU** and **54x less median main-process RSS** (20.3 MiB vs 1100.9 MiB), but its
-aggregate agent wall time was **51% longer**. Both agents used direct DeepSeek
-V4 Pro with medium reasoning across the same 12 tasks, repeated three times.
+In the latest Aider Polyglot comparison, Capstan passed **24/24** and OpenCode
+passed **23/24** upstream test runs. Capstan used about **4.6× less aggregate
+local CPU** and **~20× less peak main-process RSS** (59 MiB vs 1177 MiB), while
+completing the aggregate agent wall time **~23% faster**. Both agents used
+DeepSeek V4 Pro with medium reasoning through OpenRouter across the same 12
+tasks, repeated twice.
 
-[See the exploratory run and trace analysis.](benchmarks/historical/polyglot-direct-prompt-20260829/README.md)
-The Capstan worktree was dirty, so this run is research evidence rather than a
-publishable release result. The [published benchmark report](benchmarks/REPORT.md)
-and reproducible harness remain available separately. Results are workload-,
-provider-, model-, and machine-specific.
+[See the full run report and per-task breakdown.](benchmarks/historical/polyglot-openrouter-20260828/README.md)
+The [published benchmark report](benchmarks/REPORT.md) and reproducible harness
+remain available separately. Results are workload-, provider-, model-, and
+machine-specific.
 
 ## Highlights
 
@@ -143,32 +143,28 @@ tool-provided images.
 
 ## Benchmark: Capstan vs OpenCode
 
-The latest exploratory 72-attempt Aider Polyglot comparison used direct
-DeepSeek V4 Pro, medium reasoning, public prompts, upstream tests, and a
-240-second timeout for both agents.
+The latest Aider Polyglot comparison used DeepSeek V4 Pro, medium reasoning,
+OpenRouter, public prompts, upstream tests, and a 240-second timeout for both
+agents across 12 tasks, repeated twice.
 
 | Metric | Capstan | OpenCode |
 |---|---:|---:|
-| Upstream tests passed | 36/36 (100%) | 36/36 (100%) |
-| Total agent wall time | 2605.2s | **1724.8s** |
-| Median agent wall time | 67.5s | **32.0s** |
-| p95 agent wall time | 177.1s | **131.5s** |
-| Total local CPU time | **118.2s** | 632.8s |
-| Median local CPU time | **1.92s** | 13.04s |
-| Median main-process peak RSS | **20.3 MiB** | 1100.9 MiB |
-| Highest main-process peak RSS | **29.3 MiB** | 1181.4 MiB |
+| Upstream tests passed | **24/24 (100%)** | 23/24 (95.8%) |
+| Total agent wall time | **1538.5s** | 2002.2s |
+| Median agent wall time | **46.7s** | 59.5s |
+| p95 agent wall time | **176.0s** | 240.1s |
+| Total local CPU time | **61.6s** | 286.4s |
+| Peak main-process RSS | **59.0 MiB** | 1177.3 MiB |
 
-On this workload, Capstan used **81.3% less aggregate local CPU** and about
-**54x less median main-process RSS**, while taking **51.0% more aggregate agent
-wall time**. The harness samples only the primary agent PID every 50 ms,
-excluding child compilers, test runners, and tool processes. Both agents passed
-every upstream test run.
+On this workload, Capstan used **78.5% less aggregate local CPU** and about
+**~20× less peak main-process RSS**, while completing the aggregate agent wall
+time **23.2% faster**. OpenCode's only failure was `python/pov` hitting the
+240-second agent timeout in the second run. The harness samples only the primary
+agent PID every 50 ms, excluding child compilers, test runners, and tool
+processes. Wall time covers agent activity excluding harness bookkeeping.
 
-The Capstan worktree contained uncommitted prompt and runtime changes under
-evaluation, so this is an exploratory result rather than a publishable release
-benchmark. See the [run report and trace analysis](benchmarks/historical/polyglot-direct-prompt-20260829/README.md),
-[compact attempt data](benchmarks/historical/polyglot-direct-prompt-20260829/attempts.csv),
-[published benchmark report](benchmarks/REPORT.md), and
+See the [run report and per-task breakdown](benchmarks/historical/polyglot-openrouter-20260828/README.md),
+the [published benchmark report](benchmarks/REPORT.md), and the
 [reproducible harness](benchmarks/README.md). Results are workload-, provider-,
 model-, and machine-specific.
 
