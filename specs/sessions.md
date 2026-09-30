@@ -33,6 +33,10 @@ headless runs.
   profile selections and interactive launch provider/model/reasoning overrides.
   Until that request succeeds,
   the UTF-8-safe beginning of the first user message is used as a local fallback.
+  Fallback normalization reserves space for a pending whitespace separator,
+  the next byte, and the terminating NUL, including at the scratch-buffer limit.
+  Long first messages must not crash autosave or title updates; `/session/title`
+  tests cover whitespace and multibyte text at that boundary.
   Generation runs as background HTTP work without tools or a loading spinner,
   does not enter conversation history or append to the visible assistant
   response, does not invoke `after_agent_turn` hooks, and is not canceled by

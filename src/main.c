@@ -18,6 +18,7 @@
 #include "session.h"
 #include "session_manager.h"
 #include "tui.h"
+#include "terminal_guard.h"
 #include "process_manager.h"
 #include "background_work.h"
 #include "process_panel.h"
@@ -1595,6 +1596,7 @@ int main(int argc, char *argv[]) {
     return 1;
 
   set_escdelay(50);
+  terminal_guard_start();
   initscr();
   /* Deliver control keys immediately instead of waiting for a cooked line. */
   cbreak();
@@ -1625,6 +1627,7 @@ int main(int argc, char *argv[]) {
     terminal_disable_bracketed_paste();
     terminal_reset_mouse_modes();
     endwin();
+    terminal_guard_stop();
     plugins_cleanup();
     fprintf(stderr, "capstan: %s\n", cli_error);
     return 2;
@@ -1643,6 +1646,7 @@ int main(int argc, char *argv[]) {
       terminal_disable_bracketed_paste();
       terminal_reset_mouse_modes();
       endwin();
+      terminal_guard_stop();
       plugins_cleanup();
       fprintf(stderr, "capstan: could not load or create session '%s'\n",
               cli.session_id);
@@ -1892,6 +1896,7 @@ int main(int argc, char *argv[]) {
   terminal_disable_bracketed_paste();
   terminal_reset_mouse_modes();
   endwin();
+  terminal_guard_stop();
   plugin_registry_cleanup();
   plugins_cleanup();
   system("reset");

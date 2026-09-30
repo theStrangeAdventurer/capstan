@@ -326,6 +326,24 @@ static MunitResult test_title(const MunitParameter params[], void *data) {
   munit_assert_string_equal(title, "длинное на…");
   session_title_from_text("\n\t", title, sizeof(title));
   munit_assert_string_equal(title, "New session");
+
+  /* A pending space must not consume the last slot before the terminator. */
+  char long_text[SESSION_TITLE_SIZE * 4 + 16];
+  size_t boundary = SESSION_TITLE_SIZE * 4 - 2;
+  memset(long_text, 'a', boundary);
+  strcpy(long_text + boundary, " \t\nZ trailing");
+  session_title_from_text(long_text, title, sizeof(title));
+  munit_assert_string_equal(title, "aaaaaaaaaaaaaaaaaaaa…");
+  /* Adjacent boundaries, no whitespace, and multibyte input remain bounded. */
+  for (size_t n = boundary - 4; n <= boundary + 4; n++) {
+    memset(long_text, 'a', n);
+    strcpy(long_text + n, " я");
+    session_title_from_text(long_text, title, sizeof(title));
+    munit_assert_string_equal(title, "aaaaaaaaaaaaaaaaaaaa…");
+    long_text[n] = '\0';
+    session_title_from_text(long_text, title, sizeof(title));
+    munit_assert_string_equal(title, "aaaaaaaaaaaaaaaaaaaa…");
+  }
   return MUNIT_OK;
 }
 

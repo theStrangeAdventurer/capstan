@@ -42,6 +42,17 @@ types used by macOS terminals, tmux, and screen-compatible environments.
 
 ## Constraints
 
+- The interactive runtime captures terminal attributes before `initscr()`.
+  On SIGABRT, SIGSEGV, SIGBUS, SIGILL, or SIGFPE, `terminal_guard` makes a
+  best-effort restoration of those attributes, disables mouse/paste modes,
+  leaves the alternate screen and shows the cursor. It then re-raises the
+  original signal with default disposition, preserving OS crash diagnostics.
+  The handler uses only async-signal-safe operations; it does not save sessions
+  or invoke ncurses, Lua, logging, or heap cleanup. Forked children do not
+  restore their parent's terminal. CLI/ACP modes do not install this guard.
+  SIGKILL and a terminal that no longer accepts writes cannot be recovered.
+  `make test-terminal-guard` exercises restoration in a pseudo-terminal.
+
 - Capstan still respects explicit user overrides through `TERMINFO` and
   `TERMINFO_DIRS`.
 - The project does not bundle the full terminfo database beside the binary.

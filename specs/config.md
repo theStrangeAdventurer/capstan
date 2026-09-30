@@ -53,6 +53,7 @@ return {
     max_duration_sec = 2700,
     stream_timeout_sec = 300,
     max_stream_retries = 1,
+    max_tokens = 32000,
     max_tool_calls = 0,
     max_same_tool_call = 0,
     max_same_shell_command = 0,
@@ -148,6 +149,16 @@ return {
   server failure only before it has emitted text, so a stalled transport cannot
   leave an agent run waiting indefinitely or duplicate a visible answer. Their
   defaults are 300 seconds and one retry.
+- `agent.max_tokens` sets the `max_tokens` field in every chat-completions
+  request body. The default is `32000`; `0` omits the field entirely, deferring
+  to the provider's default (often unlimited). Unlike OpenAI's `max_completion_tokens`,
+  this applies to all tokens including reasoning. Values above the active model's
+  context limit are clamped silently by the provider.
+  Resolution order (first match wins): `providers.<name>.max_tokens_by_model["model/id"]` →
+  `providers.<name>.max_tokens` → `agent.max_tokens` → `32000`.
+  `0` at any level skips the field for that request, overriding all lower
+  priorities. The resolved integer is sent raw; neither the runtime nor provider
+  configuration mutate each other.
 - `agent.completion_review` enables the independent [completion gate](completion-review.md),
   triggered only by an explicit `request_completion` `review` status, never by
   ordinary `ready` completion. It defaults to `false`; `true` enables defaults.

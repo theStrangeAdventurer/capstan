@@ -405,7 +405,10 @@ void session_title_from_text(const char *text, char *title, size_t title_size) {
       space = out > 0;
       continue;
     }
-    if (space && out + 1 < sizeof(normalized))
+    /* Reserve both the pending separator and the terminating NUL. */
+    if (out + (space ? 2 : 1) >= sizeof(normalized))
+      break;
+    if (space)
       normalized[out++] = ' ';
     space = 0;
     normalized[out++] = (char)ch;

@@ -49,6 +49,10 @@ test-acp: $(TARGET)
 test-tui-input: $(TARGET)
 	python3 test/test_tui_wait_input.py $(TARGET)
 
+.PHONY: test-terminal-guard
+test-terminal-guard: $(TARGET)
+	python3 test/test_terminal_guard.py $(TARGET)
+
 test-openrouter-vision:
 	sh test/test_openrouter_vision.sh
 

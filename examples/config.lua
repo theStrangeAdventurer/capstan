@@ -38,6 +38,12 @@ return {
     max_duration_sec = 2700,
     stream_timeout_sec = 300,
     max_stream_retries = 1,
+    -- max_tokens hierarchy: model > provider > agent > default (32000). 0 omits.
+    -- providers.openrouter.max_tokens = 8000                  -- provider-level
+    -- providers.openrouter.max_tokens_by_model = {             -- model-level
+    --   ["deepseek/deepseek-v4-pro"] = 16000,
+    -- }
+    max_tokens = 32000,
     completion_review = { -- false/true remain supported
       enabled = false,
       max_fix_cycles = 2,

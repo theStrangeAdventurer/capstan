@@ -1110,6 +1110,27 @@ local function run_impl(opts, callbacks, run_span)
         }
         apply_request_reasoning(request, active, effort, opts)
 
+        -- Hierarchical max_tokens: model > provider > agent > default (32000).
+        -- 0 at any level means "omit the field".
+        local function resolve_max_tokens(provider, agent_config)
+            local model_id = provider.model
+            if provider.max_tokens_by_model and type(provider.max_tokens_by_model) == "table" then
+                local model_max = tonumber(provider.max_tokens_by_model[model_id])
+                if model_max ~= nil then return model_max end
+            end
+            local provider_max = tonumber(provider.max_tokens)
+            if provider_max ~= nil then return provider_max end
+            if agent_config then
+                local agent_max = tonumber(agent_config.max_tokens)
+                if agent_max ~= nil then return agent_max end
+            end
+            return 32000
+        end
+        local max_tokens = resolve_max_tokens(active, config_table("agent"))
+        if max_tokens > 0 then
+            request.max_tokens = max_tokens
+        end
+
         local headers = {
             ["Content-Type"] = "application/json",
         }
