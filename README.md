@@ -20,9 +20,9 @@ without rebuilding the core.
 In the latest Aider Polyglot comparison, Capstan passed **24/24** and OpenCode
 passed **23/24** upstream test runs. Capstan used about **4.6× less aggregate
 local CPU** and **~20× less peak main-process RSS** (59 MiB vs 1177 MiB), while
-completing the aggregate agent wall time **~23% faster**. Both agents used
-DeepSeek V4 Pro with medium reasoning through OpenRouter across the same 12
-tasks, repeated twice.
+completing the aggregate agent wall time **~23% faster** (1582s vs 2048s). Both
+agents used DeepSeek V4 Pro with medium reasoning through OpenRouter across the
+same 12 tasks, repeated twice.
 
 [See the full run report and per-task breakdown.](benchmarks/historical/polyglot-openrouter-20260828/README.md)
 The [published benchmark report](benchmarks/REPORT.md) and reproducible harness
@@ -150,15 +150,15 @@ agents across 12 tasks, repeated twice.
 | Metric | Capstan | OpenCode |
 |---|---:|---:|
 | Upstream tests passed | **24/24 (100%)** | 23/24 (95.8%) |
-| Total agent wall time | **1538.5s** | 2002.2s |
-| Median agent wall time | **46.7s** | 59.5s |
-| p95 agent wall time | **176.0s** | 240.1s |
+| Total agent wall time | **1582.1s** | 2047.9s |
+| Median agent wall time | **46.7s** | 55.2s |
+| p95 agent wall time | **132.7s** | 237.5s |
 | Total local CPU time | **61.6s** | 286.4s |
 | Peak main-process RSS | **59.0 MiB** | 1177.3 MiB |
 
 On this workload, Capstan used **78.5% less aggregate local CPU** and about
 **~20× less peak main-process RSS**, while completing the aggregate agent wall
-time **23.2% faster**. OpenCode's only failure was `python/pov` hitting the
+time **22.7% faster**. OpenCode's only failure was `python/pov` hitting the
 240-second agent timeout in the second run. The harness samples only the primary
 agent PID every 50 ms, excluding child compilers, test runners, and tool
 processes. Wall time covers agent activity excluding harness bookkeeping.

@@ -1,0 +1,1646 @@
+[
+  {
+    "attempt": {
+      "attempt_id": "de0211b10b3b46c79f943422056da132",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "cpp/clock",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "cpp/clock",
+    "language": "cpp",
+    "status": "passed",
+    "seconds": 39.391,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/clock",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/clock",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 36.909,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 2.2897,
+        "system_cpu_seconds": 0.3551,
+        "cpu_seconds": 2.6448,
+        "max_rss_bytes": 22380544,
+        "max_rss_mib": 21.344,
+        "wait4_max_rss_bytes": 390660096,
+        "wait4_max_rss_mib": 372.562
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/agent-trace.jsonl",
+        "observed_events": 28,
+        "run_id": "1790781739212-38923-4231471621",
+        "correlation": {
+          "legacy_run_id": "1790781739212-38923-4231471621"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 7,
+          "duration_ms": 36880,
+          "timing": {
+            "process_duration_ms": 36880,
+            "startup_ms": 9,
+            "agent_wall_ms": 36871,
+            "agent_runtime_ms": 34894,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 7,
+            "tool_calls": 6
+          },
+          "breakdown": {
+            "model_ms": 31791,
+            "tool_ms": 3068,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 35,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "cmake",
+            "-S",
+            ".",
+            "-B",
+            "build"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.237,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.1542,
+            "system_cpu_seconds": 0.0957,
+            "cpu_seconds": 0.2499,
+            "max_rss_bytes": 16515072,
+            "max_rss_mib": 15.75,
+            "wait4_max_rss_bytes": 37552128,
+            "wait4_max_rss_mib": 35.812
+          }
+        },
+        {
+          "command": [
+            "cmake",
+            "--build",
+            "build",
+            "-j2"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.183,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/test-2.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 1.8943,
+            "system_cpu_seconds": 0.1708,
+            "cpu_seconds": 2.0651,
+            "max_rss_bytes": 10928128,
+            "max_rss_mib": 10.422,
+            "wait4_max_rss_bytes": 390496256,
+            "wait4_max_rss_mib": 372.406
+          }
+        },
+        {
+          "command": [
+            "ctest",
+            "--test-dir",
+            "build",
+            "--output-on-failure"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.062,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/test-3.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.0029,
+            "system_cpu_seconds": 0.006,
+            "cpu_seconds": 0.0089,
+            "max_rss_bytes": 475136,
+            "max_rss_mib": 0.453,
+            "wait4_max_rss_bytes": 11747328,
+            "wait4_max_rss_mib": 11.203
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/cpp--clock/score/clock"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "fa605c4215e24807becc8de6be9f3765",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "cpp/grade-school",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "cpp/grade-school",
+    "language": "cpp",
+    "status": "passed",
+    "seconds": 39.133,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/grade-school",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/grade-school",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 36.621,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 2.3225,
+        "system_cpu_seconds": 0.3265,
+        "cpu_seconds": 2.649,
+        "max_rss_bytes": 24526848,
+        "max_rss_mib": 23.391,
+        "wait4_max_rss_bytes": 390135808,
+        "wait4_max_rss_mib": 372.062
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/agent-trace.jsonl",
+        "observed_events": 28,
+        "run_id": "1790781778611-39575-4231511020",
+        "correlation": {
+          "legacy_run_id": "1790781778611-39575-4231511020"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 7,
+          "duration_ms": 36587,
+          "timing": {
+            "process_duration_ms": 36587,
+            "startup_ms": 9,
+            "agent_wall_ms": 36578,
+            "agent_runtime_ms": 35248,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 7,
+            "tool_calls": 6
+          },
+          "breakdown": {
+            "model_ms": 32286,
+            "tool_ms": 2922,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 40,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "cmake",
+            "-S",
+            ".",
+            "-B",
+            "build"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.233,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.1669,
+            "system_cpu_seconds": 0.0967,
+            "cpu_seconds": 0.2636,
+            "max_rss_bytes": 16449536,
+            "max_rss_mib": 15.688,
+            "wait4_max_rss_bytes": 37470208,
+            "wait4_max_rss_mib": 35.734
+          }
+        },
+        {
+          "command": [
+            "cmake",
+            "--build",
+            "build",
+            "-j2"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.223,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/test-2.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 1.9071,
+            "system_cpu_seconds": 0.1682,
+            "cpu_seconds": 2.0753,
+            "max_rss_bytes": 10911744,
+            "max_rss_mib": 10.406,
+            "wait4_max_rss_bytes": 390037504,
+            "wait4_max_rss_mib": 371.969
+          }
+        },
+        {
+          "command": [
+            "ctest",
+            "--test-dir",
+            "build",
+            "--output-on-failure"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.056,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/test-3.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.0026,
+            "system_cpu_seconds": 0.0023,
+            "cpu_seconds": 0.0049,
+            "max_rss_bytes": 376832,
+            "max_rss_mib": 0.359,
+            "wait4_max_rss_bytes": 11730944,
+            "wait4_max_rss_mib": 11.188
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/cpp--grade-school/score/grade-school"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "72b8e8a8ffa641c899ebeaebe1c95b53",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "go/protein-translation",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "go/protein-translation",
+    "language": "go",
+    "status": "passed",
+    "seconds": 28.349,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/go--protein-translation/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/go--protein-translation/protein-translation",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/go--protein-translation/protein-translation",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/go--protein-translation/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 27.787,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/go--protein-translation/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 0.3259,
+        "system_cpu_seconds": 0.2403,
+        "cpu_seconds": 0.5662,
+        "max_rss_bytes": 23019520,
+        "max_rss_mib": 21.953,
+        "wait4_max_rss_bytes": 89309184,
+        "wait4_max_rss_mib": 85.172
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/go--protein-translation/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/go--protein-translation/agent-trace.jsonl",
+        "observed_events": 20,
+        "run_id": "1790781817755-40205-4231550163",
+        "correlation": {
+          "legacy_run_id": "1790781817755-40205-4231550163"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 5,
+          "duration_ms": 27761,
+          "timing": {
+            "process_duration_ms": 27761,
+            "startup_ms": 8,
+            "agent_wall_ms": 27753,
+            "agent_runtime_ms": 26266,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 5,
+            "tool_calls": 4
+          },
+          "breakdown": {
+            "model_ms": 25471,
+            "tool_ms": 774,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 21,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.562,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/go--protein-translation/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.1478,
+            "system_cpu_seconds": 0.2297,
+            "cpu_seconds": 0.3775,
+            "max_rss_bytes": 31719424,
+            "max_rss_mib": 30.25,
+            "wait4_max_rss_bytes": 89030656,
+            "wait4_max_rss_mib": 84.906
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/go--protein-translation/score/protein-translation"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "ba21ea914c44439186becd8ad6328cdf",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "go/transpose",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "go/transpose",
+    "language": "go",
+    "status": "passed",
+    "seconds": 113.685,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/go--transpose/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/go--transpose/transpose",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/go--transpose/transpose",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/go--transpose/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 113.139,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/go--transpose/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 0.7048,
+        "system_cpu_seconds": 0.384,
+        "cpu_seconds": 1.0888,
+        "max_rss_bytes": 49348608,
+        "max_rss_mib": 47.062,
+        "wait4_max_rss_bytes": 89587712,
+        "wait4_max_rss_mib": 85.438
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/go--transpose/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/go--transpose/agent-trace.jsonl",
+        "observed_events": 20,
+        "run_id": "1790781846114-40434-4231578523",
+        "correlation": {
+          "legacy_run_id": "1790781846114-40434-4231578523"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 5,
+          "duration_ms": 113119,
+          "timing": {
+            "process_duration_ms": 113119,
+            "startup_ms": 11,
+            "agent_wall_ms": 113108,
+            "agent_runtime_ms": 111711,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 5,
+            "tool_calls": 4
+          },
+          "breakdown": {
+            "model_ms": 110875,
+            "tool_ms": 810,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 26,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.546,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/go--transpose/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.1306,
+            "system_cpu_seconds": 0.2231,
+            "cpu_seconds": 0.3537,
+            "max_rss_bytes": 30982144,
+            "max_rss_mib": 29.547,
+            "wait4_max_rss_bytes": 89423872,
+            "wait4_max_rss_mib": 85.281
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/go--transpose/score/transpose"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "be39a489dd434c8f83c452370f993c51",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "java/phone-number",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "java/phone-number",
+    "language": "java",
+    "status": "passed",
+    "seconds": 46.652,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/java--phone-number/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/java--phone-number/phone-number",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/java--phone-number/phone-number",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/java--phone-number/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 43.759,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/java--phone-number/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 0.6983,
+        "system_cpu_seconds": 0.1397,
+        "cpu_seconds": 0.838,
+        "max_rss_bytes": 24051712,
+        "max_rss_mib": 22.938,
+        "wait4_max_rss_bytes": 106741760,
+        "wait4_max_rss_mib": 101.797
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/java--phone-number/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/java--phone-number/agent-trace.jsonl",
+        "observed_events": 40,
+        "run_id": "1790781959802-41297-4231692211",
+        "correlation": {
+          "legacy_run_id": "1790781959802-41297-4231692211"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 8,
+          "duration_ms": 43709,
+          "timing": {
+            "process_duration_ms": 43709,
+            "startup_ms": 9,
+            "agent_wall_ms": 43700,
+            "agent_runtime_ms": 42297,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 8,
+            "tool_calls": 11
+          },
+          "breakdown": {
+            "model_ms": 41083,
+            "tool_ms": 1180,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 34,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "./gradlew",
+            "test",
+            "--no-daemon",
+            "--console",
+            "plain"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.893,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/java--phone-number/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.4809,
+            "system_cpu_seconds": 0.0581,
+            "cpu_seconds": 0.539,
+            "max_rss_bytes": 109346816,
+            "max_rss_mib": 104.281,
+            "wait4_max_rss_bytes": 109379584,
+            "wait4_max_rss_mib": 104.312
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/java--phone-number/score/phone-number"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "f284b5b7c4c546768657b310e7d7f0d8",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "java/series",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "java/series",
+    "language": "java",
+    "status": "passed",
+    "seconds": 22.538,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/java--series/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/java--series/series",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/java--series/series",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/java--series/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 19.75,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/java--series/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 0.6028,
+        "system_cpu_seconds": 0.1208,
+        "cpu_seconds": 0.7236,
+        "max_rss_bytes": 23592960,
+        "max_rss_mib": 22.5,
+        "wait4_max_rss_bytes": 106364928,
+        "wait4_max_rss_mib": 101.438
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/java--series/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/java--series/agent-trace.jsonl",
+        "observed_events": 36,
+        "run_id": "1790782006473-41666-4231738881",
+        "correlation": {
+          "legacy_run_id": "1790782006473-41666-4231738881"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 8,
+          "duration_ms": 19702,
+          "timing": {
+            "process_duration_ms": 19702,
+            "startup_ms": 14,
+            "agent_wall_ms": 19688,
+            "agent_runtime_ms": 18389,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 8,
+            "tool_calls": 9
+          },
+          "breakdown": {
+            "model_ms": 17476,
+            "tool_ms": 875,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 38,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "./gradlew",
+            "test",
+            "--no-daemon",
+            "--console",
+            "plain"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.788,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/java--series/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.4653,
+            "system_cpu_seconds": 0.0514,
+            "cpu_seconds": 0.5167,
+            "max_rss_bytes": 107790336,
+            "max_rss_mib": 102.797,
+            "wait4_max_rss_bytes": 107806720,
+            "wait4_max_rss_mib": 102.812
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/java--series/score/series"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "06646aaf00be457492d9c5c1ec67cc40",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "javascript/promises",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "javascript/promises",
+    "language": "javascript",
+    "status": "passed",
+    "seconds": 120.671,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/promises",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/promises",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 116.676,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 8.3191,
+        "system_cpu_seconds": 4.5154,
+        "cpu_seconds": 12.8345,
+        "max_rss_bytes": 43646976,
+        "max_rss_mib": 41.625,
+        "wait4_max_rss_bytes": 658571264,
+        "wait4_max_rss_mib": 628.062
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/agent-trace.jsonl",
+        "observed_events": 52,
+        "run_id": "1790782029020-41858-4231761429",
+        "correlation": {
+          "legacy_run_id": "1790782029020-41858-4231761429"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 13,
+          "duration_ms": 116615,
+          "timing": {
+            "process_duration_ms": 116615,
+            "startup_ms": 8,
+            "agent_wall_ms": 116607,
+            "agent_runtime_ms": 114998,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 13,
+            "tool_calls": 12
+          },
+          "breakdown": {
+            "model_ms": 83180,
+            "tool_ms": 31754,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 64,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "npm",
+            "install",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.402,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 2.639,
+            "system_cpu_seconds": 3.0799,
+            "cpu_seconds": 5.7189,
+            "max_rss_bytes": 689094656,
+            "max_rss_mib": 657.172,
+            "wait4_max_rss_bytes": 690814976,
+            "wait4_max_rss_mib": 658.812
+          }
+        },
+        {
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "--runInBand"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 1.593,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/test-2.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.4552,
+            "system_cpu_seconds": 0.089,
+            "cpu_seconds": 0.5442,
+            "max_rss_bytes": 71204864,
+            "max_rss_mib": 67.906,
+            "wait4_max_rss_bytes": 175407104,
+            "wait4_max_rss_mib": 167.281
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/javascript--promises/score/promises"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "d8f319b2f96c4867b58a3c1684cdd5d3",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "javascript/triangle",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "javascript/triangle",
+    "language": "javascript",
+    "status": "passed",
+    "seconds": 28.202,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/triangle",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/triangle",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 24.67,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 3.7503,
+        "system_cpu_seconds": 3.4509,
+        "cpu_seconds": 7.2012,
+        "max_rss_bytes": 25444352,
+        "max_rss_mib": 24.266,
+        "wait4_max_rss_bytes": 664748032,
+        "wait4_max_rss_mib": 633.953
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/agent-trace.jsonl",
+        "observed_events": 32,
+        "run_id": "1790782149705-43185-4231882114",
+        "correlation": {
+          "legacy_run_id": "1790782149705-43185-4231882114"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 8,
+          "duration_ms": 24639,
+          "timing": {
+            "process_duration_ms": 24639,
+            "startup_ms": 9,
+            "agent_wall_ms": 24630,
+            "agent_runtime_ms": 23360,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 8,
+            "tool_calls": 7
+          },
+          "breakdown": {
+            "model_ms": 19814,
+            "tool_ms": 3507,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 39,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "npm",
+            "install",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.416,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 2.5321,
+            "system_cpu_seconds": 3.1042,
+            "cpu_seconds": 5.6362,
+            "max_rss_bytes": 665501696,
+            "max_rss_mib": 634.672,
+            "wait4_max_rss_bytes": 667320320,
+            "wait4_max_rss_mib": 636.406
+          }
+        },
+        {
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "--runInBand"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 1.116,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/test-2.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.411,
+            "system_cpu_seconds": 0.081,
+            "cpu_seconds": 0.4919,
+            "max_rss_bytes": 71204864,
+            "max_rss_mib": 67.906,
+            "wait4_max_rss_bytes": 175439872,
+            "wait4_max_rss_mib": 167.312
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/javascript--triangle/score/triangle"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "4ca6462abc3f46cf9257d24fd90c571f",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "python/pov",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "python/pov",
+    "language": "python",
+    "status": "passed",
+    "seconds": 132.683,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/python--pov/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/python--pov/pov",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/python--pov/pov",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/python--pov/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 132.626,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/python--pov/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 0.6595,
+        "system_cpu_seconds": 0.1819,
+        "cpu_seconds": 0.8414,
+        "max_rss_bytes": 44957696,
+        "max_rss_mib": 42.875,
+        "wait4_max_rss_bytes": 61816832,
+        "wait4_max_rss_mib": 58.953
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/python--pov/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/python--pov/agent-trace.jsonl",
+        "observed_events": 28,
+        "run_id": "1790782177912-43633-4231910321",
+        "correlation": {
+          "legacy_run_id": "1790782177912-43633-4231910321"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 7,
+          "duration_ms": 132599,
+          "timing": {
+            "process_duration_ms": 132599,
+            "startup_ms": 9,
+            "agent_wall_ms": 132590,
+            "agent_runtime_ms": 131109,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 7,
+            "tool_calls": 6
+          },
+          "breakdown": {
+            "model_ms": 130924,
+            "tool_ms": 144,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 41,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "/opt/homebrew/opt/python@3.14/bin/python3.14",
+            "-m",
+            "unittest",
+            "discover",
+            "-p",
+            "*_test.py",
+            "-v"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.057,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/python--pov/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.0352,
+            "system_cpu_seconds": 0.01,
+            "cpu_seconds": 0.0452,
+            "max_rss_bytes": 344064,
+            "max_rss_mib": 0.328,
+            "wait4_max_rss_bytes": 21397504,
+            "wait4_max_rss_mib": 20.406
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/python--pov/score/pov"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "6b53c3fce39c4a0a851aeba7e0a62e35",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "python/forth",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "python/forth",
+    "language": "python",
+    "status": "passed",
+    "seconds": 46.228,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/python--forth/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/python--forth/forth",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/python--forth/forth",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/python--forth/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 46.166,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/python--forth/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 0.4361,
+        "system_cpu_seconds": 0.1194,
+        "cpu_seconds": 0.5555,
+        "max_rss_bytes": 32489472,
+        "max_rss_mib": 30.984,
+        "wait4_max_rss_bytes": 49332224,
+        "wait4_max_rss_mib": 47.047
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/python--forth/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/python--forth/agent-trace.jsonl",
+        "observed_events": 28,
+        "run_id": "1790782310601-44552-4232043010",
+        "correlation": {
+          "legacy_run_id": "1790782310601-44552-4232043010"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 7,
+          "duration_ms": 46145,
+          "timing": {
+            "process_duration_ms": 46145,
+            "startup_ms": 9,
+            "agent_wall_ms": 46136,
+            "agent_runtime_ms": 44690,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 7,
+            "tool_calls": 6
+          },
+          "breakdown": {
+            "model_ms": 44495,
+            "tool_ms": 161,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 34,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "/opt/homebrew/opt/python@3.14/bin/python3.14",
+            "-m",
+            "unittest",
+            "discover",
+            "-p",
+            "*_test.py",
+            "-v"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.062,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/python--forth/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.0385,
+            "system_cpu_seconds": 0.0104,
+            "cpu_seconds": 0.0489,
+            "max_rss_bytes": 491520,
+            "max_rss_mib": 0.469,
+            "wait4_max_rss_bytes": 21823488,
+            "wait4_max_rss_mib": 20.812
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/python--forth/score/forth"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "87596873073d49098651c79412c85655",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "rust/acronym",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "rust/acronym",
+    "language": "rust",
+    "status": "passed",
+    "seconds": 20.551,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/rust--acronym/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/rust--acronym/acronym",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/rust--acronym/acronym",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/rust--acronym/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 19.514,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/rust--acronym/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 0.5005,
+        "system_cpu_seconds": 0.3073,
+        "cpu_seconds": 0.8078,
+        "max_rss_bytes": 25182208,
+        "max_rss_mib": 24.016,
+        "wait4_max_rss_bytes": 123551744,
+        "wait4_max_rss_mib": 117.828
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/rust--acronym/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/rust--acronym/agent-trace.jsonl",
+        "observed_events": 28,
+        "run_id": "1790782356834-44876-4232089243",
+        "correlation": {
+          "legacy_run_id": "1790782356834-44876-4232089243"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 7,
+          "duration_ms": 19462,
+          "timing": {
+            "process_duration_ms": 19462,
+            "startup_ms": 10,
+            "agent_wall_ms": 19452,
+            "agent_runtime_ms": 17913,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 7,
+            "tool_calls": 6
+          },
+          "breakdown": {
+            "model_ms": 16330,
+            "tool_ms": 1550,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 33,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--quiet",
+            "--",
+            "--include-ignored"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 1.037,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/rust--acronym/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.2846,
+            "system_cpu_seconds": 0.1527,
+            "cpu_seconds": 0.4373,
+            "max_rss_bytes": 32243712,
+            "max_rss_mib": 30.75,
+            "wait4_max_rss_bytes": 129171456,
+            "wait4_max_rss_mib": 123.188
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/rust--acronym/score/acronym"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "8cb4c976acb147c595dab727fd6132ac",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "rust/word-count",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r2"
+    },
+    "task": "rust/word-count",
+    "language": "rust",
+    "status": "passed",
+    "seconds": 31.014,
+    "agent": {
+      "command": [
+        "/Users/alxd/narnia/capstan/build/capstan",
+        "run",
+        "--benchmark",
+        "--no-wiki",
+        "--provider",
+        "openrouter",
+        "--model",
+        "deepseek/deepseek-v4-pro",
+        "--profile",
+        "implement",
+        "--reasoning-effort",
+        "medium",
+        "--max-turns",
+        "40",
+        "--prompt-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/rust--word-count/prompt.md",
+        "--workdir",
+        "/private/tmp/capstan-polyglot-r2/tasks/rust--word-count/word-count",
+        "--workspace",
+        "/private/tmp/capstan-polyglot-r2/tasks/rust--word-count/word-count",
+        "--json",
+        "--trace-file",
+        "/private/tmp/capstan-polyglot-r2/tasks/rust--word-count/agent-trace.jsonl"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 29.949,
+      "log": "/private/tmp/capstan-polyglot-r2/tasks/rust--word-count/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 0.5892,
+        "system_cpu_seconds": 0.2498,
+        "cpu_seconds": 0.8391,
+        "max_rss_bytes": 36044800,
+        "max_rss_mib": 34.375,
+        "wait4_max_rss_bytes": 142147584,
+        "wait4_max_rss_mib": 135.562
+      },
+      "trace": "/private/tmp/capstan-polyglot-r2/tasks/rust--word-count/agent-trace.jsonl",
+      "telemetry": {
+        "status": "complete",
+        "complete": true,
+        "partial": false,
+        "source": "/private/tmp/capstan-polyglot-r2/tasks/rust--word-count/agent-trace.jsonl",
+        "observed_events": 30,
+        "run_id": "1790782377394-45164-4232109803",
+        "correlation": {
+          "legacy_run_id": "1790782377394-45164-4232109803"
+        },
+        "terminal": {
+          "ok": true,
+          "intended_exit_code": 0,
+          "failure_stage": "",
+          "turns": 6,
+          "duration_ms": 29883,
+          "timing": {
+            "process_duration_ms": 29883,
+            "startup_ms": 11,
+            "agent_wall_ms": 29872,
+            "agent_runtime_ms": 28593,
+            "session_save_ms": 0,
+            "post_agent_ms": 0,
+            "conservation_error_ms": 0
+          },
+          "counts": {
+            "model_requests": 6,
+            "tool_calls": 8
+          },
+          "breakdown": {
+            "model_ms": 27464,
+            "tool_ms": 1098,
+            "permission_wait_ms": 0,
+            "subagent_wait_ms": 0,
+            "unattributed_ms": 31,
+            "conservation_error_ms": 0
+          }
+        }
+      }
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--quiet",
+            "--",
+            "--include-ignored"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 1.065,
+          "log": "/private/tmp/capstan-polyglot-r2/tasks/rust--word-count/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.3974,
+            "system_cpu_seconds": 0.2008,
+            "cpu_seconds": 0.5981,
+            "max_rss_bytes": 32309248,
+            "max_rss_mib": 30.812,
+            "wait4_max_rss_bytes": 149094400,
+            "wait4_max_rss_mib": 142.188
+          }
+        }
+      ],
+      "workdir": "/private/tmp/capstan-polyglot-r2/tasks/rust--word-count/score/word-count"
+    }
+  }
+]

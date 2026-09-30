@@ -1,0 +1,28 @@
+{
+  "suite": "mini-v2",
+  "corpus": "/Users/alxd/narnia/capstan/benchmarks/work/polyglot-benchmark",
+  "corpus_commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+  "tasks": [
+    "cpp/clock",
+    "cpp/grade-school",
+    "go/protein-translation",
+    "go/transpose",
+    "java/phone-number",
+    "java/series",
+    "javascript/promises",
+    "javascript/triangle",
+    "python/pov",
+    "python/forth",
+    "rust/acronym",
+    "rust/word-count"
+  ],
+  "replicate_id": "r1",
+  "comparison_id": "deepseek-v4-pro-medium-openrouter",
+  "agent_command": "{repo_root}/build/capstan run --benchmark --no-wiki --provider openrouter --model deepseek/deepseek-v4-pro --profile implement --reasoning-effort medium --max-turns 40 --prompt-file {prompt_file} --workdir {workdir} --workspace {workdir} --json --trace-file {trace_file}",
+  "agent_timeout": 240,
+  "test_timeout": 300,
+  "comparable": true,
+  "telemetry_context": false,
+  "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+  "config_id": "a5dadc58f78634f609e7a9e06e0f506437d3f3071da92c511010f055b58efd5c"
+}

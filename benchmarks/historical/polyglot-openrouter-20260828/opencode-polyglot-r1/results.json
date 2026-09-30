@@ -1,0 +1,1034 @@
+[
+  {
+    "attempt": {
+      "attempt_id": "78ea1989a8e64cbbb52018b8823e486f",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "cpp/clock",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "cpp/clock",
+    "language": "cpp",
+    "status": "passed",
+    "seconds": 70.515,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/cpp--clock/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/cpp--clock/clock",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 67.828,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/cpp--clock/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 11.6928,
+        "system_cpu_seconds": 1.8075,
+        "cpu_seconds": 13.5003,
+        "max_rss_bytes": 1073709056,
+        "max_rss_mib": 1023.969,
+        "wait4_max_rss_bytes": 1073709056,
+        "wait4_max_rss_mib": 1023.969
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "cmake",
+            "-S",
+            ".",
+            "-B",
+            "build"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.225,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/cpp--clock/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.1437,
+            "system_cpu_seconds": 0.088,
+            "cpu_seconds": 0.2317,
+            "max_rss_bytes": 16498688,
+            "max_rss_mib": 15.734,
+            "wait4_max_rss_bytes": 37535744,
+            "wait4_max_rss_mib": 35.797
+          }
+        },
+        {
+          "command": [
+            "cmake",
+            "--build",
+            "build",
+            "-j2"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.4,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/cpp--clock/test-2.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 1.8757,
+            "system_cpu_seconds": 0.1732,
+            "cpu_seconds": 2.0489,
+            "max_rss_bytes": 10928128,
+            "max_rss_mib": 10.422,
+            "wait4_max_rss_bytes": 389758976,
+            "wait4_max_rss_mib": 371.703
+          }
+        },
+        {
+          "command": [
+            "ctest",
+            "--test-dir",
+            "build",
+            "--output-on-failure"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.062,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/cpp--clock/test-3.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.0027,
+            "system_cpu_seconds": 0.0026,
+            "cpu_seconds": 0.0053,
+            "max_rss_bytes": 655360,
+            "max_rss_mib": 0.625,
+            "wait4_max_rss_bytes": 11714560,
+            "wait4_max_rss_mib": 11.172
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/cpp--clock/score/clock"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "e9ff40af3a554833ae041a61e46f84be",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "cpp/grade-school",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "cpp/grade-school",
+    "language": "cpp",
+    "status": "passed",
+    "seconds": 44.1,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/cpp--grade-school/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/cpp--grade-school/grade-school",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 41.536,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/cpp--grade-school/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 8.3766,
+        "system_cpu_seconds": 1.4847,
+        "cpu_seconds": 9.8613,
+        "max_rss_bytes": 1138950144,
+        "max_rss_mib": 1086.188,
+        "wait4_max_rss_bytes": 1139441664,
+        "wait4_max_rss_mib": 1086.656
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "cmake",
+            "-S",
+            ".",
+            "-B",
+            "build"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.231,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/cpp--grade-school/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.1546,
+            "system_cpu_seconds": 0.0876,
+            "cpu_seconds": 0.2421,
+            "max_rss_bytes": 16498688,
+            "max_rss_mib": 15.734,
+            "wait4_max_rss_bytes": 37666816,
+            "wait4_max_rss_mib": 35.922
+          }
+        },
+        {
+          "command": [
+            "cmake",
+            "--build",
+            "build",
+            "-j2"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.273,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/cpp--grade-school/test-2.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 1.9461,
+            "system_cpu_seconds": 0.1909,
+            "cpu_seconds": 2.137,
+            "max_rss_bytes": 10911744,
+            "max_rss_mib": 10.406,
+            "wait4_max_rss_bytes": 389988352,
+            "wait4_max_rss_mib": 371.922
+          }
+        },
+        {
+          "command": [
+            "ctest",
+            "--test-dir",
+            "build",
+            "--output-on-failure"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.06,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/cpp--grade-school/test-3.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.0039,
+            "system_cpu_seconds": 0.0033,
+            "cpu_seconds": 0.0071,
+            "max_rss_bytes": 524288,
+            "max_rss_mib": 0.5,
+            "wait4_max_rss_bytes": 11763712,
+            "wait4_max_rss_mib": 11.219
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/cpp--grade-school/score/grade-school"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "8c741efb55ac4d6f86f4c696f5a8acc7",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "go/protein-translation",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "go/protein-translation",
+    "language": "go",
+    "status": "passed",
+    "seconds": 17.9,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/go--protein-translation/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/go--protein-translation/protein-translation",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 17.335,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/go--protein-translation/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 4.0061,
+        "system_cpu_seconds": 1.3371,
+        "cpu_seconds": 5.3432,
+        "max_rss_bytes": 1076772864,
+        "max_rss_mib": 1026.891,
+        "wait4_max_rss_bytes": 1077411840,
+        "wait4_max_rss_mib": 1027.5
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.565,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/go--protein-translation/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.1302,
+            "system_cpu_seconds": 0.1899,
+            "cpu_seconds": 0.3201,
+            "max_rss_bytes": 32112640,
+            "max_rss_mib": 30.625,
+            "wait4_max_rss_bytes": 89440256,
+            "wait4_max_rss_mib": 85.297
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/go--protein-translation/score/protein-translation"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "dc116876c14e4a99846316d96af26f68",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "go/transpose",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "go/transpose",
+    "language": "go",
+    "status": "passed",
+    "seconds": 113.015,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/go--transpose/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/go--transpose/transpose",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 112.45,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/go--transpose/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 12.905,
+        "system_cpu_seconds": 1.7575,
+        "cpu_seconds": 14.6625,
+        "max_rss_bytes": 1090961408,
+        "max_rss_mib": 1040.422,
+        "wait4_max_rss_bytes": 1091371008,
+        "wait4_max_rss_mib": 1040.812
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.565,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/go--transpose/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.1299,
+            "system_cpu_seconds": 0.2434,
+            "cpu_seconds": 0.3732,
+            "max_rss_bytes": 32096256,
+            "max_rss_mib": 30.609,
+            "wait4_max_rss_bytes": 89653248,
+            "wait4_max_rss_mib": 85.5
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/go--transpose/score/transpose"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "ac0f564dae3040b689badd7327a95319",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "java/phone-number",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "java/phone-number",
+    "language": "java",
+    "status": "passed",
+    "seconds": 109.093,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/java--phone-number/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/java--phone-number/phone-number",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 106.207,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/java--phone-number/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 11.5037,
+        "system_cpu_seconds": 1.509,
+        "cpu_seconds": 13.0127,
+        "max_rss_bytes": 1093468160,
+        "max_rss_mib": 1042.812,
+        "wait4_max_rss_bytes": 1093730304,
+        "wait4_max_rss_mib": 1043.062
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "./gradlew",
+            "test",
+            "--no-daemon",
+            "--console",
+            "plain"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.886,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/java--phone-number/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.4711,
+            "system_cpu_seconds": 0.0516,
+            "cpu_seconds": 0.5227,
+            "max_rss_bytes": 108445696,
+            "max_rss_mib": 103.422,
+            "wait4_max_rss_bytes": 108445696,
+            "wait4_max_rss_mib": 103.422
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/java--phone-number/score/phone-number"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "2e5bc8500a2942c28ca173643ccefbc6",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "java/series",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "java/series",
+    "language": "java",
+    "status": "passed",
+    "seconds": 40.749,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/java--series/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/java--series/series",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 38.016,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/java--series/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 5.9426,
+        "system_cpu_seconds": 1.2472,
+        "cpu_seconds": 7.1898,
+        "max_rss_bytes": 1105379328,
+        "max_rss_mib": 1054.172,
+        "wait4_max_rss_bytes": 1105756160,
+        "wait4_max_rss_mib": 1054.531
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "./gradlew",
+            "test",
+            "--no-daemon",
+            "--console",
+            "plain"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.733,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/java--series/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.4648,
+            "system_cpu_seconds": 0.0545,
+            "cpu_seconds": 0.5193,
+            "max_rss_bytes": 108576768,
+            "max_rss_mib": 103.547,
+            "wait4_max_rss_bytes": 108576768,
+            "wait4_max_rss_mib": 103.547
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/java--series/score/series"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "723d2c38f6e1477dba4f94feec8cbf6e",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "javascript/promises",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "javascript/promises",
+    "language": "javascript",
+    "status": "passed",
+    "seconds": 173.263,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/javascript--promises/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/javascript--promises/promises",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 169.302,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/javascript--promises/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 20.9134,
+        "system_cpu_seconds": 5.9596,
+        "cpu_seconds": 26.873,
+        "max_rss_bytes": 1083998208,
+        "max_rss_mib": 1033.781,
+        "wait4_max_rss_bytes": 1084260352,
+        "wait4_max_rss_mib": 1034.031
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "npm",
+            "install",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.397,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/javascript--promises/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 2.5113,
+            "system_cpu_seconds": 3.0115,
+            "cpu_seconds": 5.5228,
+            "max_rss_bytes": 665206784,
+            "max_rss_mib": 634.391,
+            "wait4_max_rss_bytes": 667090944,
+            "wait4_max_rss_mib": 636.188
+          }
+        },
+        {
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "--runInBand"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 1.564,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/javascript--promises/test-2.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.4118,
+            "system_cpu_seconds": 0.0843,
+            "cpu_seconds": 0.4961,
+            "max_rss_bytes": 71237632,
+            "max_rss_mib": 67.938,
+            "wait4_max_rss_bytes": 175013888,
+            "wait4_max_rss_mib": 166.906
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/javascript--promises/score/promises"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "c8469be7bc974f2e9fd82c7d2cc7c141",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "javascript/triangle",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "javascript/triangle",
+    "language": "javascript",
+    "status": "passed",
+    "seconds": 32.573,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/javascript--triangle/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/javascript--triangle/triangle",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 29.025,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/javascript--triangle/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 8.4748,
+        "system_cpu_seconds": 4.73,
+        "cpu_seconds": 13.2048,
+        "max_rss_bytes": 1067122688,
+        "max_rss_mib": 1017.688,
+        "wait4_max_rss_bytes": 1067401216,
+        "wait4_max_rss_mib": 1017.953
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "npm",
+            "install",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 2.422,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/javascript--triangle/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 2.5236,
+            "system_cpu_seconds": 3.0644,
+            "cpu_seconds": 5.588,
+            "max_rss_bytes": 653639680,
+            "max_rss_mib": 623.359,
+            "wait4_max_rss_bytes": 653934592,
+            "wait4_max_rss_mib": 623.641
+          }
+        },
+        {
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "--runInBand"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 1.126,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/javascript--triangle/test-2.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.4136,
+            "system_cpu_seconds": 0.0819,
+            "cpu_seconds": 0.4955,
+            "max_rss_bytes": 71106560,
+            "max_rss_mib": 67.812,
+            "wait4_max_rss_bytes": 174768128,
+            "wait4_max_rss_mib": 166.672
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/javascript--triangle/score/triangle"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "09f61cfb97b247239e3f02731a5f6ddb",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "python/pov",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "python/pov",
+    "language": "python",
+    "status": "passed",
+    "seconds": 97.224,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/python--pov/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/python--pov/pov",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 97.17,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/python--pov/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 11.8675,
+        "system_cpu_seconds": 1.5225,
+        "cpu_seconds": 13.39,
+        "max_rss_bytes": 1104674816,
+        "max_rss_mib": 1053.5,
+        "wait4_max_rss_bytes": 1105068032,
+        "wait4_max_rss_mib": 1053.875
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "/opt/homebrew/opt/python@3.14/bin/python3.14",
+            "-m",
+            "unittest",
+            "discover",
+            "-p",
+            "*_test.py",
+            "-v"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.054,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/python--pov/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.0248,
+            "system_cpu_seconds": 0.006,
+            "cpu_seconds": 0.0308,
+            "max_rss_bytes": 311296,
+            "max_rss_mib": 0.297,
+            "wait4_max_rss_bytes": 21446656,
+            "wait4_max_rss_mib": 20.453
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/python--pov/score/pov"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "19bc57b26cca4e88af815585bbf0c680",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "python/forth",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "python/forth",
+    "language": "python",
+    "status": "passed",
+    "seconds": 109.395,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/python--forth/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/python--forth/forth",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 109.333,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/python--forth/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 13.708,
+        "system_cpu_seconds": 1.6609,
+        "cpu_seconds": 15.3689,
+        "max_rss_bytes": 1130741760,
+        "max_rss_mib": 1078.359,
+        "wait4_max_rss_bytes": 1130840064,
+        "wait4_max_rss_mib": 1078.453
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "/opt/homebrew/opt/python@3.14/bin/python3.14",
+            "-m",
+            "unittest",
+            "discover",
+            "-p",
+            "*_test.py",
+            "-v"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 0.062,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/python--forth/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.0249,
+            "system_cpu_seconds": 0.0062,
+            "cpu_seconds": 0.0312,
+            "max_rss_bytes": 311296,
+            "max_rss_mib": 0.297,
+            "wait4_max_rss_bytes": 21872640,
+            "wait4_max_rss_mib": 20.859
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/python--forth/score/forth"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "26474aa8b729457bb8608a9913051d88",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "rust/acronym",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "rust/acronym",
+    "language": "rust",
+    "status": "passed",
+    "seconds": 43.711,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/rust--acronym/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/rust--acronym/acronym",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 42.696,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/rust--acronym/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 8.1145,
+        "system_cpu_seconds": 1.7623,
+        "cpu_seconds": 9.8767,
+        "max_rss_bytes": 1100103680,
+        "max_rss_mib": 1049.141,
+        "wait4_max_rss_bytes": 1100480512,
+        "wait4_max_rss_mib": 1049.5
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--quiet",
+            "--",
+            "--include-ignored"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 1.015,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/rust--acronym/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.2873,
+            "system_cpu_seconds": 0.1527,
+            "cpu_seconds": 0.44,
+            "max_rss_bytes": 32243712,
+            "max_rss_mib": 30.75,
+            "wait4_max_rss_bytes": 137789440,
+            "wait4_max_rss_mib": 131.406
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/rust--acronym/score/acronym"
+    }
+  },
+  {
+    "attempt": {
+      "attempt_id": "208e87d0c3f14e1a8af9b6dc1c8ef0ad",
+      "session_id": null,
+      "identity_transport": "harness_only",
+      "config_id": "f2b0fce846d5ac814ddc69877e404901830d050933b856081f89849d7ace631e",
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "task": "rust/word-count",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter",
+      "replicate_id": "r1"
+    },
+    "task": "rust/word-count",
+    "language": "rust",
+    "status": "passed",
+    "seconds": 22.277,
+    "agent": {
+      "command": [
+        "python3",
+        "/Users/alxd/narnia/capstan/benchmarks/polyglot/scripts/run_opencode.py",
+        "--prompt-file",
+        "/private/tmp/opencode-polyglot-r1/tasks/rust--word-count/prompt.md",
+        "--workdir",
+        "/private/tmp/opencode-polyglot-r1/tasks/rust--word-count/word-count",
+        "--model",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "--reasoning-effort",
+        "medium"
+      ],
+      "return_code": 0,
+      "timed_out": false,
+      "seconds": 21.16,
+      "log": "/private/tmp/opencode-polyglot-r1/tasks/rust--word-count/agent.log",
+      "resources": {
+        "measurement": "primary_pid_sample_50ms",
+        "user_cpu_seconds": 5.3705,
+        "system_cpu_seconds": 1.3762,
+        "cpu_seconds": 6.7467,
+        "max_rss_bytes": 1141587968,
+        "max_rss_mib": 1088.703,
+        "wait4_max_rss_bytes": 1141702656,
+        "wait4_max_rss_mib": 1088.812
+      },
+      "trace": null,
+      "telemetry": null
+    },
+    "tests": {
+      "passed": true,
+      "steps": [
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--quiet",
+            "--",
+            "--include-ignored"
+          ],
+          "return_code": 0,
+          "timed_out": false,
+          "seconds": 1.117,
+          "log": "/private/tmp/opencode-polyglot-r1/tasks/rust--word-count/test-1.log",
+          "resources": {
+            "measurement": "primary_pid_sample_50ms",
+            "user_cpu_seconds": 0.4002,
+            "system_cpu_seconds": 0.1958,
+            "cpu_seconds": 0.5959,
+            "max_rss_bytes": 32276480,
+            "max_rss_mib": 30.781,
+            "wait4_max_rss_bytes": 146472960,
+            "wait4_max_rss_mib": 139.688
+          }
+        }
+      ],
+      "workdir": "/private/tmp/opencode-polyglot-r1/tasks/rust--word-count/score/word-count"
+    }
+  }
+]
