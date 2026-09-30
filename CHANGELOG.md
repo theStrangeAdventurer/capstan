@@ -1,58 +1,58 @@
 # Capstan v0.4.0
 
-> **Дата:** 2026-10-01
-> **Диапазон:** `v0.3.0` (`5c90e77`) → `HEAD` (`2595005`) — 27 коммитов.
+> **Date:** 2026-10-01
+> **Range:** `v0.3.0` (`5c90e77`) → `HEAD` (`2595005`) — 27 commits.
 
-## Новые возможности
+## New Features
 
-### Агент и исполнение
-- **Фоновые субагенты** — независимые внутренние агенты в фоне: очередь, лимиты конкурентности, ретраи только на transient-ошибки, изоляция контекста и UI, отмена через `processes`.
-- **Управляемые фоновые процессы** — длительные команды в фоне с панелью контроля: статус, вывод и остановка.
-- **Иерархические `max_tokens`** — разрешение по цепочке model → provider → agent → default (32000), пример конфигурации в `examples/config.lua`.
+### Agent & Execution
+- **Background subagents** — independent internal agents running in the background: queue, concurrency limits, retries only on transient errors, context and UI isolation, cancellation via `processes`.
+- **Managed background processes** — long-running commands in the background with a control panel: status, output, and stop.
+- **Hierarchical `max_tokens`** — resolution chain: model → provider → agent → default (32000), with a configuration example in `examples/config.lua`.
 
-### Ревью и качество
-- **Фоновое ревью изменений** — явный запрос запускает проверку в фоне; найденные проблемы сохраняются в реестр `issues`, вердикты и автоисправления следуют протоколу.
-- **Реестр замечаний** — сохраняемые issues с привязкой к снимку, статусами и перепроверкой.
+### Review & Quality
+- **Background change review** — explicit request launches a background check; found issues are saved to the `issues` registry, verdicts and auto-fixes follow the protocol.
+- **Issues registry** — persistent issues linked to a snapshot, with statuses and re-verification.
 
-### Планирование
-- **Сохраняемые планы задач** — сессионный артефакт с панелью, статусами (`pending`/`in_progress`/`completed`/`blocked`/`cancelled`), пересмотром и очисткой.
+### Planning
+- **Persistent task plans** — session artifact with a panel, statuses (`pending`/`in_progress`/`completed`/`blocked`/`cancelled`), revision, and cleanup.
 
-### Наблюдаемость
-- **Нативный OpenTelemetry** — OTLP/HTTP-трейсы и логи (opt-in), унифицированные измерения запусков, диагностика сессий и структурированные lifecycle-логи.
+### Observability
+- **Native OpenTelemetry** — OTLP/HTTP traces and logs (opt-in), unified run measurements, session diagnostics, and structured lifecycle logs.
 
-### Интерфейс
-- **Markdown-рендеринг** — отрисовка с переносом строк, поддержкой Unicode и выделением текста.
-- **Анимированный стартовый экран** — безрамочный, с волновой анимацией.
-- **`terminal_guard`** — восстановление терминала при фатальных сигналах (SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE) через async-signal-safe `tcsetattr` + сброс ANSI-escape.
-- **Панель сведений о сессии** — по запросу.
-- **Статистика VCS в футере** — асинхронное отображение состояния рабочей копии.
-- **Уровень рассуждений профиля** — запоминание выбора и горячие клавиши настройки.
+### Interface
+- **Markdown rendering** — rendering with line wrapping, Unicode support, and text highlighting.
+- **Animated start screen** — borderless, with a wave animation.
+- **`terminal_guard`** — terminal recovery on fatal signals (SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE) via async-signal-safe `tcsetattr` + ANSI escape reset. Without it, a crash leaves the terminal unusable.
+- **Session info panel** — available on demand.
+- **VCS status in footer** — async display of working copy state.
+- **Profile reasoning level** — choice persistence and hotkey configuration.
 
-## Бенчмарк
-- **DeepSeek v4 Pro (OpenRouter): Capstan 24/24 (100%), OpenCode 23/24 (95.8%)** — 2 прогона по 12 задач.
-- CPU в 4.6× легче, RSS в 20× компактнее, wall time на 23% быстрее.
-- Обновлён демо-скринкаст с четырьмя темами (latte, dracula, nord, tokyonight).
+## Benchmark
+- **DeepSeek v4 Pro (OpenRouter): Capstan 24/24 (100%), OpenCode 23/24 (95.8%)** — 2 runs, 12 tasks each.
+- CPU usage 4.6× lower, RSS 20× smaller, wall time 23% faster.
+- Updated demo screencast with four themes (latte, dracula, nord, tokyonight).
 
-## Улучшения
-- Статистика использования сохраняется между возобновлениями сессии.
-- Соблюдение настроенных лимитов; ускорен цикл валидации агента.
-- Уточнено оформление TUI и работа viewport задач / буфера обмена.
-- Обновлена документация по бенчмаркам и руководству.
+## Improvements
+- Usage statistics persist across session resumes.
+- Enforced configured limits; faster agent validation cycle.
+- Refined TUI styling and task viewport / clipboard handling.
+- Updated benchmark documentation and guides.
 
-## Исправления
-- Граничный баг заголовков сессий: pending space не съедает последний байт перед NUL.
-- Корректный ввод во время ожидания и обработка вывода shell.
-- Сохранение сворачиваемого вывода shell при возобновлении сессии.
-- Учёт разрешений на внешние файлы; точный статус активности инструментов.
-- Удалена маршрутизация на «слабую» модель: сжатие контекста и служебные задачи используют активную модель.
-- Scope usage cache per owner: фоновые запуски не затирают счётчики foreground-сессии.
+## Fixes
+- Session header edge-case bug: pending space no longer eats the last byte before NUL.
+- Correct input handling during wait and shell output processing.
+- Collapsed shell output preserved across session resumes.
+- External file permission enforcement; accurate tool activity status.
+- Removed routing to a "weak" model: context compression and utility tasks now use the active model.
+- Scope usage cache per owner: background runs no longer overwrite foreground session counters.
 
-## Архитектура / рефакторинг
-- Baseline ревью — `HEAD` репозитория вместо снимка на момент запроса; учитываются новые, удалённые и существовавшие до запроса правки.
-- Baseline ревью маршрутизируется через VCS-адаптер; прямой хардкод `git` из контроллера убран. Неподдерживающие адаптеры завершаются с явной ошибкой (fail closed).
-- Пакетное чтение объектов `HEAD` (`git cat-file --batch`) вместо процесса на каждый файл — устранена блокировка интерфейса при захвате baseline.
+## Architecture / Refactoring
+- Review baseline — repository `HEAD` instead of the snapshot at request time; new, deleted, and pre-existing edits are all accounted for.
+- Review baseline routed through the VCS adapter; direct `git` hardcoding removed from the controller. Unsupported adapters fail with an explicit error (fail closed).
+- Batch `HEAD` object reads (`git cat-file --batch`) instead of a process per file — eliminates UI blocking during baseline capture.
 
-## Тесты и качество
-- `make test` — юнит-тесты (C), интеграционные тесты terminal_guard, сессий, ревью.
-- Lua-тесты: ревью-контроллер, снапшоты, issues, tasks, observability.
-- Smoke-сборка (`make test-build`) и CI-публикация бинарников.
+## Tests & Quality
+- `make test` — unit tests (C), integration tests for terminal_guard, sessions, review.
+- Lua tests: review controller, snapshots, issues, tasks, observability.
+- Smoke build (`make test-build`) passed and CI binary publishing.
