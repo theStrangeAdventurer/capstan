@@ -183,39 +183,45 @@ function M.parse_sse_event(raw_event)
         logging.runtime_log("stream", "invalid_json event=" .. logging.compact(raw_event))
         return nil
     end
-    if event.usage then
-        return {type = "usage", usage = event.usage}
+    if type(event) ~= "table" then return nil end
+    local chunks = {}
+    local function add(chunk) chunks[#chunks + 1] = chunk end
+    if type(event.error) == "table" then
+        add({type = "provider_error", error = event.error.message or "Provider stream error"})
     end
-    if not event.choices or not event.choices[1] then return nil end
-    local finish_reason = event.choices[1].finish_reason
-    local delta = event.choices[1].delta or {}
-    if finish_reason then
-        logging.runtime_log("stream", "finish_reason=" .. tostring(finish_reason))
+    local choice = type(event.choices) == "table" and event.choices[1]
+    local delta = type(choice) == "table" and choice.delta or {}
+    if type(delta) ~= "table" then delta = {} end
+    if type(choice) == "table" and choice.finish_reason then
+        logging.runtime_log("stream", "finish_reason=" .. tostring(choice.finish_reason))
     end
-    if delta.reasoning_content and delta.reasoning_content ~= "" then
-        return {
-            type = "reasoning",
-            content = delta.reasoning_content,
-            reasoning_details = delta.reasoning_details,
-        }
+    local reasoning = delta.reasoning_content
+    if type(reasoning) ~= "string" or reasoning == "" then reasoning = delta.reasoning end
+    if (type(reasoning) == "string" and reasoning ~= "") or
+       (type(delta.reasoning_details) == "table" and next(delta.reasoning_details)) then
+        add({type = "reasoning", content = type(reasoning) == "string" and reasoning or "",
+            reasoning_details = delta.reasoning_details})
     end
-    if delta.reasoning and delta.reasoning ~= "" then
-        return {
-            type = "reasoning",
-            content = delta.reasoning,
-            reasoning_details = delta.reasoning_details,
-        }
+    if type(delta.content) == "string" and delta.content ~= "" then
+        add({type = "text", content = delta.content})
     end
-    if type(delta.reasoning_details) == "table" and next(delta.reasoning_details) ~= nil then
-        return {type = "reasoning", content = "", reasoning_details = delta.reasoning_details}
+    if type(delta.tool_calls) == "table" and next(delta.tool_calls) then
+        add({type = "tool_calls", tool_calls = delta.tool_calls})
     end
-    if type(delta.tool_calls) == "table" and next(delta.tool_calls) ~= nil then
-        return {type = "tool_calls", tool_calls = delta.tool_calls}
+    -- Usage and semantic deltas can coexist, including on the final SSE event.
+    if type(event.usage) == "table" then add({type = "usage", usage = event.usage}) end
+    local metadata = {}
+    for target, source in pairs({response_id = "id", response_model = "model",
+        upstream_provider = "provider"}) do
+        local value = event[source]
+        if type(value) == "string" and value ~= "" then
+            metadata[target] = logging.safe_error(value, 160)
+        end
     end
-    if delta.content and delta.content ~= "" then
-        return {type = "text", content = delta.content}
-    end
-    return nil
+    if #chunks == 0 and not next(metadata) then return nil end
+    local result = #chunks == 1 and chunks[1] or {type = "batch", chunks = chunks}
+    result.response_metadata = metadata
+    return result
 end
 
 -- Builds the raw→chunk→callback pipeline. Returns a closure suitable as the
@@ -257,6 +263,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
     local provider_error = nil
     local final_usage = nil
     local transport = nil
+    local response_metadata = {}
     local started_at = (_G.capstan and _G.capstan.now_ms and _G.capstan.now_ms()) or os.clock() * 1000
     local first_output_ms = nil
     local first_reasoning_ms = nil
@@ -486,6 +493,40 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
         end
     end
 
+    -- Expand default-parser batches before hooks, preserving their single-chunk
+    -- contract and provider parser overrides. Used for complete and trailing SSE.
+    local function process_event(raw_event)
+        local parsed = parse_sse_event(raw_event)
+        if not parsed then return end
+        local identity_changed = false
+        for _, key in ipairs({"response_id", "response_model", "upstream_provider"}) do
+            local value = (parsed.response_metadata or {})[key]
+            if type(value) == "string" and value ~= "" then
+                local clean = logging.safe_error(value, 160)
+                if response_metadata[key] ~= clean then
+                    response_metadata[key] = clean
+                    identity_changed = true
+                end
+            end
+        end
+        -- Log on arrival, not only completion: timed-out requests still need
+        -- generation IDs for upstream diagnosis.
+        if identity_changed then
+            logging.runtime_log("stream", "response_id=" .. tostring(response_metadata.response_id or "unknown") ..
+                " upstream_provider=" .. tostring(response_metadata.upstream_provider or "unknown") ..
+                " response_model=" .. tostring(response_metadata.response_model or "unknown"))
+        end
+        local chunks = parsed.type == "batch" and parsed.chunks or {parsed}
+        for _, chunk in ipairs(chunks or {}) do
+            if has_chunk_hooks then
+                local ctx = hooks.run("on_stream_chunk", {provider = provider,
+                    raw_event = raw_event, chunk = chunk, run = run_opts or {}})
+                chunk = ctx.chunk
+            end
+            if chunk then process_chunk(chunk) end
+        end
+    end
+
     local function stream_metrics()
         return {
             duration_ms = elapsed_ms(),
@@ -501,6 +542,9 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
             usage_chunks = usage_chunks,
             usage = final_usage,
             transport = transport,
+            response_id = response_metadata.response_id,
+            response_model = response_metadata.response_model,
+            upstream_provider = response_metadata.upstream_provider,
             request_outcome = request_outcome,
         }
     end
@@ -558,23 +602,13 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
         if is_done then
             finished = true
             normalize_sse_buffer(true)
+            if #buf > 0 then
+                event_count = event_count + 1
+                process_event(buf)
+            end
             if reasoning_active then
                 reasoning_active = false
                 if not provider.suppress_agent_state then agent.set_thinking(false) end
-            end
-            if #buf > 0 then
-                event_count = event_count + 1
-                local chunk = parse_sse_event(buf)
-                if chunk and has_chunk_hooks then
-                    local ctx = hooks.run("on_stream_chunk", {
-                        provider = provider,
-                        raw_event = buf,
-                        chunk = chunk,
-                        run = run_opts or {},
-                    })
-                    chunk = ctx.chunk
-                end
-                if chunk then process_chunk(chunk) end
             end
             set_tool_activity(false)
             local remaining_text = filter_leaked_think("", true)
@@ -734,17 +768,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
             if logging.raw_logging_enabled() then
                 logging.runtime_log("sse_event", logging.compact(event, 1200))
             end
-            local chunk = parse_sse_event(event)
-            if chunk and has_chunk_hooks then
-                local ctx = hooks.run("on_stream_chunk", {
-                        provider = provider,
-                        raw_event = event,
-                        chunk = chunk,
-                        run = run_opts or {},
-                    })
-                chunk = ctx.chunk
-            end
-            if chunk then process_chunk(chunk) end
+            process_event(event)
         end
     end
 end

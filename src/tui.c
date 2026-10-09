@@ -1,6 +1,7 @@
 #include "tui.h"
 #include "process_panel.h"
 #include "process_manager.h"
+#include "background_work.h"
 #include "agent.h"
 #include "app_config.h"
 #include "clipboard.h"
@@ -675,11 +676,17 @@ static void render_workspace_footer(WINDOW *win, int y, int width) {
   configure_workspace_footer();
   TuiWorkspaceFooter footer;
   tui_layout_workspace_footer(width, app_workdir(), getenv("HOME"),
-                               workspace_status_poll(app_workspace_root()), &footer);
+                               workspace_status_poll(app_workspace_root()),
+                               background_work_capstan_active_count(), &footer);
   int saved = getattrs(win);
   if (footer.path[0]) {
     wattrset(win, dim_gray_attr());
     mvwprintw(win, y, 2, " %s ", footer.path);
+  }
+  if (footer.activity_width) {
+    int x = 3 + text_columns(footer.path, strlen(footer.path));
+    wattrset(win, A_BOLD);
+    mvwaddnstr(win, y, x, footer.activity, (int)strlen(footer.activity));
   }
   if (footer.summary_width) {
     int x = width - footer.summary_width - 4;

@@ -94,6 +94,18 @@ return {
 ## Behavior
 
 - `provider` and `providers` configure the `agent/` Lua runtime.
+- `providers.<name>.routing` is copied into the chat-completions request's
+  `provider` object before request hooks. The built-in OpenRouter provider defaults
+  to `{ sort = "throughput" }`, prioritizing token generation speed over price.
+  This can select a more expensive upstream; it is not a guarantee of latency
+  or quality. Set `routing = false` to restore OpenRouter's automatic routing,
+  or replace the whole table, for example
+  `routing = { only = {"provider-slug"}, allow_fallbacks = false }` to pin an
+  upstream. No implicit throughput preference is merged into explicit tables.
+  Other providers omit this object unless configured. Root agents, children,
+  retries and isolated benchmark runs share the same request policy. Invalid
+  non-table values omit routing; upstream routing failures surface as API errors,
+  without silently relaxing constraints. See [OpenRouter performance](openrouter-performance.md).
 - Context capacity is resolved centrally in `agent/models.lua`: a positive
   `providers.<name>.models[].context_limit` for the selected model wins over
   provider-level `context_limit`, then API catalog metadata is a fallback only.

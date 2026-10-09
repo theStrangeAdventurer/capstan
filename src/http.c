@@ -29,6 +29,8 @@ typedef struct {
 
 typedef struct {
   CURL *easy;
+  /* Async delivery belongs to the VM's main thread, never the temporary
+     coroutine which happened to submit the request. */
   lua_State *L;
   int callback_ref;
   struct curl_slist *headers;
@@ -246,6 +248,13 @@ static void stream_ctx_free(StreamCtx *ctx) {
   free(ctx);
 }
 
+static lua_State *http_callback_state(lua_State *L) {
+  lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
+  lua_State *main = lua_tothread(L, -1);
+  lua_pop(L, 1);
+  return main;
+}
+
 /* Streaming callback: forwards raw bytes to the Lua handler immediately. */
 static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
                               void *userdata) {
@@ -294,6 +303,22 @@ static size_t stream_write_cb(char *chunk_ptr, size_t size, size_t count,
   return total;
 }
 
+#ifdef CAPSTAN_HTTP_TESTING
+/* Exercise the actual curl callback without a network server. */
+int http_test_deliver_chunk(int async_id, const char *chunk) {
+  for (int i = 0; i < stream_count; i++) {
+    if (streams[i] && streams[i]->async_id == async_id) {
+      size_t len = strlen(chunk);
+      g_curl_performing++;
+      size_t written = stream_write_cb((char *)chunk, 1, len, streams[i]);
+      g_curl_performing--;
+      return written == len;
+    }
+  }
+  return 0;
+}
+#endif
+
 /*
  * http.post_stream(url, body, headers, callback[, timeout_ms[, options]])
  * callback(raw_chunk, is_done) is invoked for every received chunk. Completion
@@ -335,7 +360,7 @@ static int l_http_post_stream(lua_State *L) {
     return luaL_error(L, "failed to allocate stream context");
   }
   ctx->easy = easy;
-  ctx->L = L;
+  ctx->L = http_callback_state(L);
   ctx->callback_ref = callback_ref;
   ctx->headers = headers;
   ctx->background = background;
@@ -613,7 +638,7 @@ static int l_http_post_response_async(lua_State *L) {
     return luaL_error(L, "failed to allocate async response context");
   }
   ctx->easy = easy;
-  ctx->L = L;
+  ctx->L = http_callback_state(L);
   ctx->callback_ref = callback_ref;
   ctx->headers = headers;
   ctx->response_mode = 1;
@@ -804,6 +829,9 @@ static void push_stream_metadata(lua_State *L, long http_status,
 }
 
 static int http_poll_impl(lua_State *L, int max_callbacks) {
+  /* Chunk and completion callbacks must use the same durable VM stack even
+     when a coroutine pumps HTTP during a cooperative wait. */
+  L = http_callback_state(L);
   telemetry_poll();
   if (!multi_handle)
     return 0;

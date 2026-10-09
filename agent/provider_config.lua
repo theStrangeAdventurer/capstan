@@ -44,6 +44,7 @@ function M.build()
                 model = "minimax/minimax-m3",
                 default_reasoning_efforts = {"low", "medium", "high"},
                 context_limit = 0,
+                routing = {sort = "throughput"},
             },
         },
     }
@@ -119,6 +120,21 @@ function M.build()
     end
 
     return runtime
+end
+
+-- Routing belongs to the provider configuration; all agent requests (including
+-- children and isolated runs) use this adapter before request hooks.
+function M.apply_request_options(request, provider)
+    if type(provider.routing) == "table" and next(provider.routing) ~= nil then
+        -- Copy nested preferences so a request hook cannot change future calls.
+        local function copy(value)
+            if type(value) ~= "table" then return value end
+            local result = {}
+            for key, item in pairs(value) do result[key] = copy(item) end
+            return result
+        end
+        request.provider = copy(provider.routing)
+    end
 end
 
 return M

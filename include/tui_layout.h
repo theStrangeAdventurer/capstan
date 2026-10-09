@@ -27,12 +27,13 @@ void tui_layout_status_row(int width, const char *activity, const char *profile,
 
 typedef struct {
   char path[4096];
-  char files[80], added[32], deleted[32];
-  int summary_width;
+  char activity[64], files[80], added[32], deleted[32];
+  int activity_width, summary_width;
 } TuiWorkspaceFooter;
 
 void tui_layout_workspace_footer(int width, const char *workdir,
                                  const char *home, const WorkspaceStatus *status,
+                                 size_t capstan_active_count,
                                  TuiWorkspaceFooter *footer);
 /* Bounded task viewport, including its chevron row; always leaves chat space. */
 int tui_layout_tasks_height(int available, int lines, int expanded);

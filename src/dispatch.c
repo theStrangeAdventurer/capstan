@@ -6,6 +6,7 @@
 #include "http.h"
 #include "input.h"
 #include "input_history.h"
+#include "log.h"
 #include "plugins.h"
 #include "popup.h"
 #include "scroll.h"
@@ -396,10 +397,31 @@ int dispatch_tab(void) {
 }
 
 void dispatch_tick(void) {
-  if (agent_is_running() ||
-      (submission_queue_size(&g_submission_queue) == 0 &&
-       !g_dispatch_after_compact))
+  if (agent_is_running() || popup_is_active() || process_panel_active())
     return;
+
+  /* Only the ordinary main-loop boundary can start an event-driven turn.
+     Never consume input drafts or recursively dispatch from HTTP/modal pumps. */
+  if (submission_queue_size(&g_submission_queue) == 0 && !g_dispatch_after_compact) {
+    int top = lua_gettop(L);
+    lua_getglobal(L, "agent_background_notification");
+    if (!lua_isfunction(L, -1)) {
+      lua_settop(L, top);
+      return;
+    }
+    if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
+      log_event("background", lua_tostring(L, -1) ? lua_tostring(L, -1) : "notification failed");
+      lua_settop(L, top);
+      return;
+    }
+    if (!lua_isstring(L, -1)) {
+      lua_settop(L, top);
+      return;
+    }
+    const char *event = lua_tostring(L, -1);
+    add_message(my_strdup(event), my_strdup(event), MSG_USER);
+    lua_settop(L, top);
+  }
 
   g_dispatch_after_compact = 0;
   while (submission_queue_size(&g_submission_queue) > 0) {

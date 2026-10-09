@@ -142,6 +142,7 @@ static void footer_path(const char *workdir, const char *home, int width,
 
 void tui_layout_workspace_footer(int width, const char *workdir,
                                  const char *home, const WorkspaceStatus *status,
+                                 size_t capstan_active_count,
                                  TuiWorkspaceFooter *footer) {
   memset(footer, 0, sizeof(*footer));
   if (width < 7) return;
@@ -167,8 +168,28 @@ void tui_layout_workspace_footer(int width, const char *workdir,
     footer->files[0] = footer->added[0] = footer->deleted[0] = '\0';
     summary = 0;
   }
+  if (capstan_active_count) {
+    snprintf(footer->activity, sizeof(footer->activity),
+             "Capstan background: %zu", capstan_active_count);
+    footer->activity_width = columns(footer->activity);
+    /* Give active work precedence over the optional diff summary. */
+    if (summary && summary + footer->activity_width + 24 > width) {
+      footer->files[0] = footer->added[0] = footer->deleted[0] = '\0';
+      summary = 0;
+    }
+    if (footer->activity_width + 12 > width) {
+      snprintf(footer->activity, sizeof(footer->activity), "Capstan: %zu",
+               capstan_active_count);
+      footer->activity_width = columns(footer->activity);
+    }
+    if (footer->activity_width + 12 > width) {
+      footer->activity[0] = '\0';
+      footer->activity_width = 0;
+    }
+  }
   footer->summary_width = summary;
-  int path_width = width - 6 - (summary ? summary + 3 : 0);
+  int path_width = width - 6 - (summary ? summary + 3 : 0) -
+      (footer->activity_width ? footer->activity_width + 3 : 0);
   footer_path(workdir, home, path_width, footer->path, sizeof(footer->path));
 }
 

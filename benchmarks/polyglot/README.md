@@ -136,3 +136,15 @@ benchmarks/polyglot/promptfoo/run.sh \
 
 Promptfoo requires `npx`; the wrapper pins its version and disables telemetry
 and cache. Do not commit the filled config because it may reveal local paths.
+## OpenRouter routing diagnostics
+
+Capstan's built-in OpenRouter provider now prioritizes throughput. For matching
+routing in OpenCode, add `--provider-sort throughput` to `run_opencode.py`.
+For a fixed-backend comparison, use Capstan provider config
+`routing = { only = {"PROVIDER_SLUG"}, allow_fallbacks = false }` and OpenCode
+`--upstream PROVIDER_SLUG`. To reproduce automatic routing, set Capstan
+`routing = false` and omit OpenCode routing flags. Use new comparison IDs when
+changing routing; the historical automatic-routing results are not a baseline
+with an identical request policy. See
+[the performance spec](../../specs/openrouter-performance.md) for the controlled
+four-case network probe and the limits of the historical evidence.

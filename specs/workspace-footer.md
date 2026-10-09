@@ -8,6 +8,13 @@ existing soft green/red diff colors (65/95 on 256-color terminals).
 
 Example: `~/project/src` on the left, `Changes: 3 files · +128 −34` on the right.
 `Changes` describes workspace state, not edits attributable to the active session.
+When one or more non-MCP Capstan jobs are running, the footer also shows a bold
+`Capstan background: N` activity label. This count includes managed shell jobs
+and individual subagent tasks, excludes MCP server roots and aggregate subagent
+groups, and is hidden when no such jobs are active. The activity label takes
+precedence over the optional VCS summary on narrow terminals; the workspace path
+is clipped first. The existing top-right process badge and `/processes` panel
+continue to include MCP roots and show their kinds separately.
 
 ## Semantics and ownership
 
@@ -63,5 +70,5 @@ Labels never overwrite the corners or overlap each other.
 unstaged edits, renames, binary/deleted/untracked/ignored files, newline filenames,
 workspace confinement, cache invalidation, external refresh, error states, HOME
 boundaries, Unicode truncation and narrow layout. `make test-tui-input` includes a
-real ncurses regression for green/red counters, normal file-count color, visible
-workdir, resizing and unchanged model input. `make` verifies UI integration.
+real ncurses regression for the Capstan background activity label, green/red
+counters, normal file-count color, visible workdir, resizing and unchanged model input. `make` verifies UI integration.

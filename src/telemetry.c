@@ -137,6 +137,7 @@ static void error_attribute(lua_State *L, PB *b, unsigned f, int ok, int cancell
 static int include_tool_details;
 static const char *const string_keys[] = {
   "operation", "provider", "model", "profile", "tool", "purpose", "subagent_id",
+  "response_id", "response_model", "upstream_provider",
   "shell.command", "tool.target", NULL
 };
 static const char *const number_keys[] = {

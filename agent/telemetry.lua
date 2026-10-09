@@ -89,10 +89,13 @@ function M.tool_attributes(name, args, attributes)
     return attributes
 end
 
--- Copy only known numeric measurements, never arbitrary provider/HTTP data.
+-- Copy only known measurements and response identities, never arbitrary HTTP data.
 function M.measurements(metrics, attributes)
     attributes = attributes or {}
     metrics = type(metrics) == "table" and metrics or {}
+    for _, key in ipairs({"response_id", "response_model", "upstream_provider"}) do
+        if type(metrics[key]) == "string" then attributes[key] = metrics[key] end
+    end
     local function numbers(source, keys, prefix)
         if type(source) ~= "table" then return end
         for _, key in ipairs(keys) do

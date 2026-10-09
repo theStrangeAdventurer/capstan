@@ -129,6 +129,18 @@ const char *background_work_status(const BackgroundSnapshot *s) {
   return s->running ? (s->stopping ? "stopping" : "running") : s->timed_out ? "timed_out" : "exited";
 }
 size_t background_work_count(void) { return process_manager_count() + count; }
+int background_work_is_capstan_job(const BackgroundSnapshot *snapshot) {
+  return snapshot && snapshot->running && strcmp(snapshot->kind, "mcp") &&
+      strcmp(snapshot->kind, "subagent_group");
+}
+size_t background_work_capstan_active_count(void) {
+  size_t active = 0;
+  BackgroundSnapshot snapshot;
+  for (size_t i = 0; i < background_work_count(); i++)
+    if (background_work_at(i, &snapshot) && background_work_is_capstan_job(&snapshot))
+      active++;
+  return active;
+}
 int background_work_at(size_t i, BackgroundSnapshot *s) {
   size_t os = process_manager_count();
   if (i < os) return process_manager_at(i, s);

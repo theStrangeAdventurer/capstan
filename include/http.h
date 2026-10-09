@@ -9,4 +9,7 @@ int  http_is_loading(void);
 int  http_has_background_work(void);
 void http_set_headless(int headless);
 int  http_cancel_streams(lua_State *L);
+#ifdef CAPSTAN_HTTP_TESTING
+int http_test_deliver_chunk(int async_id, const char *chunk);
+#endif
 #endif

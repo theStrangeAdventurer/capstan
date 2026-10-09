@@ -9,9 +9,10 @@ subagent scheduling; the native manager owns OS process lifecycle.
 
 `/processes` (no arguments), `Ctrl+P`, and the clickable, dim top-right badge
 `[ Background processes: N | /processes for details ]`
-open the same live C panel, without an LLM request. The count is running managed
-roots, not every browser helper. The indicator and its clickable area are hidden
-when no roots are running; `/processes` and `Ctrl+P` remain available, including
+open the same live C panel, without an LLM request. The top-right count is running
+managed roots, not every browser helper. The bottom workspace footer separately
+counts running Capstan shell jobs and subagent tasks and excludes MCP server roots.
+The indicator and its clickable area are hidden when no roots are running; `/processes` and `Ctrl+P` remain available, including
 for completed entries. The badge keeps a one-column right margin; on narrow
 terminals it drops the hint, then hides if the label cannot fit. While the
 session overlay occupies the top-right corner, the badge and hit area are hidden.
@@ -129,12 +130,17 @@ It accepts no arbitrary PID and rechecks ownership in the native binding. Plan
 allows inspection but not stopping or starting shell. These are model tools;
 the manual interface is the C panel.
 
-Background shell completions are marked pending in the manager, then delivered
-once to the owner at the next ordinary orchestrator request boundary as runtime
-state. Children do not consume the parent's notifications. No poll callback
-starts a model run. Idle completions wait for the next request; evicted records
-lose pending notifications. Notifications contain status metadata, not raw output,
-and are logged when delivered. Failed/stopped MCPs stop advertising tools and
+Background shell/group completions are marked pending in the manager and delivered
+once to the owner as runtime state. Children do not consume the parent's notifications.
+Active orchestrators consume them at request boundaries. In the interactive TUI,
+`dispatch_tick` also delivers idle events and starts one continuation turn, without
+user input. It never dispatches from an HTTP callback or modal pump. User submissions
+have priority; popups/process panels defer delivery. The event is labelled runtime
+state (not user instructions), persisted in ordinary conversation history, and followed
+by an assistant segment. Input drafts remain untouched. Events for inactive sessions
+remain pending until that session is active. Evicted records lose pending notifications.
+Headless CLI and ACP retain request-boundary delivery, not unsolicited model turns.
+Notifications contain status metadata, not raw output, and are logged when delivered. Failed/stopped MCPs stop advertising tools and
 produce actionable errors for stale calls; they do not respawn automatically.
 Reconnect explicitly through the existing MCP controls.
 
@@ -215,3 +221,70 @@ The common review deadline includes this queue. The owned reviewer is visible
 while registered, suppresses ordinary detached-group completion notifications,
 and releases terminal records during cleanup. Cancelling the root cancels only
 its owned review group; stopping the reviewer makes acceptance incomplete.
+
+## Autonomous process monitoring
+
+`processes({action="watch", id=..., interval=300})` registers a session-owned timer
+and returns immediately. The default interval is five minutes; finite intervals
+from 1 to 86400 seconds are accepted. This is monitoring acceptance, not process
+success. `agent/process_watch.lua` owns timers and merges periodic snapshots with
+native completion events. It retains at most 32 watches; registering the same
+owner/ID replaces its timer. A terminal event removes its timer, duplicate native
+completion/timer delivery is suppressed, and inaccessible IDs produce a bounded
+watch error and remove the timer. Owner teardown/shutdown clears watches. Nothing
+survives application exit. A busy/modal UI delays delivery; overdue periods are
+coalesced, never replayed in a burst. Snapshot reads repeat native ownership checks
+under the captured owner and restore the ambient scope even after errors.
+Because native snapshot reads also poll exits, collection drains completion events
+again after timer reads and replaces same-ID timer snapshots with authoritative
+completion events. An exit discovered during a timer read is delivered once,
+not again at the next continuation.
+
+The runtime continuation asks the model to inspect output, finish the already
+user-authorized task and report results or blockers. Repair/restart uses existing
+tools and permissions; it is not unconditional OS-level respawning. Auth/billing
+and destructive failures must not be blindly retried. No hidden shell command or
+provider-specific policy is introduced. Register a new watch for a restarted ID.
+
+Detached `processes wait` callbacks run on cooperative Lua coroutines. Each wait
+iteration yields to the ordinary main loop instead of pumping HTTP/input inside
+that background stack. Runtime resumes at most once per safe poll, reinstalling
+captured workspace/owner and restoring ambient context on every suspension.
+Resume failures are isolated per suspended callback: siblings still resume and
+can requeue their waits before the first error is propagated to the caller. Errors
+remain visible rather than being swallowed or aborting the detached wait queue.
+Cancellation discards suspended continuations. Foreground waits keep their existing
+blocking-pump compatibility. Other synchronous tools are not converted to async;
+long monitoring should use `watch`, not a subagent consuming turns on sleeps.
+
+Reference: local Codex revision `3b2d9a69e62745d4e1ebfda84cfc6134c529b7c4`,
+`core/src/tools/handlers/multi_agents/wait.rs` uses async watch receivers/deadlines;
+`core/src/agent/control.rs::maybe_start_completion_watcher` uses a detached task
+and parent notification injection. The inspected Codex watcher injects without
+starting a turn (`trigger_turn=false`); Capstan's idle continuation is deliberately
+stronger, to close the user-requested monitoring/repair/reporting loop.
+
+Tests: `test_process_watch.lua` covers interval/owner isolation, coalescing,
+completion deduplication, unavailable IDs and teardown; `test_background_runtime.lua`
+uses the real process plugin with a suspended 300-second wait plus foreground
+response and cancellation; `test_tui_wait_input.py`'s `background_monitor` fixture
+checks timer delivery, an intervening user question, failure/restart/final report
+without user prompts, and preserved input draft in the real ncurses main loop.
+The restart decision in that offline fixture is deterministic, not evidence of
+any particular model reliably repairing arbitrary failures.
+## HTTP callbacks and coroutine lifetime
+
+Async HTTP callbacks run on the Lua VM's registry-rooted main thread, including
+requests submitted by short-lived background coroutines and completions polled
+from a coroutine. `StreamCtx` must not retain a borrowed pointer to the submitting
+coroutine: after its return and garbage collection, receiving another SSE chunk
+would use freed Lua state and can crash in `coroutine.resume`/stack growth.
+The Lua runtime still owns cooperative scheduling and workspace context;
+the HTTP adapter owns callback stack lifetime and does not resume the submitter.
+Callback errors keep the existing protected-call error handling. The wire API,
+process ownership and user-visible background behavior are unchanged.
+
+`test/test_http_stack.c` covers collection of the submitting coroutine followed
+by a real stream callback, cancellation, and both async completion APIs pumped
+from another coroutine. Tests use injected curl chunks and protocol rejection
+to exercise these paths without external network access.

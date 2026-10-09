@@ -8,7 +8,9 @@ package.loaded['agent.hooks'] = {has = function() return false end, run = functi
 package.loaded['agent.mcp'] = {}
 package.loaded['agent.ui'] = {append = function() error('background UI write') end}
 package.loaded['agent.tasks'] = {refresh = noop}
-package.loaded['agent.provider_config'] = {build = function() return {
+package.loaded['agent.provider_config'] = {
+    apply_request_options = require('agent.provider_config').apply_request_options,
+    build = function() return {
     provider = 'fixture', providers = {fixture = {model = 'original',
         endpoint = 'https://fixture.invalid', context_limit = 4096}},
 } end}
@@ -229,6 +231,78 @@ for _, limit in ipairs({'bytes', 'callbacks'}) do
     assert(completions == 1 and output == 0 and executed == 0)
     runtime.shutdown_background()
 end
+-- A real 300-second process wait yields its background callback immediately.
+-- Foreground requests and another child complete before that wait expires.
+runtime.shutdown_background()
+local clock, process_running, monitor_done = 0, true, false
+capstan.now_ms = function() return clock end
+tools.processes = function(_, id)
+    assert(native_owner == 'monitor-owner')
+    return {id = id, status = process_running and 'running' or 'exited', running = process_running}
+end
+local process_plugin = dofile('plugins/processes.lua')
+inside_tool = function()
+    if tool_context.process_owner == 'monitor-owner' then
+        local _, output, success = process_plugin.handler({tool_args = {action = 'wait', id = 'process', timeout = 300}})
+        assert(success and json.decode(output).timed_out == false)
+    end
+end
+runtime.run({background = true, depth = 1, tools = {}, process_owner = 'monitor-owner'},
+    {on_done = function() monitor_done = true end})
+local monitor_request = #requests
+tool_reply(monitor_request)
+assert(not monitor_done and native_owner == 'ambient-owner' and native_dir == '/other')
+local foreground_done = false
+runtime.run({tools = {}, process_owner = 'foreground-owner', update_status = false,
+    update_usage = false, completion_review = false}, {on_text = noop,
+    on_done = function() foreground_done = true end})
+delta(#requests, {content = 'foreground response'})
+requests[#requests].callback(nil, true)
+assert(foreground_done and not monitor_done, 'background wait blocked conversation')
+clock = 1000
+agent_background_poll()
+assert(not monitor_done and native_owner == 'ambient-owner')
+process_running = false
+agent_background_poll()
+local monitor_continuation = #requests
+delta(monitor_continuation, {content = 'monitor complete'})
+requests[monitor_continuation].callback(nil, true)
+assert(monitor_done and native_owner == 'ambient-owner')
+-- Cancellation discards the suspended continuation, never resumes tools later.
+process_running = true
+local cancelled_done = 0
+local _, _, cancel_wait = runtime.run({background = true, depth = 1, tools = {}, process_owner = 'monitor-owner'},
+    {on_done = function(result) assert(result.cancelled); cancelled_done = cancelled_done + 1 end})
+tool_reply(#requests)
+cancel_wait()
+process_running = false
+agent_background_poll()
+assert(cancelled_done == 1 and native_owner == 'ambient-owner')
+runtime.shutdown_background()
+-- One resumed coroutine throwing must not discard the rest of the detached
+-- wait queue. A sibling can yield again and finish at the next poll boundary.
+local sibling_resumed, sibling_finished = false, false
+inside_tool = function()
+    local workdir = tool_context.workdir
+    assert(agent_background_yield())
+    if workdir == '/wait-failure' then
+        error('fixture resumed wait error')
+    end
+    sibling_resumed = true
+    assert(agent_background_yield())
+    sibling_finished = true
+end
+runtime.run({background = true, tools = {}, workdir = '/wait-failure'}, {})
+tool_reply(#requests)
+runtime.run({background = true, tools = {}, workdir = '/wait-survivor'}, {})
+tool_reply(#requests)
+local resumed_ok, resumed_error = pcall(agent_background_poll)
+assert(not resumed_ok and tostring(resumed_error):find('fixture resumed wait error', 1, true))
+assert(sibling_resumed and not sibling_finished, 'resumed error lost sibling wait')
+assert(capstan.workdir == '/other' and native_dir == '/other' and native_owner == 'ambient-owner')
+agent_background_poll()
+assert(sibling_finished, 'sibling was not retained after yielding again')
+runtime.shutdown_background()
 inside_tool = nil
 -- Exceptions restore both Lua and native paths before propagating.
 runtime.run({background = true, tools = {}, workdir = '/error', workspace_root = '/error'}, {

@@ -1,4 +1,5 @@
 #include "munit.h"
+#include "http.h"
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
@@ -113,7 +114,68 @@ static MunitResult test_repeated_no_stack_growth(const MunitParameter p[], void 
   return MUNIT_OK;
 }
 
+static MunitResult test_stream_outlives_coroutine(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  lua_State *L = new_state();
+  http_init(L);
+  http_set_headless(1);
+  const char *script =
+      "main_thread = coroutine.running(); calls = 0; "
+      "weak = setmetatable({}, {__mode='v'}); "
+      "local co = coroutine.create(function() "
+      "  request_id = http.post_stream('http://127.0.0.1:1/', '{}', {}, function(raw, done) "
+      "    assert(coroutine.running() == main_thread); "
+      "    local child = coroutine.create(function() return raw end); "
+      "    local ok, result = coroutine.resume(child); assert(ok and result == 'fixture'); "
+      "    calls = calls + 1 "
+      "  end) "
+      "end); weak[1] = co; assert(coroutine.resume(co)); co = nil; "
+      "collectgarbage('collect'); collectgarbage('collect'); assert(weak[1] == nil)";
+  munit_assert_int(luaL_dostring(L, script), ==, LUA_OK);
+  lua_getglobal(L, "request_id");
+  int id = (int)lua_tointeger(L, -1);
+  lua_pop(L, 1);
+  munit_assert_true(http_test_deliver_chunk(id, "fixture"));
+  munit_assert_int(luaL_dostring(L, "assert(calls == 1); assert(http.cancel(request_id)); collectgarbage('collect')"), ==, LUA_OK);
+  munit_assert_int(lua_gettop(L), ==, 0);
+  http_cleanup();
+  http_set_headless(0);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_completion_from_coroutine_poll(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  lua_State *L = new_state();
+  http_init(L);
+  http_set_headless(1);
+  /* file:// is rejected by the production protocol allowlist, so curl's real
+     completion path can be exercised without DNS or a listening socket. */
+  const char *script =
+      "local main = coroutine.running(); local calls = 0; "
+      "local origin = coroutine.create(function() "
+      "  http.post_stream('file:///unused', '{}', {}, function(raw, done, err) "
+      "    assert(coroutine.running() == main); assert(done and err); calls = calls + 1 "
+      "  end); "
+      "  http.post_response_async('file:///unused', '{}', {}, 100, function(response, err) "
+      "    assert(coroutine.running() == main); assert(response == nil and err); calls = calls + 1 "
+      "  end) "
+      "end); assert(coroutine.resume(origin)); origin = nil; collectgarbage('collect'); "
+      "local pump = coroutine.create(function() for i=1,10 do http.poll() end end); "
+      "assert(coroutine.resume(pump)); assert(calls == 2); assert(not http.is_loading())";
+  int rc = luaL_dostring(L, script);
+  if (rc != LUA_OK) munit_logf(MUNIT_LOG_ERROR, "%s", lua_tostring(L, -1));
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_int(lua_gettop(L), ==, 0);
+  http_cleanup();
+  http_set_headless(0);
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/completion_from_coroutine_poll", test_completion_from_coroutine_poll, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/stream_outlives_coroutine", test_stream_outlives_coroutine, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/stable", test_success_stable_stack, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/traceback", test_error_gives_traceback, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/no_growth", test_repeated_no_stack_growth, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

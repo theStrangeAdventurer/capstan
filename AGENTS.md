@@ -298,6 +298,7 @@ Feature specs:
 - [Models command](specs/models-command.md)
 - [OAuth auth](specs/oauth-auth.md)
 - [Observability](specs/observability.md)
+- [OpenRouter performance](specs/openrouter-performance.md)
 - [Permissions](specs/permissions.md)
 - [Queued input](specs/queued-input.md)
 - [Process control](specs/process-control.md)

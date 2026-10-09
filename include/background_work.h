@@ -19,6 +19,10 @@ int background_work_cancelled(const char *id);
 int background_work_inprocess(const BackgroundSnapshot *s);
 const char *background_work_status(const BackgroundSnapshot *s);
 size_t background_work_count(void);
+/* Running Capstan-managed jobs for the TUI footer, excluding MCP servers and
+ * aggregate subagent-group records. */
+size_t background_work_capstan_active_count(void);
+int background_work_is_capstan_job(const BackgroundSnapshot *snapshot);
 int background_work_at(size_t index, BackgroundSnapshot *s);
 int background_work_get(const char *id, BackgroundSnapshot *s);
 int background_work_stop(const char *id);

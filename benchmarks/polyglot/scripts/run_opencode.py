@@ -19,27 +19,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True)
     parser.add_argument("--variant")
     parser.add_argument("--reasoning-effort", choices=("minimal", "low", "medium", "high", "xhigh"))
+    parser.add_argument("--provider-sort", choices=("price", "throughput", "latency"))
+    parser.add_argument("--upstream", help="OpenRouter upstream slug; disables fallback")
     return parser.parse_args()
 
 
-def reasoning_override(model: str, effort: str) -> str:
+def reasoning_override(model: str, effort: str | None, provider_sort: str | None = None,
+                       upstream: str | None = None) -> str:
     """Return an OpenCode config patch that maps an OpenRouter effort to its request body."""
     provider, separator, model_id = model.partition("/")
     if provider != "openrouter" or not separator or not model_id:
         raise ValueError(
-            "--reasoning-effort currently requires an OpenRouter model in the form "
+            "reasoning/routing overrides require an OpenRouter model in the form "
             "openrouter/<publisher>/<model>"
         )
+    model_config = {}
+    if effort:
+        model_config["variants"] = {effort: {"reasoning": {"effort": effort}}}
+    routing = {}
+    if provider_sort:
+        routing["sort"] = provider_sort
+    if upstream:
+        routing.update(only=[upstream], allow_fallbacks=False)
+    if routing:
+        model_config["options"] = {"provider": routing}
     return json.dumps(
         {
             "provider": {
                 "openrouter": {
                     "models": {
-                        model_id: {
-                            "variants": {
-                                effort: {"reasoning": {"effort": effort}},
-                            },
-                        },
+                        model_id: model_config,
                     },
                 },
             },
@@ -94,8 +103,9 @@ def main() -> int:
                 "OPENCODE_PERMISSION": '{"skill":"deny"}',
             }
         )
-        if args.reasoning_effort:
-            env["OPENCODE_CONFIG_CONTENT"] = reasoning_override(args.model, args.reasoning_effort)
+        if args.reasoning_effort or args.provider_sort or args.upstream:
+            env["OPENCODE_CONFIG_CONTENT"] = reasoning_override(
+                args.model, args.reasoning_effort, args.provider_sort, args.upstream)
         process = subprocess.Popen(
             command,
             cwd=workdir,

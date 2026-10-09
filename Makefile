@@ -15,7 +15,7 @@ TEST_SRCS = src/otlp_wire.c test/test_otlp_wire.c src/app_config.c src/cli_args.
 
 CORE_PLUGIN_ASSETS = plugins/file.lua plugins/file_write.lua plugins/file_edit.lua plugins/shell.lua plugins/fetch.lua plugins/logs.lua plugins/skills.lua plugins/wiki.lua plugins/models.lua plugins/info.lua plugins/mcp.lua plugins/plan.lua plugins/implement.lua plugins/auth.lua plugins/logout.lua plugins/connect.lua plugins/vcs.lua plugins/tasks.lua plugins/issues.lua plugins/completion_review.lua plugins/show.lua plugins/processes.lua plugins/process_stop.lua
 PROFILE_ASSETS = profiles/implement.lua profiles/plan.lua
-AGENT_RUNTIME_ASSETS = agent/telemetry.lua agent/runtime.lua agent/tasks.lua agent/issues.lua agent/review_verdict.lua agent/review_config.lua agent/review_snapshot.lua agent/completion_review.lua agent/acp.lua agent/provider_config.lua agent/models.lua agent/stream.lua agent/subagents.lua agent/tools.lua agent/tool_output.lua agent/workspace.lua agent/tokens.lua agent/images.lua agent/logging.lua agent/ui.lua agent/utf8.lua agent/hooks.lua agent/state.lua agent/auth.lua agent/lua_serialize.lua agent/shell_safe.lua agent/mcp.lua agent/profiles.lua agent/redact.lua agent/vcs.lua $(PROFILE_ASSETS)
+AGENT_RUNTIME_ASSETS = agent/process_watch.lua agent/telemetry.lua agent/runtime.lua agent/tasks.lua agent/issues.lua agent/review_verdict.lua agent/review_config.lua agent/review_snapshot.lua agent/completion_review.lua agent/acp.lua agent/provider_config.lua agent/models.lua agent/stream.lua agent/subagents.lua agent/tools.lua agent/tool_output.lua agent/workspace.lua agent/tokens.lua agent/images.lua agent/logging.lua agent/ui.lua agent/utf8.lua agent/hooks.lua agent/state.lua agent/auth.lua agent/lua_serialize.lua agent/shell_safe.lua agent/mcp.lua agent/profiles.lua agent/redact.lua agent/vcs.lua $(PROFILE_ASSETS)
 EMBEDDED_ASSETS = $(AGENT_RUNTIME_ASSETS) agent/vcs_git_stats.sh ai/system_prompt.txt vendor/rxi/json.lua skills/self-improvement/SKILL.md skills/wiki-onboarding/SKILL.md $(CORE_PLUGIN_ASSETS)
 EMBEDDED_SRCS = build/embedded_assets.c
 SRCS = $(wildcard src/*.c) vendor/md4c/md4c.c $(EMBEDDED_SRCS)
@@ -64,12 +64,15 @@ clean:
 	rm -rf build
 
 HTTP_LUA_FLAGS = -Iinclude -I$(LUA_DIR)/src -I$(MUNIT_DIR) -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE
+HTTP_LUA_FLAGS += -DCAPSTAN_HTTP_TESTING
 HTTP_LUA_SRCS = src/otlp_wire.c src/telemetry.c src/agent.c src/shell_output.c src/app_config.c src/http.c src/jsonl.c src/log.c src/redact.c src/session.c src/session_manager.c src/utils.c test/test_agent.c test/test_http_stack.c test/test_fetch_plugin.c test/test_file_plugin.c test/test_file_write_plugin.c test/test_file_edit_plugin.c test/test_shell_plugin.c test/test_http_redirect.c test/test_logs_plugin.c test/test_log.c test/test_models_plugin.c test/test_info_plugin.c test/test_provider_tools.c test/test_skills_plugin.c test/test_wiki_plugin.c test/test_auth_lua.c test/test_main_http_stack.c vendor/munit/munit.c
 HTTP_LUA_TARGET = build/test_http_stack
 
 test-http-lua: $(HTTP_LUA_TARGET)
 	./$(HTTP_LUA_TARGET)
 	$(LUA_DIR)/src/lua test/test_telemetry.lua
+	$(LUA_DIR)/src/lua test/test_stream_packets.lua
+	python3 test/test_openrouter_probe.py
 	$(LUA_DIR)/src/lua test/test_runtime_timeline.lua
 	$(LUA_DIR)/src/lua test/test_context_limits.lua
 	$(LUA_DIR)/src/lua test/test_background_subagents.lua
@@ -79,6 +82,7 @@ test-http-lua: $(HTTP_LUA_TARGET)
 	$(LUA_DIR)/src/lua test/test_review_snapshot.lua
 	$(LUA_DIR)/src/lua test/test_completion_review.lua
 	$(LUA_DIR)/src/lua test/test_background_runtime.lua
+	$(LUA_DIR)/src/lua test/test_process_watch.lua
 
 .PHONY: test-telemetry
 test-telemetry: build/test_telemetry_native

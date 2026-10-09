@@ -351,6 +351,7 @@ local function call_plugin_tool(tool_name, args, run_ctx, permission_ctx)
         args = {},
         tool_args = args,
         tool_name = tool_name,
+        process_owner = run_ctx and run_ctx.process_owner,
         tool = tool_spec,
         permission = permission_ctx,
     }

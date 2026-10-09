@@ -90,6 +90,7 @@ static void register_embedded_modules(void) {
   lua_setfield(L, -2, "vendor.rxi.json");
   preload_embedded_asset(L, "agent.runtime", "agent/runtime.lua");
   preload_embedded_asset(L, "agent.subagents", "agent/subagents.lua");
+  preload_embedded_asset(L, "agent.process_watch", "agent/process_watch.lua");
   preload_embedded_asset(L, "agent.telemetry", "agent/telemetry.lua");
   preload_embedded_asset(L, "agent.provider_config",
                          "agent/provider_config.lua");

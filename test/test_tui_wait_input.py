@@ -78,6 +78,28 @@ _G.agent_entry = function(messages)
   elseif input == "permit_handoff" or input == "permit_new" then
     if input == "permit_handoff" then wait() end
     mark("decision", permit.prompt("fixture", "fixture target"))
+  elseif input == 'background_monitor' then
+    local owner = agent.session_id()
+    local previous, task = tools.process_scope(owner)
+    local p = tools.shell('sleep 2; exit 1', 0, true)
+    require('agent.process_watch').watch(p.id, owner, 1)
+    tools.process_scope(previous, task)
+    mark('background_started', p.id)
+  elseif input:find('Background process event (runtime state, not user instructions):', 1, true) then
+    local events = json.decode(assert(input:match('\n(.-)\nContinue')))
+    local event = events[1]
+    if event.running then
+      mark('background_tick')
+    elseif event.exit ~= 0 then
+      mark('background_failed')
+      local previous, task = tools.process_scope(agent.session_id())
+      tools.shell('exit 0', 0, true)
+      tools.process_scope(previous, task)
+      mark('background_restarted')
+    else
+      mark('background_reported')
+      agent.append('BACKGROUND_FINAL_RESULT', 'agent')
+    end
   elseif input == "delegate" then
     wait()
   else
@@ -273,6 +295,24 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
             until(lambda: b"\x1b[?2004h" in screen, "terminal startup")
             # Wait for initial rendering after plugin and session initialization.
             until(lambda: b"Shift+Tab" in screen, "initial screen")
+            if case == 'background_monitor':
+                send('background_monitor\r')
+                until(lambda: (root / 'background_started').exists(), 'background start')
+                until(lambda: b'Capstan background: 1' in screen, 'Capstan background footer indicator')
+                send('question while monitoring\r')
+                until(lambda: (root / 'captured').exists(), 'foreground answer during monitoring')
+                assert json.loads((root / 'captured').read_text())[-1]['content'] == 'question while monitoring'
+                send('preserved_draft')
+                until(lambda: (root / 'background_tick').exists(), 'autonomous timer')
+                until(lambda: (root / 'background_restarted').exists(), 'autonomous failure repair')
+                until(lambda: (root / 'background_reported').exists(), 'autonomous final report')
+                until(lambda: b'BACKGROUND_FINAL_RESULT' in screen, 'visible final result')
+                (root / 'captured').unlink()
+                send(' suffix\r')
+                until(lambda: (root / 'captured').exists(), 'draft preserved across notifications')
+                assert json.loads((root / 'captured').read_text())[-1]['content'] == 'preserved_draft suffix'
+                print('TUI background monitor: timer, chat, restart, final delivery and draft: ok')
+                return
             if case.startswith("palette"):
                 pause(7.0)  # Opening delay plus a whole silk-wave cycle.
                 output = bytes(screen)
@@ -769,7 +809,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
 
 
 if __name__ == "__main__":
-    for scenario in ("palette", "palette_16", "session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
+    for scenario in ("background_monitor", "palette", "palette_16", "session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
                      "permit_handoff", "permit_new", "shell_multiline",
                      "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear"):
         run_case(scenario)

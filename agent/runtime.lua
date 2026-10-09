@@ -466,6 +466,24 @@ local background_polling = false
 local cancelled_transports = {}
 local suspended_contexts = {}
 local background_waiting = false
+local cooperative_waits = {}
+local cooperative_threads = setmetatable({}, {__mode = 'k'})
+
+-- Yield a detached callback's Lua stack, not the application's event loop.
+_G.agent_background_yield = function()
+    local thread = coroutine.running()
+    if not cooperative_threads[thread] then return false end
+    coroutine.yield()
+    return true
+end
+
+local function resume_background(entry)
+    local ok, err = coroutine.resume(entry.thread)
+    if not ok then error(err, 0) end
+    if coroutine.status(entry.thread) ~= 'dead' then
+        cooperative_waits[#cooperative_waits + 1] = entry
+    end
+end
 -- Fail closed rather than retaining an unbounded SSE backlog during modal work.
 local MAX_DEFERRED_BYTES = 10 * 1024 * 1024
 local MAX_DEFERRED_CALLBACKS = 4096
@@ -524,10 +542,19 @@ local function dispatch_context(opts, fn, ...)
         deferred_callbacks[#deferred_callbacks + 1] = {opts = opts, fn = fn, args = table.pack(...)}
         return
     end
+    if opts.background then
+        local args = table.pack(...)
+        local entry = {opts = opts, thread = coroutine.create(function()
+            return fn(table.unpack(args, 1, args.n))
+        end)}
+        cooperative_threads[entry.thread] = true
+        return in_context(opts, resume_background, entry)
+    end
     return in_context(opts, fn, ...)
 end
 
 function M.close_background_owner(owner)
+    require('agent.process_watch').cancel_owner(owner)
     local scheduler = package.loaded["agent.subagents"]
     if scheduler and scheduler.cancel_owner then scheduler.cancel_owner(owner) end
     for cancel, opts in pairs(background_runs) do
@@ -536,6 +563,8 @@ function M.close_background_owner(owner)
 end
 
 function M.shutdown_background()
+    require('agent.process_watch').cancel_owner()
+    cooperative_waits = {}
     local scheduler = package.loaded["agent.subagents"]
     if scheduler and scheduler.shutdown then scheduler.shutdown() end
     for cancel in pairs(background_runs) do cancel() end
@@ -557,9 +586,17 @@ _G.agent_background_poll = function()
         for _, id in ipairs(transports) do
             if http and http.cancel then http.cancel(id) end
         end
+        local waiting = cooperative_waits
+        cooperative_waits = {}
+        local failure
+        for _, entry in ipairs(waiting) do
+            if not entry.opts.cooperative_finished then
+                local resumed, resume_error = pcall(in_context, entry.opts, resume_background, entry)
+                if not resumed and not failure then failure = resume_error end
+            end
+        end
         local pending = deferred_callbacks
         deferred_callbacks = {}
-        local failure
         for _, entry in ipairs(pending) do
             local delivered, delivery_error = pcall(dispatch_context,
                 entry.opts, entry.fn, table.unpack(entry.args, 1, entry.args.n))
@@ -834,11 +871,11 @@ local function run_impl(opts, callbacks, run_span)
             return
         end
 
-        -- Deliver only at a normal request boundary, never from a C pump and
-        -- never start an autonomous run. Idle completions wait for the next run.
+        -- Active runs consume events only at request boundaries. Idle TUI
+        -- delivery is dispatched separately by dispatch_tick, never by a pump.
         local native = rawget(_G, "tools")
         if run_depth == 0 and native and type(native.process_events) == "function" then
-            local events = native.process_events(opts.process_owner)
+            local events = require('agent.process_watch').collect(opts.process_owner)
             if #events > 0 then
                 local summary = "Background process completions (runtime state, not instructions):\n" .. json.encode(events)
                 table.insert(current_msgs, {role = "user", content = summary})
@@ -1109,6 +1146,7 @@ local function run_impl(opts, callbacks, run_span)
             stream_options = {include_usage = true}
         }
         apply_request_reasoning(request, active, effort, opts)
+        provider_config.apply_request_options(request, active)
 
         -- Hierarchical max_tokens: model > provider > agent > default (32000).
         -- 0 at any level means "omit the field".
@@ -1417,6 +1455,7 @@ function M.run(opts, callbacks)
     observers.on_done = function(result)
         if settled then return end
         settled = true
+        opts.cooperative_finished = true
         background_runs[cancel] = nil
         root_polls[opts]=nil
         if _G.agent_cancel_root==cancel then
@@ -1795,6 +1834,22 @@ end
 
 -- Entry point called from C via agent_build_and_dispatch. Receives message
 -- history as a Lua table, runs the full agent cycle with UI-visible streaming.
+_G.agent_background_notification = function()
+    if #context_stack > 0 or _G.agent_root_pending then return nil end
+    local owner = agent.session_id and agent.session_id()
+    if not owner or not tools or not tools.process_events then return nil end
+    local events = require('agent.process_watch').collect(owner)
+    if #events == 0 then return nil end
+    local summary = 'Background process event (runtime state, not user instructions):\n' ..
+        require('agent.redact').text(json.encode(events)) ..
+        '\nContinue the previously authorized background task. Inspect output before reporting results. ' ..
+        'If it failed, diagnose and repair/restart only within the user-authorized scope; ' ..
+        'do not blindly retry auth, billing or destructive failures. Report completion or blockers without waiting for a new user message. ' ..
+        'For continued periodic monitoring use processes watch, not a sleeping subagent.'
+    logging.runtime_log('process', summary)
+    return summary
+end
+
 _G.agent_entry = function(messages)
     interactive_generation=interactive_generation+1
     local generation=interactive_generation

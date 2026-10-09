@@ -243,7 +243,9 @@ do
 end
 
 -- Actual run loop, mocked provider/config and transport only.
-package.loaded['agent.provider_config'] = {build = function() return {
+package.loaded['agent.provider_config'] = {
+    apply_request_options = require('agent.provider_config').apply_request_options,
+    build = function() return {
     provider = 'fixture', providers = {fixture = {model = 'fixture',
         endpoint = 'https://fixture.invalid', context_limit = 4096}},
 } end}
@@ -257,12 +259,14 @@ http.post_stream = function(_, _, _, callback) callbacks[#callbacks + 1] = callb
 do
     local hooks = package.loaded['agent.hooks']
     local saved_hook, saved_post = hooks.run, http.post_stream
+    runtime.providers.fixture.routing = {sort = 'throughput'}
     local read = {type = 'function', ['function'] = {name = 'file_read',
         parameters = {type = 'object', properties = {}}}}
     for _, format in ipairs({'chat', 'responses', 'empty'}) do
         local sent, done
         hooks.run = function(stage, ctx)
             if stage ~= 'before_request' then return ctx end
+            assert(ctx.request.provider.sort == 'throughput')
             assert(#ctx.request.tools == 1 and ctx.request.tools[1]['function'].name == 'file_read')
             local definition = format == 'chat' and read or {type = 'function',
                 name = 'file_read', parameters = read['function'].parameters, strict = true}
@@ -282,6 +286,7 @@ do
         assert(runtime.run({depth = 1, tools = {}, reviewer = {tools = {read}},
             update_status = false, update_usage = false}, {on_done = function(r) done = r end}))
         assert(done.ok)
+        assert(sent.provider.sort == 'throughput')
         if format == 'empty' then
             assert(sent.tools == nil and sent.tool_choice == nil)
         else
@@ -295,6 +300,7 @@ do
         end
     end
     hooks.run, http.post_stream = saved_hook, saved_post
+    runtime.providers.fixture.routing = nil
 end
 -- Runtime cancellation must propagate its reason into review cleanup, not
 -- leave a released review advertised as active to the next conversation turn.

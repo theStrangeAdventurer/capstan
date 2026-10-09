@@ -24,32 +24,46 @@ static MunitResult test_workspace_footer(const MunitParameter params[], void *da
   TuiWorkspaceFooter footer;
   WorkspaceStatus status = {.state = WORKSPACE_STATUS_READY, .files = 3,
                             .added = 128, .deleted = 34};
-  tui_layout_workspace_footer(80, "/home/me/project/src", "/home/me", &status, &footer);
+  tui_layout_workspace_footer(80, "/home/me/project/src", "/home/me", &status, 0, &footer);
   munit_assert_string_equal(footer.path, "~/project/src");
   munit_assert_string_equal(footer.files, "Changes: 3 files · ");
   munit_assert_string_equal(footer.added, "+128");
   munit_assert_string_equal(footer.deleted, " −34");
-  tui_layout_workspace_footer(30, "/home/me/long/project/src", "/home/me", &status, &footer);
+  tui_layout_workspace_footer(80, "/home/me/project/src", "/home/me", &status, 2, &footer);
+  munit_assert_string_equal(footer.activity, "Capstan background: 2");
+  munit_assert_int(footer.activity_width, ==,
+                   text_columns(footer.activity, strlen(footer.activity)));
+  munit_assert_true(footer.summary_width > 0);
+  int occupied = text_columns(footer.path, strlen(footer.path)) +
+      footer.activity_width + footer.summary_width + 12;
+  munit_assert_int(occupied, <=, 80);
+  tui_layout_workspace_footer(80, "/home/me/project/src", "/home/me", &status, 0, &footer);
+  munit_assert_string_equal(footer.activity, "");
+  tui_layout_workspace_footer(25, "/p", NULL, &status, 1, &footer);
+  munit_assert_string_equal(footer.activity, "Capstan: 1");
+  munit_assert_int(text_columns(footer.path, strlen(footer.path)) +
+                   footer.activity_width + 6, <=, 25);
+  tui_layout_workspace_footer(30, "/home/me/long/project/src", "/home/me", &status, 0, &footer);
   munit_assert_string_equal(footer.files, "");
   munit_assert_string_equal(footer.added, "+128");
   munit_assert_not_null(strstr(footer.path, "…"));
   munit_assert_not_null(strstr(footer.path, "/src"));
   for (int width = 7; width < 100; width++) {
-    tui_layout_workspace_footer(width, "/home/me/目录/проект/src", "/home/me", &status, &footer);
+    tui_layout_workspace_footer(width, "/home/me/目录/проект/src", "/home/me", &status, 0, &footer);
     int used = text_columns(footer.path, strlen(footer.path)) + 6;
     if (footer.summary_width) used += footer.summary_width + 3;
     munit_assert_int(used, <=, width);
   }
   status = (WorkspaceStatus){.state = WORKSPACE_STATUS_READY};
-  tui_layout_workspace_footer(80, "/home/meeting/project", "/home/me", &status, &footer);
+  tui_layout_workspace_footer(80, "/home/meeting/project", "/home/me", &status, 0, &footer);
   munit_assert_string_equal(footer.path, "/home/meeting/project");
   munit_assert_string_equal(footer.files, "clean");
   status.state = WORKSPACE_STATUS_NONE;
-  tui_layout_workspace_footer(80, "/tmp/a\nb\033c", NULL, &status, &footer);
+  tui_layout_workspace_footer(80, "/tmp/a\nb\033c", NULL, &status, 0, &footer);
   munit_assert_string_equal(footer.path, "/tmp/a?b?c");
   munit_assert_int(footer.summary_width, ==, 0);
   status.state = WORKSPACE_STATUS_ERROR;
-  tui_layout_workspace_footer(80, "/project", NULL, &status, &footer);
+  tui_layout_workspace_footer(80, "/project", NULL, &status, 0, &footer);
   munit_assert_string_equal(footer.files, "diff unavailable");
   return MUNIT_OK;
 }

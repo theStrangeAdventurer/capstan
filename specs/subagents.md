@@ -196,7 +196,11 @@ cannot settle twice or restart cancelled work.
 
 Background submission registers but does not dispatch children or pump HTTP.
 Ordinary safe runtime poll boundaries call `poll()`; modal rendering never runs
-Lua scheduling. The explicit model `processes wait` pumps HTTP and scheduling.
+Lua scheduling. Foreground model `processes wait` pumps HTTP and scheduling. A detached child's
+`processes wait` instead suspends its callback on a cooperative Lua coroutine;
+the ordinary main loop remains available for foreground chat and resumes waiting
+callbacks at safe poll boundaries. Periodic process monitoring should use
+`processes watch` timers rather than consuming child turns on repeated waits.
 The scheduler guards against poll reentry. Background callbacks never append
 text/progress to the active parent UI. Owner, workdir, workspace root, prompt,
 provider/model selection, profile, tools and permission/MCP scopes are captured

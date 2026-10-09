@@ -523,6 +523,12 @@ static int l_headless_on_model_done(lua_State *l) {
   jsonl_append_lua_integer(&data, l, 8, "first_text_ms");
   jsonl_append(&data, ",\"first_tool_ms\":");
   jsonl_append_lua_integer(&data, l, 8, "first_tool_ms");
+  jsonl_append(&data, ",\"response_id\":");
+  jsonl_append_lua_string(&data, l, 8, "response_id");
+  jsonl_append(&data, ",\"response_model\":");
+  jsonl_append_lua_string(&data, l, 8, "response_model");
+  jsonl_append(&data, ",\"upstream_provider\":");
+  jsonl_append_lua_string(&data, l, 8, "upstream_provider");
   jsonl_append_format(&data,
       ",\"text_bytes\":%d,\"reasoning_bytes\":%d,\"tool_calls\":%d,"
       "\"usage\":{\"prompt_tokens\":", text_bytes, reasoning_bytes, tool_calls);
@@ -531,6 +537,8 @@ static int l_headless_on_model_done(lua_State *l) {
   jsonl_append_lua_object_integer(&data, l, 8, "usage", "completion_tokens");
   jsonl_append(&data, ",\"reasoning_tokens\":");
   jsonl_append_lua_object_integer(&data, l, 8, "usage", "reasoning_tokens");
+  jsonl_append(&data, ",\"cached_tokens\":");
+  jsonl_append_lua_object_integer(&data, l, 8, "usage", "cached_tokens");
   jsonl_append(&data, "},\"transport\":{");
   const char *fields[][2] = {
       {"http_status", "http_status"}, {"curl_code", "curl_code"},

@@ -367,6 +367,17 @@ for a measured zero. `first_output_ms` marks the first non-empty semantic model
 output even when a provider adapter buffers it; `first_text_ms` is marked only
 after filtering and buffering produce non-empty visible text.
 
+Model completion also retains optional `response_id`, `response_model`, and
+`upstream_provider` from the SSE envelope, and `usage.cached_tokens` in legacy
+traces. Identity fields are bounded/redacted strings, never request headers or
+arbitrary response payloads. Missing identity/cache measurements remain null,
+not an inferred provider or a cache miss. These identity fields also pass through
+native model-span attributes and the ordinary stream log. The OpenAI-compatible
+SSE parser processes reasoning, text, tool deltas and usage from the same packet
+without dropping any of them. Hooks still receive individual typed chunks;
+provider parser overrides remain supported. This includes final packets without
+an SSE separator and arbitrarily fragmented packets.
+
 HTTP metadata distinguishes cumulative curl milestones from phases. Milestones
 are named `*_elapsed_ms`; for requests without redirects, non-overlapping phases
 are `dns_ms`, `tcp_connect_ms`, `tls_handshake_ms`, `request_setup_ms`,
