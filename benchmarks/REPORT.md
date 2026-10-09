@@ -1,6 +1,40 @@
 # Capstan vs OpenCode
 
-## Latest local comparison
+## Latest local comparison — OpenRouter throughput, 2026-10-10
+
+The latest exploratory comparison ran 12 Aider Polyglot `mini-v2` tasks three
+times per agent with DeepSeek V4 Pro through OpenRouter, medium reasoning,
+explicit throughput routing for both agents, and a 240-second timeout.
+Six suites ran sequentially in seeded, balanced agent order.
+
+| Metric (36 attempts per agent) | Capstan | OpenCode |
+|---|---:|---:|
+| Upstream tests passed | **36/36 (100%)** | **36/36 (100%)** |
+| Mean agent wall time | 33.67s | 33.77s |
+| Median agent wall time | 24.21s | 26.37s |
+| Total agent CPU time | **107.3s** | 520.9s |
+| Mean primary-PID peak RSS | **33.4 MiB** | 1130.4 MiB |
+| Maximum primary-PID peak RSS | **66.9 MiB** | 1225.4 MiB |
+
+No errors or timeouts. Wall time was effectively equal; Capstan used about
+4.86x less aggregate CPU and 33.87x less mean primary-PID peak RSS.
+
+Compared with the previous full local OpenRouter series (2026-10-09), Capstan's
+mean agent wall time fell from 119.04s to 33.67s (3.54x, 71.7% reduction),
+and its score rose from 34/36 to 36/36. This followed the lossless SSE fix:
+packets containing `usage` alongside text/tool deltas previously lost fields;
+they now dispatch all supported fields. **The acceleration is not attributable
+to SSE alone:** routing changed too, and OpenCode also accelerated (65.93s to
+33.77s). This is not a controlled single-change experiment.
+
+Full methodology, provenance, telemetry, baseline and limitations:
+[`historical/openrouter-throughput-20261010/`](historical/openrouter-throughput-20261010/README.md).
+Numeric data: [`polyglot-openrouter-throughput-20261010.csv`](polyglot-openrouter-throughput-20261010.csv).
+The measured worktree was dirty; the implementation was subsequently committed
+as `fcfd3cb0`. Committing afterwards does not turn this into a clean-release run.
+Historical results below are retained unchanged.
+
+## Previous local comparison — direct DeepSeek, 2026-08-21
 
 The latest run used the fixed Aider Polyglot `mini-v2` suite: 12 tasks across
 C++, Go, Java, JavaScript, Python, and Rust, repeated three times per agent.

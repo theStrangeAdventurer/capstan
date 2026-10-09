@@ -1,0 +1,258 @@
+{
+  "seed": 1472251079,
+  "order": [
+    [
+      "r1",
+      "opencode"
+    ],
+    [
+      "r1",
+      "capstan"
+    ],
+    [
+      "r2",
+      "capstan"
+    ],
+    [
+      "r2",
+      "opencode"
+    ],
+    [
+      "r3",
+      "capstan"
+    ],
+    [
+      "r3",
+      "opencode"
+    ]
+  ],
+  "model": "deepseek/deepseek-v4-pro",
+  "provider": "openrouter",
+  "reasoning": "medium",
+  "routing": "throughput",
+  "timeout": 240,
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "capstan_revision": "2205ca8112951059636abbe1b19d12a66e9f230a",
+  "opencode_version": "1.18.33",
+  "binary_sha256": "2a7554b5c0a650ce3e584e9db2a37ed71f604b3b2844f34ea590f3724b681e85",
+  "source_directory": "benchmarks/work/paired-openrouter-20261010-004745",
+  "captured_worktree_status": " M AGENTS.md\n M Makefile\n M agent/provider_config.lua\n M agent/runtime.lua\n M agent/stream.lua\n M agent/telemetry.lua\n M agent/tools.lua\n M ai/system_prompt.txt\n M benchmarks/polyglot/README.md\n M benchmarks/polyglot/scripts/run_opencode.py\n M benchmarks/polyglot/scripts/test_run_opencode.py\n M include/background_work.h\n M include/http.h\n M include/tui_layout.h\n M plugins/processes.lua\n M specs/config.md\n M specs/observability.md\n M specs/process-control.md\n M specs/subagents.md\n M specs/workspace-footer.md\n M src/background_work.c\n M src/dispatch.c\n M src/http.c\n M src/main.c\n M src/plugins_runtime.c\n M src/telemetry.c\n M src/tui.c\n M src/tui_layout.c\n M test/test_background_runtime.lua\n M test/test_background_work.c\n M test/test_http_stack.c\n M test/test_runtime_timeline.lua\n M test/test_tui_layout.c\n M test/test_tui_wait_input.py\n?? agent/process_watch.lua\n?? benchmarks/polyglot/scripts/probe_openrouter.py\n?? specs/openrouter-performance.md\n?? test/test_openrouter_probe.py\n?? test/test_process_watch.lua\n?? test/test_stream_packets.lua\n",
+  "implementation_commit_recorded_after_run": "fcfd3cb023f4fa5f0de720b9ebf0c1a3ffd0ec7e",
+  "reproducibility": "exploratory: dirty worktree at run time; committing later does not make the run a clean-revision measurement",
+  "machine": {
+    "cpu": "Apple M5",
+    "ram_bytes": 34359738368
+  },
+  "metadata": {
+    "capstan-r1": {
+      "suite": "mini-v2",
+      "corpus_commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+      "tasks": [
+        "cpp/clock",
+        "cpp/grade-school",
+        "go/protein-translation",
+        "go/transpose",
+        "java/phone-number",
+        "java/series",
+        "javascript/promises",
+        "javascript/triangle",
+        "python/pov",
+        "python/forth",
+        "rust/acronym",
+        "rust/word-count"
+      ],
+      "replicate_id": "r1",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter-throughput",
+      "agent_command": "{repo_root}/build/capstan run --benchmark --no-wiki --provider openrouter --model deepseek/deepseek-v4-pro --profile implement --reasoning-effort medium --max-turns 40 --prompt-file {prompt_file} --workdir {workdir} --workspace {workdir} --json --trace-file {trace_file}",
+      "agent_timeout": 240,
+      "test_timeout": 300,
+      "comparable": true,
+      "telemetry_context": false,
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "config_id": "bfb10d9ddd3ef16cd77609e388bb28df6b1f67a84173e4434f9c637e7a6c9ade"
+    },
+    "capstan-r2": {
+      "suite": "mini-v2",
+      "corpus_commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+      "tasks": [
+        "cpp/clock",
+        "cpp/grade-school",
+        "go/protein-translation",
+        "go/transpose",
+        "java/phone-number",
+        "java/series",
+        "javascript/promises",
+        "javascript/triangle",
+        "python/pov",
+        "python/forth",
+        "rust/acronym",
+        "rust/word-count"
+      ],
+      "replicate_id": "r2",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter-throughput",
+      "agent_command": "{repo_root}/build/capstan run --benchmark --no-wiki --provider openrouter --model deepseek/deepseek-v4-pro --profile implement --reasoning-effort medium --max-turns 40 --prompt-file {prompt_file} --workdir {workdir} --workspace {workdir} --json --trace-file {trace_file}",
+      "agent_timeout": 240,
+      "test_timeout": 300,
+      "comparable": true,
+      "telemetry_context": false,
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "config_id": "bfb10d9ddd3ef16cd77609e388bb28df6b1f67a84173e4434f9c637e7a6c9ade"
+    },
+    "capstan-r3": {
+      "suite": "mini-v2",
+      "corpus_commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+      "tasks": [
+        "cpp/clock",
+        "cpp/grade-school",
+        "go/protein-translation",
+        "go/transpose",
+        "java/phone-number",
+        "java/series",
+        "javascript/promises",
+        "javascript/triangle",
+        "python/pov",
+        "python/forth",
+        "rust/acronym",
+        "rust/word-count"
+      ],
+      "replicate_id": "r3",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter-throughput",
+      "agent_command": "{repo_root}/build/capstan run --benchmark --no-wiki --provider openrouter --model deepseek/deepseek-v4-pro --profile implement --reasoning-effort medium --max-turns 40 --prompt-file {prompt_file} --workdir {workdir} --workspace {workdir} --json --trace-file {trace_file}",
+      "agent_timeout": 240,
+      "test_timeout": 300,
+      "comparable": true,
+      "telemetry_context": false,
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "config_id": "bfb10d9ddd3ef16cd77609e388bb28df6b1f67a84173e4434f9c637e7a6c9ade"
+    },
+    "opencode-r1": {
+      "suite": "mini-v2",
+      "corpus_commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+      "tasks": [
+        "cpp/clock",
+        "cpp/grade-school",
+        "go/protein-translation",
+        "go/transpose",
+        "java/phone-number",
+        "java/series",
+        "javascript/promises",
+        "javascript/triangle",
+        "python/pov",
+        "python/forth",
+        "rust/acronym",
+        "rust/word-count"
+      ],
+      "replicate_id": "r1",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter-throughput",
+      "agent_command": "python3 {repo_root}/benchmarks/polyglot/scripts/run_opencode.py --prompt-file {prompt_file} --workdir {workdir} --model openrouter/deepseek/deepseek-v4-pro --reasoning-effort medium --provider-sort throughput",
+      "agent_timeout": 240,
+      "test_timeout": 300,
+      "comparable": true,
+      "telemetry_context": false,
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "config_id": "24fc0717ef7c7bef21e11a739df81b015de908fa1abf59aae3eeb3e60b10c811"
+    },
+    "opencode-r2": {
+      "suite": "mini-v2",
+      "corpus_commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+      "tasks": [
+        "cpp/clock",
+        "cpp/grade-school",
+        "go/protein-translation",
+        "go/transpose",
+        "java/phone-number",
+        "java/series",
+        "javascript/promises",
+        "javascript/triangle",
+        "python/pov",
+        "python/forth",
+        "rust/acronym",
+        "rust/word-count"
+      ],
+      "replicate_id": "r2",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter-throughput",
+      "agent_command": "python3 {repo_root}/benchmarks/polyglot/scripts/run_opencode.py --prompt-file {prompt_file} --workdir {workdir} --model openrouter/deepseek/deepseek-v4-pro --reasoning-effort medium --provider-sort throughput",
+      "agent_timeout": 240,
+      "test_timeout": 300,
+      "comparable": true,
+      "telemetry_context": false,
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "config_id": "24fc0717ef7c7bef21e11a739df81b015de908fa1abf59aae3eeb3e60b10c811"
+    },
+    "opencode-r3": {
+      "suite": "mini-v2",
+      "corpus_commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f",
+      "tasks": [
+        "cpp/clock",
+        "cpp/grade-school",
+        "go/protein-translation",
+        "go/transpose",
+        "java/phone-number",
+        "java/series",
+        "javascript/promises",
+        "javascript/triangle",
+        "python/pov",
+        "python/forth",
+        "rust/acronym",
+        "rust/word-count"
+      ],
+      "replicate_id": "r3",
+      "comparison_id": "deepseek-v4-pro-medium-openrouter-throughput",
+      "agent_command": "python3 {repo_root}/benchmarks/polyglot/scripts/run_opencode.py --prompt-file {prompt_file} --workdir {workdir} --model openrouter/deepseek/deepseek-v4-pro --reasoning-effort medium --provider-sort throughput",
+      "agent_timeout": 240,
+      "test_timeout": 300,
+      "comparable": true,
+      "telemetry_context": false,
+      "harness_sha256": "4b18dace9109376158aee2c5804a90999ff63b63afa969efb3b4c7b5d543f4e4",
+      "config_id": "24fc0717ef7c7bef21e11a739df81b015de908fa1abf59aae3eeb3e60b10c811"
+    }
+  },
+  "aggregates": {
+    "capstan": {
+      "statuses": {
+        "passed": 36
+      },
+      "total_task_seconds": 1271.363,
+      "total_agent_seconds": 1212.22,
+      "mean_agent_seconds": 33.672777777777775,
+      "median_agent_seconds": 24.2095,
+      "total_cpu_seconds": 107.272,
+      "mean_primary_peak_rss_mib": 33.37372222222222,
+      "maximum_primary_peak_rss_mib": 66.906,
+      "telemetry_statuses": {
+        "complete": 36
+      }
+    },
+    "opencode": {
+      "statuses": {
+        "passed": 36
+      },
+      "total_task_seconds": 1273.701,
+      "total_agent_seconds": 1215.774,
+      "mean_agent_seconds": 33.771499999999996,
+      "median_agent_seconds": 26.372,
+      "total_cpu_seconds": 520.889,
+      "mean_primary_peak_rss_mib": 1130.4101666666666,
+      "maximum_primary_peak_rss_mib": 1225.422,
+      "telemetry_statuses": {
+        "missing": 36
+      }
+    }
+  },
+  "source_sha256": {
+    "schedule.json": "0967c4a64b39576d6c5816228ae666b70604e61b9a38faff3016026ae27ae320",
+    "analysis.txt": "778edb0bec880c3c1ad6cf7ed23b5023f4a41ed97d629d7da5a64b38c418c8f1",
+    "capstan-r1/metadata.json": "a83a16ec1a05d1e856dc59ff73986492972be5012a330e09bdb3e254be92d291",
+    "capstan-r1/results.json": "5d9ae7d025d626ed240a1acc2a30d97930f3d08860f45cebfa24e40d52c555a3",
+    "capstan-r2/metadata.json": "892dbb6f83cb8dfd143d3eba21a7f1d4c1e6672e5216a77268e68d12a1afaee1",
+    "capstan-r2/results.json": "7112aa8ce52c4b0da443881d5bcb54c121fe29a3f0ce1ebdaafa099eb2d22f2e",
+    "capstan-r3/metadata.json": "41eff7dc66b92b3a1e2b7cee2a13519a766b8203ec4d53e3a5dede0431d82459",
+    "capstan-r3/results.json": "9f2c66ad7460dc71655876a64ca2250ea30359e516258e6c85fec99ed6eeac53",
+    "opencode-r1/metadata.json": "d98e4015f276580b42734252d0a7e69cbbc756a3339b57afaeee3c49db772ca1",
+    "opencode-r1/results.json": "12884aac44a1b9c1aa8048847eee385c0800f14f0d9d1b7ed3b658ac4fbf8000",
+    "opencode-r2/metadata.json": "314bedbcd3155eed5a8dff536c8f5850ee6e1356fc79259ce476febce04d246a",
+    "opencode-r2/results.json": "139aab7c9cefdc3c3160844377ffd1f38b443d47a1edd05a54b512cd5a1b0c15",
+    "opencode-r3/metadata.json": "663532bfa00c5bd28a2618d718c62dd7ae52abfbe874dd6aa7c9d5e497478f31",
+    "opencode-r3/results.json": "68437e98d35604db71432b4a709c823b706ac53580e6d4df1f93427f48611a30"
+  }
+}

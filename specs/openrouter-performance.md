@@ -102,7 +102,17 @@ Runtime timeline tests check routing reaches actual serialized child requests.
 Existing provider and telemetry suites cover compatibility; compile and embedded
 build smoke checks cover the native adapters.
 
-The development sandbox for this change denies DNS/network access and local
-socket bind. Live upstream attribution, measured acceleration and parity with
-OpenCode therefore remain unverified. Offline tests do not establish benchmark
-quality or speed.
+The initial development sandbox denied DNS/network access and local socket
+bind; offline tests alone did not establish benchmark quality or speed.
+
+A subsequent local series on 2026-10-10 completed all three 12-task repetitions
+for each agent, using explicit throughput routing for both. Both scored 36/36;
+mean agent wall time was 33.67s for Capstan and 33.77s for OpenCode. Against the
+previous automatic-routing series, Capstan improved from 119.04s to 33.67s
+(3.54x), after the SSE and routing changes. This demonstrates observed local
+acceleration and wall-time parity, **not SSE-only causality**: routing changed,
+OpenCode also accelerated, and no controlled backend-pinned before/after was
+performed. The measured dirty worktree remains exploratory even though its
+implementation was subsequently committed as `fcfd3cb0`. See the
+[full report](../benchmarks/historical/openrouter-throughput-20261010/README.md)
+for all attempts, provenance, measurement scope and limitations.

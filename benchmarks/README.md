@@ -11,8 +11,12 @@ provider configuration are ignored by Git.
   repeated-prompt overhead benchmark. It is not a correctness benchmark.
 - [`REPORT.md`](REPORT.md) — current Capstan/OpenCode comparison, methodology,
   and limitations.
+- [`polyglot-openrouter-throughput-20261010.csv`](polyglot-openrouter-throughput-20261010.csv)
+  — all 72 attempts from the latest exploratory OpenRouter comparison.
+  [Full report and provenance](historical/openrouter-throughput-20261010/README.md)
+  include the previous-series baseline and SSE/routing acceleration caveats.
 - [`polyglot-deepseek-medium-primary-rss-20260821.csv`](polyglot-deepseek-medium-primary-rss-20260821.csv)
-  — all 72 attempts behind the latest local report, with primary-agent RSS.
+  — all 72 attempts behind the previous direct-DeepSeek report, with primary-agent RSS.
 - [`polyglot-openrouter-medium-20260809.csv`](polyglot-openrouter-medium-20260809.csv),
   [`polyglot-mini-v2-20260731.csv`](polyglot-mini-v2-20260731.csv), and
   [`runtime-footprint-20260628.csv`](runtime-footprint-20260628.csv) — compact
