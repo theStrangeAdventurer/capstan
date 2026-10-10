@@ -43,9 +43,15 @@ Write user plugins as separate Lua files:
 ~/.config/capstan/plugins/*.lua
 ```
 
-Do not store plugin source code inside `config.lua`. Capstan hot-reloads new,
-changed, and deleted plugin files from this directory. If a changed plugin fails
-to load, the previous working version stays active and Capstan retries later.
+Do not store plugin source code inside `config.lua`. Interactive TUI sessions
+hot-reload new, changed, and deleted plugin files from this directory. Headless
+`capstan run` loads them once at startup; restart the run to pick up edits.
+If a changed plugin fails to load, the previous working version stays active
+and the TUI watcher retries later.
+
+Plugins are trusted local Lua code, not sandboxed. Model-tool permission checks
+do not sandbox plugin loading, manual commands, hooks, or direct runtime API
+calls. Enabling this skill exposes instructions, not a security boundary.
 
 If the agent should know when to use a new command or model tool, also create a
 small skill under one of these user-controlled skill roots:
@@ -111,9 +117,18 @@ Handler context:
 - `ctx:replace(ui, llm?)`: returns UI text plus optional model-context text.
   If `llm` is omitted, the UI text is also sent to the model.
 
-`ctx.args` is a simple space-split array. For values that may contain spaces,
-newlines, JSON, or exact file fragments, prefer structured model-tool arguments
-or an explicit command syntax that handles those cases.
+Manual `ctx.args` splits on spaces and groups text in double quotes; it is not
+a shell parser and does not implement shell escaping or single-quote grouping.
+Autocomplete selections may supply pre-parsed argument values. For newlines,
+JSON, or exact file fragments, prefer structured model-tool arguments.
+
+For model calls, `ctx.tool_name` identifies the selected tool and `ctx.tool`
+contains its specification; `ctx.input` is synthetic (`"/" .. tool_name`),
+not original user text. `ctx.args` is empty; use `ctx.tool_args`.
+Expected model-tool failures should return `ctx:error(ui, llm?)`, which marks
+the result unsuccessful without a traceback. This helper is model-call-only;
+shared manual/model handlers can instead return `ui, llm, false`. Reserve
+`error(...)` for unexpected defects.
 
 Manual slash commands do not pass through model-tool permission prompts because
 the user directly chose the command. Model tool calls do.
@@ -151,9 +166,19 @@ end
 existing permission name when the tool is really performing that kind of action;
 for example, a file-writing tool should usually use `permission = "file_write"`.
 
-Permission targets are derived from common argument names: `command`, `path`,
-`url`, or `uri`. File permissions normalize relative paths against
-`capstan.workdir`. Shell permissions use `capstan.workdir` as the target.
+For multiple tools, use `plugin.tools = {spec1, spec2, ...}` instead of
+`plugin.tool`; when `plugin.tools` is a table it takes precedence. All tools
+share `plugin.handler(ctx)`; dispatch using `ctx.tool_name`.
+
+A specification may define `permission_target = function(args) return ... end`
+for a custom permission target. Otherwise targets fall back to `command`,
+`path`, `url`, or `uri`, then the tool name. Built-in `file_read` also handles
+batched paths. File permissions normalize relative paths against the runtime
+workdir. The tool named `shell` uses the configured workspace root as its
+permission target (not the workdir); a differently named custom tool with
+`permission = "shell"` must define its target explicitly if needed.
+`permission = false` disables the model-tool permission check; do not use it
+to bypass access checks for shell, file, or network actions.
 
 ## Autocomplete
 
@@ -226,8 +251,14 @@ subagent completions should also trigger the hook.
   `capstan.config_path`, `capstan.workdir`, and `capstan.log`.
 - Validate inputs and return clear `Usage:` messages.
 - Prefer structured tool parameters over parsing free-form strings.
-- Keep blocking work short. Long waits should use existing helpers that keep the
-  UI responsive.
+- Keep blocking work short. For long shell jobs, reuse
+  `tools.shell(command, timeout, true)` and return the managed process ID;
+  starting is not completion. Reuse the built-in `shell`, `processes`, and
+  `process_stop` adapters instead of inventing a detached shell/polling loop.
+  For agent-driven monitoring, call `processes` with `action = "watch"`, the
+  opaque ID, and `interval = 300`, then return control to the user. Inspect
+  output and terminal status on events. Use `wait` only when completion is
+  needed now; never use PIDs as managed IDs.
 - Do not create background network calls, shell execution, or persistent writes
   unless the user task clearly requires them.
 - If a plugin writes files, uses shell commands, reads credentials, or changes
@@ -240,7 +271,9 @@ subagent completions should also trigger the hook.
 After writing or editing a plugin:
 - run the most focused tests available, usually `make test-http-lua` for Lua
   plugin behavior and `make test-build` when embedded assets or built-in command
-  lists changed;
+  lists changed. Run lengthy checks with background shell execution and
+  register a process watch so chat remains available; report validation as
+  pending until output and exit status have been inspected;
 - inspect runtime load errors with `/logs` or the current runtime log when a
   plugin does not appear;
 - tell the user the command name, what each option/argument means, whether it is

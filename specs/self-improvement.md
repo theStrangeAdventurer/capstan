@@ -48,9 +48,20 @@ The skill tells the agent to prefer durable Lua extensions under:
 ~/.config/capstan/plugins/*.lua
 ```
 
-Those files are watched and hot-reloaded by the running process. The skill is
-for extensions that are necessary to solve the user task; ordinary one-off work
-should not create persistent plugins or hooks.
+Interactive TUI sessions watch and hot-reload those files; headless `capstan run`
+loads them once at startup. The skill is for extensions that are necessary to
+solve the user task; ordinary one-off work should not create persistent plugins
+or hooks.
+
+The skill documents the runtime contract: double-quoted manual arguments (not
+shell parsing), structured model arguments, model-only `ctx:error`, shared
+handlers for `plugin.tools`, custom permission targets, and the workspace-root
+permission target of the built-in shell tool. Plugins are trusted local code,
+not sandboxed by skill enablement or model-tool permissions.
+
+Long jobs and validation should reuse managed background processes and watches,
+returning control to the user while results are pending. Starting a process is
+not evidence of successful validation.
 
 ## Tests
 
