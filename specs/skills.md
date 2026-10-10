@@ -19,6 +19,14 @@ directories at startup.
 - The skill name is the directory name.
 - Only `name` and `description` from the `SKILL.md` YAML FrontMatter are added
   to the system prompt, along with the `SKILL.md` path and source.
+- These fields support indented YAML block scalars: `>` folds ordinary line
+  breaks into spaces; `|` preserves them. Blank lines and extra indentation
+  are preserved according to the block style. Optional `-` strips trailing
+  newlines, `+` keeps them, and the default keeps one final newline for a
+  nonempty terminated block. CRLF input is normalized to LF. A dedented field
+  or closing `---` ends the block; the Markdown body is never included.
+  Explicit numeric indentation indicators and full YAML parsing are not
+  supported. Existing inline and quoted values retain their behavior.
 - The `SKILL.md` body is not added to the system prompt. The agent must read the
   file path when the FrontMatter indicates the skill is relevant.
 - Skill roots are registered in Lua as trusted skill-read roots. Model-initiated

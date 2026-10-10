@@ -116,6 +116,68 @@ static int frontmatter_field_matches(const char *line, size_t line_len,
   return 1;
 }
 
+/* Read the indented body of a YAML folded (>) or literal (|) scalar. */
+static char *parse_block_scalar(const char **cursor, char style, char chomp) {
+  const char *p = *cursor;
+  char *value = malloc(strlen(p) + 2);
+  if (!value)
+    return NULL;
+
+  size_t len = 0, indent = 0, breaks = 0;
+  int have_text = 0, previous_more_indented = 0;
+  while (*p) {
+    const char *newline = strchr(p, '\n');
+    size_t line_len = newline ? (size_t)(newline - p) : strlen(p);
+    if (line_len && p[line_len - 1] == '\r')
+      line_len--;
+    size_t spaces = 0;
+    while (spaces < line_len && p[spaces] == ' ')
+      spaces++;
+    int blank = spaces == line_len && (!indent || spaces <= indent);
+    if (!blank) {
+      if (!indent) {
+        if (!spaces)
+          break;
+        indent = spaces;
+      }
+      if (spaces < indent)
+        break;
+      int more_indented = spaces > indent;
+      if (breaks) {
+        if (style == '>' && have_text && !previous_more_indented &&
+            !more_indented) {
+          if (breaks == 1)
+            value[len++] = ' ';
+          else
+            for (size_t i = 1; i < breaks; i++)
+              value[len++] = '\n';
+        } else {
+          for (size_t i = 0; i < breaks; i++)
+            value[len++] = '\n';
+        }
+      }
+      memcpy(value + len, p + indent, line_len - indent);
+      len += line_len - indent;
+      breaks = 0;
+      have_text = 1;
+      previous_more_indented = more_indented;
+    }
+    if (newline)
+      breaks++;
+    p = newline ? newline + 1 : p + strlen(p);
+  }
+
+  if (chomp == '+') {
+    for (size_t i = 0; i < breaks; i++)
+      value[len++] = '\n';
+  } else if (chomp != '-' && have_text && breaks) {
+    value[len++] = '\n';
+  }
+  value[len] = '\0';
+  *cursor = p;
+  return value;
+}
+
 static void parse_frontmatter(const char *content,
                               char **out_frontmatter_name,
                               char **out_frontmatter_description) {
@@ -142,15 +204,42 @@ static void parse_frontmatter(const char *content,
       return;
 
     size_t value_start = 0;
+    char **field = NULL;
     if (!*out_frontmatter_name &&
         frontmatter_field_matches(line, line_len, "name", &value_start)) {
-      *out_frontmatter_name =
-          trim_copy(line + value_start, line_len - value_start);
+      field = out_frontmatter_name;
     } else if (!*out_frontmatter_description &&
                frontmatter_field_matches(line, line_len, "description",
                                          &value_start)) {
-      *out_frontmatter_description =
-          trim_copy(line + value_start, line_len - value_start);
+      field = out_frontmatter_description;
+    }
+    if (field) {
+      while (value_start < line_len &&
+             (line[value_start] == ' ' || line[value_start] == '\t'))
+        value_start++;
+      size_t value_end = line_len;
+      /* A header comment is not part of the block scalar indicator. */
+      for (size_t i = value_start; i < value_end; i++) {
+        if (line[i] == '#' && i > value_start &&
+            (line[i - 1] == ' ' || line[i - 1] == '\t')) {
+          value_end = i;
+          break;
+        }
+      }
+      while (value_end > value_start &&
+             (line[value_end - 1] == ' ' || line[value_end - 1] == '\t'))
+        value_end--;
+      size_t value_len = value_end - value_start;
+      if (value_len >= 1 && value_len <= 2 &&
+          (line[value_start] == '>' || line[value_start] == '|') &&
+          (value_len == 1 || line[value_start + 1] == '-' ||
+           line[value_start + 1] == '+')) {
+        p = newline ? newline + 1 : line + line_len;
+        *field = parse_block_scalar(&p, line[value_start],
+                                   value_len == 2 ? line[value_start + 1] : 0);
+        continue;
+      }
+      *field = trim_copy(line + value_start, line_len - value_start);
     }
 
     if (!newline)

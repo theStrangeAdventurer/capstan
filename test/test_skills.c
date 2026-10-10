@@ -374,7 +374,103 @@ static MunitResult test_embedded_skill_prompt_explains_memory_reader(
   return MUNIT_OK;
 }
 
+static MunitResult test_multiline_frontmatter(const MunitParameter params[],
+                                              void *data) {
+  (void)params;
+  (void)data;
+  const struct {
+    const char *content;
+    const char *description;
+    const char *name;
+  } cases[] = {
+      {"---\ndescription: >\n  Lazy senior dev mode.\n  Use on coding tasks.\n"
+       "name: ponytail\n---\nBODY_SENTINEL",
+       "Lazy senior dev mode. Use on coding tasks.\n", "ponytail"},
+      {"---\ndescription: |\n  First line.\n  Second line.\n"
+       "name: example\n---\nBODY_SENTINEL", "First line.\nSecond line.\n", "example"},
+      {"---\ndescription: >- # no trailing newline\n  First\n  second\n\n"
+       "  Next paragraph\n\nname: example\n---\nBODY_SENTINEL",
+       "First second\nNext paragraph", "example"},
+      {"---\ndescription: |+\n  First\n  second\n\n\n"
+       "name: example\n---\nBODY_SENTINEL", "First\nsecond\n\n\n", "example"},
+      {"---\ndescription: >+\n  First\n  second\n\n"
+       "name: example\n---\nBODY_SENTINEL", "First second\n\n", "example"},
+      {"---\ndescription: |-\n  First\n  second\n\n"
+       "name: example\n---\nBODY_SENTINEL", "First\nsecond", "example"},
+      {"---\ndescription: >\n  First\n    indented\n  Last\n"
+       "name: example\n---\nBODY_SENTINEL", "First\n  indented\nLast\n", "example"},
+      {"---\r\ndescription: >\r\n    First\r\n    second\r\n"
+       "name: example\r\n---\r\nBODY_SENTINEL", "First second\n", "example"},
+      {"---\ndescription: >\nname: example\n---\nBODY_SENTINEL", "", "example"},
+      {"---\ndescription: |\n\n  First\n\n  Last\n\n"
+       "name: example\n---\nBODY_SENTINEL", "\nFirst\n\nLast\n", "example"},
+      {"---\ndescription: >\n  name: not-a-field\n  ---\n"
+       "name: example\n---\nBODY_SENTINEL", "name: not-a-field ---\n", "example"},
+      {"---\ndescription: \">\"\nname: example\n---\nBODY_SENTINEL", ">", "example"},
+      {"---\ndescription: '|'\nname: example\n---\nBODY_SENTINEL", "|", "example"},
+      {"---\ndescription: plain # preserved\nname: example\n---\nBODY_SENTINEL",
+       "plain # preserved", "example"},
+      {"---\nname: >-\n  example\n  name\ndescription: >-\n  First\n  second\n"
+       "---\nBODY_SENTINEL", "First second", "example name"},
+      {"---\nname: example\ndescription: >-\n  Last line", "Last line", "example"},
+      {"---\ndescription: |-\n  first\n    \n  last\n"
+       "name: example\n---\nBODY_SENTINEL", "first\n  \nlast", "example"},
+      {"---\ndescription: >-\n  first\n    \n  last\n"
+       "name: example\n---\nBODY_SENTINEL", "first\n  \nlast", "example"},
+      {"---\ndescription: |-\n  first\n  \n  last\n"
+       "name: example\n---\nBODY_SENTINEL", "first\n\nlast", "example"},
+  };
+
+  char root[256], skill_dir[256], path[256];
+  snprintf(root, sizeof(root), "/tmp/capstan-skills-multiline-%ld", (long)getpid());
+  make_dir(root);
+  snprintf(skill_dir, sizeof(skill_dir), "%s/example", root);
+  make_dir(skill_dir);
+  snprintf(path, sizeof(path), "%s/SKILL.md", skill_dir);
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    write_file(path, cases[i].content);
+    BuiltinSkill builtin = {
+        .name = "example",
+        .path = "embedded:skills/example/SKILL.md",
+        .content = cases[i].content,
+        .content_size = strlen(cases[i].content),
+    };
+    /* Filesystem and embedded skills share the same FrontMatter parser. */
+    for (int embedded = 0; embedded < 2; embedded++) {
+      char *prompt = skills_build_prompt(embedded ? &builtin : NULL,
+                                        embedded ? 1 : 0,
+                                        embedded ? NULL : root, NULL, NULL);
+      char *summary = skills_build_summary(embedded ? &builtin : NULL,
+                                          embedded ? 1 : 0,
+                                          embedded ? NULL : root, NULL, NULL);
+      char expected[512];
+      snprintf(expected, sizeof(expected), "Description: %s\nSource:",
+               cases[i].description);
+      munit_assert_not_null(prompt);
+      munit_assert_not_null(summary);
+      munit_assert_not_null(strstr(prompt, expected));
+      snprintf(expected, sizeof(expected), "Description: %s\n  SKILL.md:",
+               cases[i].description);
+      munit_assert_not_null(strstr(summary, expected));
+      snprintf(expected, sizeof(expected), "Name: %s\n", cases[i].name);
+      munit_assert_not_null(strstr(prompt, expected));
+      munit_assert_not_null(strstr(summary, expected));
+      munit_assert_null(strstr(prompt, "BODY_SENTINEL"));
+      munit_assert_null(strstr(summary, "BODY_SENTINEL"));
+      free(prompt);
+      free(summary);
+    }
+  }
+  unlink(path);
+  rmdir(skill_dir);
+  rmdir(root);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/multiline_frontmatter", test_multiline_frontmatter, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/embedded_skill_prompt_explains_memory_reader",
      test_embedded_skill_prompt_explains_memory_reader, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
