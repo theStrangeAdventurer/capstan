@@ -59,3 +59,8 @@ clock = clock + 1000
 assert(#watch.collect('a') == 0)
 tools.processes = original_get
 print('process watch tests passed')
+
+assert(watch.describe({{running=true, label='private command', descendants={{pid=123}}}}) == 'Background: 1 running.')
+assert(watch.describe({{running=false, exit=0}, {running=false, exit=1}, {watch_error='private details'}}) ==
+    'Background: 1 finished, 2 need attention.')
+assert(watch.describe({{running=true}, {timed_out=true}}) == 'Background: 1 running, 1 need attention.')

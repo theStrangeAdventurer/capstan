@@ -95,6 +95,7 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.provider_config",
                          "agent/provider_config.lua");
   preload_embedded_asset(L, "agent.models", "agent/models.lua");
+  preload_embedded_asset(L, "agent.history", "agent/history.lua");
   preload_embedded_asset(L, "agent.stream", "agent/stream.lua");
   preload_embedded_asset(L, "agent.tools", "agent/tools.lua");
   preload_embedded_asset(L, "agent.tasks", "agent/tasks.lua");

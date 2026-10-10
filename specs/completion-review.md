@@ -238,6 +238,11 @@ incomplete review or workspace drift. Neither outcome clears the new foreground
 run's state or runs its completion hooks. Headless/ACP callers have no choice
 modal and always follow the `repairs_deferred` path when foreground is lost.
 Without new input, findings reacquire the foreground slot for automatic repairs.
+Repairs always resume the main executor with its normal tools, never the read-only
+reviewer. The continuation explicitly authorizes fixing the reported issues,
+requires relevant validation and issue evidence, and ends via `request_completion`
+for independent re-review. An earlier read-only review scope does not prohibit
+this authorized repair phase; merely summarizing findings is not completion.
 Resuming repairs creates a new assistant output segment after the launch event;
 subsequent repair deltas never append to the original pre-review answer. Each
 recheck adds its own queue marker after that segment.

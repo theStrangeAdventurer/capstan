@@ -27,6 +27,7 @@ static int process_run(const char *command, char *const argv[],
   }
   result->exit_code = snapshot.exit_code;
   result->timed_out = snapshot.timed_out;
+  result->truncated = snapshot.truncated;
   result->stdout_text = process_manager_raw_output(id, 0);
   result->stderr_text = process_manager_raw_output(id, 1);
   if (!result->stdout_text || !result->stderr_text) {

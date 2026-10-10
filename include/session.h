@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <time.h>
 
+#define SESSION_HISTORY_MAX_BYTES (64 * 1024 * 1024)
 #define SESSION_ID_SIZE 64
 #define SESSION_TITLE_SIZE 96
 #define SESSION_TASKS_MAX_BYTES (128 * 1024)
@@ -26,6 +27,7 @@ typedef struct {
   SessionRole role;
   char *text;
   char *raw_text;
+  char *model_history_json; /* Owned structured model messages for this turn. */
   SessionImage *images;
   size_t image_count;
   ShellOutput shell_output;

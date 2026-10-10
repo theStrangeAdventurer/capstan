@@ -21,7 +21,12 @@ both known fields is the compatibility trade-off.
   reads. Target/session grants retain the same meaning as for a single read.
   A batch is never replaced by a singular Wiki read.
 - Batch reads deliberately reject sensitive paths; use singular `path` for
-  those files. External paths are supported in either form, with a separate
+  those files. A `token` substring in a source/document filename (for example
+  `agent/tokens.lua`, `test_tokens.c`, `tokenizer.py`, or `token-counting.md`)
+  does not alone classify it as sensitive. Token data/config files such as
+  `tokens.json`, `access_token.txt`, extensionless token stores, and backup
+  suffixes remain sensitive; `.env*` and `secret`/`credential` rules take
+  precedence over the source extension exception. External paths are supported in either form, with a separate
   permission decision for every disk target before any reads.
 
 - Missing paths return `Usage: /file <filename...>`.

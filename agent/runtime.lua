@@ -121,8 +121,8 @@ external access.]], workspace.configured_workdir(), workspace.configured_workspa
     if system ~= "" then
         table.insert(msgs, {role = "system", content = system})
     end
-    for _, m in ipairs(messages or {}) do
-        table.insert(msgs, {role = m.role, content = m.content})
+    for _, m in ipairs(require("agent.history").expand(messages)) do
+        table.insert(msgs, m)
     end
     return msgs
 end
@@ -693,8 +693,6 @@ local function run_impl(opts, callbacks, run_span)
         run = hook_opts,
     })
     msgs = messages_ctx.messages or msgs
-    local usage_context = opts.update_usage ~= false and
-        stream.usage_context(active, opts.usage_owner or opts.process_owner, msgs, provider_name) or nil
 
     local review_settings, review_error = completion_review_settings(opts,profile,tonumber(opts.depth) or 0)
     local caps=config_table('capabilities')
@@ -783,6 +781,16 @@ local function run_impl(opts, callbacks, run_span)
         permission_scope = yolo_scope
     end
 
+    local initial_history = {}
+    for _, message in ipairs(msgs) do initial_history[message] = true end
+    local function publish_history(current_msgs, text)
+        if not callbacks.on_history then return end
+        local excluded = {}
+        if task_message then excluded[task_message] = true end
+        if review_state_message then excluded[review_state_message] = true end
+        local encoded = require('agent.history').encode(current_msgs or msgs, initial_history, excluded, text)
+        if encoded then callbacks.on_history(encoded) end
+    end
     local function finish(result)
         result = result or {}
         if result.ok == nil then result.ok = true end
@@ -790,6 +798,7 @@ local function run_impl(opts, callbacks, run_span)
         result.started_at = result.started_at or started_at
         result.finished_at = result.finished_at or now_ms()
         result.duration_ms = result.duration_ms or math.max(0, math.floor(result.finished_at - started_at))
+        publish_history(result.messages or msgs, result.text)
         if callbacks.on_done then callbacks.on_done(result) end
     end
 
@@ -840,6 +849,9 @@ local function run_impl(opts, callbacks, run_span)
             finalize=function(...) if review_finalize then review_finalize(...) end end,
             resume=function(...)
                 if callbacks.on_review_resume then callbacks.on_review_resume() end
+                if opts.segment_history_on_review_resume then
+                    for _, message in ipairs(msgs) do initial_history[message] = true end
+                end
                 return review_resume(...)
             end,
         })
@@ -853,6 +865,7 @@ local function run_impl(opts, callbacks, run_span)
     -- One turn of the agent cycle: sends the request, streams the response,
     -- and either finishes or recurses into handle_tool_calls.
     local function continue_agent_cycle(current_msgs, tools, cycle_kind)
+        publish_history(current_msgs)
         cycle_kind = cycle_kind or "agent"
         if finished or run_span.ended then return end
         if is_cancelled() then
@@ -950,6 +963,7 @@ local function run_impl(opts, callbacks, run_span)
                 provider=provider_name,model=active.model,completion_status=kind,review_error=reason})
         end
         local function attempt_completion(text, kind)
+            publish_history(current_msgs, text)
             explicit_completion = true
             review_submission = kind == 'review'
             review_finalize=finalize_text
@@ -958,6 +972,15 @@ local function run_impl(opts, callbacks, run_span)
                 table.insert(current_msgs,{role='assistant',content=text,tool_calls={{id=event_id,
                     type='function',['function']={name='request_completion',arguments='{}'}}}})
                 table.insert(current_msgs,{role='tool',tool_call_id=event_id,content=data})
+                table.insert(current_msgs,{role='user',content=[[Resume as the main executor, not the independent reviewer. The review has
+returned findings and the repair phase is now authorized (including when the
+user selects Fix now). Any earlier read-only restriction applied to the review,
+not to this repair phase. Fix only the reported issues, inspect current code,
+and run the relevant checks. Record fix evidence with issues.respond using
+pending_verification, or dispute with concrete evidence; never resolve issues
+yourself. Finish with request_completion so the independent reviewer can
+verify the repairs. Do not merely summarize the findings. If blocked, report
+the blocker through request_completion.]]})
                 continue_agent_cycle(current_msgs,tools,'completion_fixes')
             end
             if review then
@@ -967,6 +990,10 @@ local function run_impl(opts, callbacks, run_span)
             end
         end
 
+        local streamed_history_text = {}
+        opts.checkpoint_model_history = function()
+            publish_history(current_msgs, table.concat(streamed_history_text))
+        end
         local function on_result(result, is_done)
             if finished or run_span.ended then return end
             if is_cancelled() then
@@ -979,6 +1006,7 @@ local function run_impl(opts, callbacks, run_span)
             if not is_done then
                 if result.type == "text" and result.content then
                     stream_emitted_text = true
+                    streamed_history_text[#streamed_history_text+1] = result.content
                     publish_text(result.content)
                 end
                 return
@@ -1043,6 +1071,7 @@ local function run_impl(opts, callbacks, run_span)
             end
 
             if result.tool_calls and #result.tool_calls > 0 then
+                opts.checkpoint_model_history = nil
                 if not preserve_reasoning and
                    (result.reasoning or result.reasoning_details) then
                     logging.runtime_log(
@@ -1281,7 +1310,7 @@ local function run_impl(opts, callbacks, run_span)
                 if attempt_done or run_span.ended or attempt_span.ended then return end
                 if is_done then attempt_done = true end
                 return on_result(result, is_done)
-            end, prompt_estimate, hook_opts, usage_context)
+            end, prompt_estimate, hook_opts)
             local pending_bytes, pending_count, overflow = 0, 0, false
             local function deliver_response(...)
                 local chunk = ...
@@ -1347,16 +1376,6 @@ function M.run(opts, callbacks)
     opts.process_owner = opts.process_owner or opts.mcp_scope or
         (agent and type(agent.session_id) == "function" and agent.session_id()) or
         ("unowned:" .. tostring(opts))
-    -- Usage cache is scoped so foreground conversation history isn't
-    -- overwritten by background reviews or subagents that share the
-    -- same process_owner but have different message sets.
-    if not opts.usage_owner then
-        if opts.background or (tonumber(opts.depth) or 0) > 0 then
-            opts.usage_owner = opts.process_owner .. ":" .. tostring({})
-        else
-            opts.usage_owner = opts.process_owner
-        end
-    end
     opts.workdir = opts.workdir or workspace.configured_workdir()
     opts.workspace_root = opts.workspace_root or workspace.configured_workspace_root()
     opts.system_prompt = opts.system_prompt or _G.system_prompt or ""
@@ -1425,6 +1444,7 @@ function M.run(opts, callbacks)
                 cancelled_transports[#cancelled_transports + 1] = opts.transport_id
                 opts.transport_id = nil
             end
+            if opts.checkpoint_model_history then opts.checkpoint_model_history() end
             observers.on_done({ok = false, cancelled = true, error = "cancelled", text = ""})
         end)
     end
@@ -1847,13 +1867,14 @@ _G.agent_background_notification = function()
         'do not blindly retry auth, billing or destructive failures. Report completion or blockers without waiting for a new user message. ' ..
         'For continued periodic monitoring use processes watch, not a sleeping subagent.'
     logging.runtime_log('process', summary)
-    return summary
+    return summary, require('agent.process_watch').describe(events)
 end
 
 _G.agent_entry = function(messages)
     interactive_generation=interactive_generation+1
     local generation=interactive_generation
     local session_id = type(agent.session_id) == "function" and agent.session_id() or nil
+    local history_sink = agent.history_sink and agent.history_sink()
     local output_sink=agent.output_sink and agent.output_sink()
     local sink_is_segment = output_sink ~= nil
     local sink=output_sink or function(text)
@@ -1866,6 +1887,7 @@ _G.agent_entry = function(messages)
     end
     local opts = {
         messages = messages,
+        segment_history_on_review_resume = true,
         update_status = true,
         update_usage = true,
         permission_scope = interactive_permission_scope(),
@@ -1879,6 +1901,7 @@ _G.agent_entry = function(messages)
     end
     local review_id
     M.run(opts, {
+        on_history = history_sink and function(encoded) return history_sink(encoded) end or nil,
         on_text = function(text) return sink(text) end,
         on_review_result = function(text)
             if agent.session_id and agent.session_id() ~= session_id then return end
@@ -1901,6 +1924,7 @@ _G.agent_entry = function(messages)
             -- marker, not a continuation of the pre-review answer.
             if agent.output_sink then
                 sink = assert(agent.output_sink(true))
+                history_sink = agent.history_sink and agent.history_sink()
                 sink_is_segment = true
             end
             agent.set_running(true)

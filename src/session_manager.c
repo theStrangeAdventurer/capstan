@@ -110,13 +110,14 @@ static int snapshot_messages(void) {
     Message *source = messages->items[i];
     if (!source ||
         ((!source->text || !source->text[0]) &&
-                    source->image_count == 0))
+                    source->image_count == 0 && !source->model_history_json))
       continue;
     SessionMessage *target = &g_active.messages[g_active.message_count++];
     target->role = source->role == MSG_USER ? SESSION_ROLE_USER :
                    source->role == MSG_REVIEW ? SESSION_ROLE_REVIEW :
                                                SESSION_ROLE_ASSISTANT;
     target->shell_output = source->shell_output; /* Borrowed for serialization. */
+    target->model_history_json = source->model_history_json;
     target->text = source->text;
     target->raw_text = source->raw_text ? source->raw_text : source->text;
     if (source->image_count > 0) {
@@ -268,6 +269,8 @@ static void install_loaded(Session *loaded) {
                              ? messages->items[messages->size - 1]
                              : NULL;
     if (installed) {
+      installed->model_history_json = source->model_history_json;
+      source->model_history_json = NULL;
       installed->shell_output = source->shell_output;
       source->shell_output = (ShellOutput){0};
     } else {

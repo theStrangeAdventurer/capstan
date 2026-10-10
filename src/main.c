@@ -64,6 +64,7 @@ static HeadlessRun g_headless_run = {0};
 static TraceWriter g_headless_trace = TRACE_WRITER_INIT;
 static int g_mouse_selecting_messages = 0;
 static int g_headless_context = LUA_NOREF;
+static char *g_headless_history = NULL;
 
 #define ACTIVE_RENDER_INTERVAL_MS 16
 #define IDLE_RENDER_INTERVAL_MS 50
@@ -650,6 +651,16 @@ static long long headless_measurement(lua_State *l, const char *field) {
   return value;
 }
 
+static int l_headless_on_history(lua_State *l) {
+  size_t length;
+  const char *text = luaL_checklstring(l, 1, &length);
+  if (length > SESSION_HISTORY_MAX_BYTES) return luaL_error(l, "model history exceeds storage limit");
+  char *copy = my_strdup(text);
+  if (!copy) return luaL_error(l, "model history allocation failed");
+  free(g_headless_history); g_headless_history = copy;
+  return 0;
+}
+
 static int l_headless_on_done(lua_State *l) {
   g_headless_run.done = 1;
   g_headless_run.ok = 1;
@@ -888,6 +899,10 @@ static void lua_push_headless_messages(lua_State *l, const Session *session,
   if (session->id[0]) {
     for (size_t i = 0; i < session->message_count; i++) {
       lua_push_session_message(l, &session->messages[i]);
+      if (session->messages[i].model_history_json) {
+        lua_pushstring(l, session->messages[i].model_history_json);
+        lua_setfield(l, -2, "model_history_json");
+      }
       lua_rawseti(l, -2, (lua_Integer)i + 1);
     }
     return;
@@ -905,7 +920,7 @@ static int headless_session_finish(Session *session,
                                    const HeadlessRun *run) {
   if (!session->id[0])
     return 1;
-  if (run->text && run->text[0]) {
+  if ((run->text && run->text[0]) || g_headless_history) {
     SessionMessage *grown =
         realloc(session->messages,
                 (session->message_count + 1) * sizeof(SessionMessage));
@@ -915,14 +930,16 @@ static int headless_session_finish(Session *session,
     SessionMessage *message = &session->messages[session->message_count];
     memset(message, 0, sizeof(*message));
     message->role = SESSION_ROLE_ASSISTANT;
-    message->text = my_strdup(run->text);
-    message->raw_text = my_strdup(run->text);
+    message->text = my_strdup(run->text ? run->text : "");
+    message->raw_text = my_strdup(run->text ? run->text : "");
     if (!message->text || !message->raw_text) {
       free(message->text);
       free(message->raw_text);
       memset(message, 0, sizeof(*message));
       return 0;
     }
+    message->model_history_json = g_headless_history;
+    g_headless_history = NULL;
     session->message_count++;
   }
   session->updated_at = time(NULL);
@@ -1180,6 +1197,8 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   lua_setfield(L, -2, "on_text");
   lua_pushcfunction(L, l_headless_on_error);
   lua_setfield(L, -2, "on_error");
+  lua_pushcfunction(L, l_headless_on_history);
+  lua_setfield(L, -2, "on_history");
   lua_pushcfunction(L, l_headless_on_done);
   lua_setfield(L, -2, "on_done");
   lua_pushcfunction(L, l_headless_on_run_start);
@@ -1285,6 +1304,7 @@ static int run_headless(const CliOptions *opts, const char *argv0) {
   if (cancelled_background)
     fprintf(stderr, "capstan: cancelled %zu background subagent(s) at CLI exit\n", cancelled_background);
   int rc = g_headless_run.ok ? 0 : 1;
+  free(g_headless_history); g_headless_history = NULL;
   free(g_headless_run.text);
   g_headless_run = (HeadlessRun){0};
   session_manager_tasks_session(NULL);

@@ -533,7 +533,7 @@ int session_save(const Session *session) {
   free(title);
   for (size_t i = 0; ok && i < session->message_count; i++) {
     const SessionMessage *message = &session->messages[i];
-    if ((!message->text || !message->text[0]) && message->image_count == 0)
+    if ((!message->text || !message->text[0]) && message->image_count == 0 && !message->model_history_json)
       continue;
     char *text = json_escape(message->text ? message->text : "");
     char *raw = json_escape(message->raw_text ? message->raw_text
@@ -545,6 +545,23 @@ int session_save(const Session *session) {
                  text, raw) >= 0;
     free(text);
     free(raw);
+    if (ok && message->model_history_json) {
+      size_t length = strlen(message->model_history_json);
+      if (!length || length > SESSION_HISTORY_MAX_BYTES) ok = 0;
+      for (size_t offset = 0; ok && offset < length;) {
+        size_t size = length - offset;
+        if (size > 65536) size = 65536;
+        while (size && offset + size < length &&
+            ((unsigned char)message->model_history_json[offset + size] & 0xc0) == 0x80) size--;
+        char chunk[65537];
+        memcpy(chunk, message->model_history_json + offset, size); chunk[size] = 0;
+        char *encoded = json_escape(chunk);
+        offset += size;
+        ok = encoded && fprintf(f, "{\"type\":\"model_history_chunk\",\"data\":%s,\"final\":%d}\n",
+            encoded, offset == length) >= 0;
+        free(encoded);
+      }
+    }
     for (size_t block_idx = 0; ok && block_idx < message->shell_output.count;
          block_idx++) {
       const ShellOutputBlock *block = &message->shell_output.blocks[block_idx];
@@ -648,6 +665,7 @@ void session_free(Session *session) {
   for (size_t i = 0; i < session->message_count; i++) {
     free(session->messages[i].text);
     free(session->messages[i].raw_text);
+    free(session->messages[i].model_history_json);
     for (size_t image_idx = 0;
          image_idx < session->messages[i].image_count; image_idx++) {
       free(session->messages[i].images[image_idx].mime_type);
@@ -746,11 +764,13 @@ int session_load(const char *id, Session *session) {
   free(stored_id);
   free(title);
   free(line);
+  int history_complete = 1;
+  size_t history_length = 0, history_capacity = 0;
   int image_complete = 1, issues_complete = 1, issues_started = session->issues_json != NULL;
   while (ok) {
     line = read_line(f, &line_status);
     if (line_status == SESSION_LINE_EOF) {
-      if (!image_complete || !issues_complete)
+      if (!image_complete || !issues_complete || !history_complete)
         ok = 0;
       break;
     }
@@ -765,6 +785,21 @@ int session_load(const char *id, Session *session) {
       break;
     }
     char *type = json_field_string(line, "type");
+    if (type && strcmp(type, "model_history_chunk") == 0) {
+      SessionMessage *message = session->message_count ? &session->messages[session->message_count-1] : NULL;
+      char *chunk = json_field_string(line, "data");
+      long long final = json_field_integer(line, "final", -1);
+      ok = image_complete && issues_complete && message &&
+          message->role == SESSION_ROLE_ASSISTANT && chunk && chunk[0] &&
+          (final == 0 || final == 1) && !(history_complete && message->model_history_json);
+      if (ok && history_length + strlen(chunk) > SESSION_HISTORY_MAX_BYTES) ok = 0;
+      for (size_t i = 0; ok && chunk[i]; i++)
+        ok = append_char(&message->model_history_json, &history_length, &history_capacity, chunk[i]);
+      history_complete = final == 1;
+      free(chunk); free(type); free(line);
+      continue;
+    }
+    if (!history_complete) { free(type); free(line); ok = 0; break; }
     if (type && strcmp(type, "issues_chunk") == 0) {
       char *chunk = json_field_string(line, "issues_json");
       long long final = json_field_integer(line, "final", -1);
@@ -873,6 +908,7 @@ int session_load(const char *id, Session *session) {
                                                  SESSION_ROLE_ASSISTANT;
     message->text = text;
     message->raw_text = raw;
+    history_length = history_capacity = 0;
     free(role);
     free(line);
   }

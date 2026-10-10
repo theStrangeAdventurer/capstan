@@ -719,6 +719,12 @@ while True:
 
 assert permission_requests == 1
 assert len(requests) == 4
+continued = requests[2]["messages"]
+assert any(m.get("tool_call_id") == "call_permission_1" and
+           "permission-ok" in m.get("content", "") for m in continued)
+assert any(any(c.get("id") == "call_permission_1" for c in m.get("tool_calls", []))
+           for m in continued)
+assert sum(m.get("content") == "permission completed" for m in continued) == 1
 
 # A fresh session has no grant. Cancel while its permission request is pending;
 # the run must resolve as cancelled and must not start a continuation request.

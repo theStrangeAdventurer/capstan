@@ -340,7 +340,10 @@ local function finish_active(stop_reason, result)
     run.finished = true
     active = nil
     local session = run.session
-    if result and result.ok and type(result.text) == "string" and result.text ~= "" then
+    if run.history then
+        table.insert(session.messages, {role='assistant', content=(result and result.text) or '',
+            model_history_json=run.history})
+    elseif result and result.ok and type(result.text) == "string" and result.text ~= "" then
         table.insert(session.messages, {role = "assistant", content = result.text})
     end
     response(run.request_id, {stopReason = stop_reason})
@@ -475,9 +478,11 @@ local function start_prompt(id, params)
                 content = {type = "text", text = "\n[error: " .. tostring(message) .. "]\n"},
             })
         end,
+        on_history = function(encoded) run.history = encoded end,
         on_done = function(result)
             if active ~= run or run.finished then return end
-            finish_active(result and result.ok == false and "refusal" or "end_turn", result)
+            finish_active(run.cancelling and "cancelled" or
+                (result and result.ok == false and "refusal" or "end_turn"), result)
         end,
     })
 
@@ -487,6 +492,18 @@ local function start_prompt(id, params)
         run.finished = true
         active = nil
         rpc_error(id, -32000, tostring(start_err or "could not start agent run"))
+    end
+end
+
+-- Runtime cancellation checkpoints streamed history synchronously. Persist
+-- only afterwards; on_done may already have finished the same run.
+local function cancel_active()
+    local run = active
+    if not run or run.finished then return end
+    run.cancelling = true
+    if run.cancel then run.cancel() else acp.cancel() end
+    if active == run and not run.finished then
+        finish_active("cancelled", {ok = false})
     end
 end
 
@@ -573,9 +590,7 @@ handlers["session/cancel"] = function(id, params)
     local session = find_session(params, id)
     if not session then return end
     if active and active.session == session and not active.finished then
-        local cancel=active.cancel
-        finish_active("cancelled", {ok = false})
-        if cancel then cancel() else acp.cancel() end
+        cancel_active()
     end
     if id ~= nil then response(id, {}) end
 end
@@ -631,9 +646,7 @@ handlers["session/close"] = function(id, params)
     local session = find_session(params, id)
     if not session then return end
     if active and active.session == session then
-        local cancel=active.cancel
-        finish_active("cancelled", {ok = false})
-        if cancel then cancel() else acp.cancel() end
+        cancel_active()
     end
     mcp_client.close_scope(session.id)
     local cleaned = not tools or not tools.process_close_owner or

@@ -49,22 +49,48 @@ curl handle lifecycle, or persisted permission storage.
 
 ## Streaming token display
 
-`agent/stream.lua` owns live UI usage updates. Text, reasoning, and tool-call
-names/arguments contribute to approximate output tokens even when the model's
-context limit is absent or zero. Provider usage counters take precedence when
-present (including measured zero); missing counters fall back to local estimates
-rather than resetting the display to zero. Estimates remain UI-only and are not
-exported as measured usage in stream metrics. Suppressed child streams do not
-update the parent UI. Each new model request starts its own output count.
-Request start uses this same streaming policy, without clearing usage first.
-While awaiting fresh input usage, an extending conversation retains its last
-provider-measured input count rather than replacing it with a lower local estimate.
-This is a last-known UI value, not a new measurement or an accumulated session
-bill. Fresh measurements may decrease (including to zero). A changed session,
-provider/model/endpoint, or replaced/compacted history invalidates reuse; without
-a valid measurement the display uses the local estimate. The in-memory cache
-retains only the latest visible conversation, never child usage or telemetry.
-Regression coverage lives in `test/test_runtime_timeline.lua`.
+`agent/stream.lua` owns a provider-first, request-local display policy shared by
+all providers and custom SSE parsers. Request start and text/reasoning/tool deltas
+do not overwrite the last displayed usage. The UI waits for actual provider
+counters, even when they arrive only at the end (e.g. Responses `response.completed`).
+The existing native/session usage remains visible across requests and restarts;
+there is no separate Lua calibration cache or extrapolation from older requests.
+Before the first result, no token count is shown if none has been restored.
+
+Any valid input, output or total counter selects measured mode for that request,
+including measured zero. Partial snapshots merge valid fields. Missing components
+can be derived from provider totals, or remain zero if unavailable; they are never
+filled with local token estimates. A new input/output counter without a new total
+invalidates the earlier total. Invalid counters do not erase valid measurements.
+The displayed total uses the provider total when available, otherwise the sum of
+provider components. Missing cached/reasoning details remain absent in telemetry.
+
+Only successful nonempty responses that finish without any valid usage counters
+fall back to local estimates. Text, reasoning and tool names/arguments are counted
+once at completion, independently of SSE chunk boundaries. Estimates never appear
+as measured telemetry. Empty retries, failed transfers, suppressed child streams
+and background reviews do not overwrite the foreground count with estimates.
+A provider that omits usage for one request can therefore use the fallback on
+that request; capability is not guessed from the absence of early stream usage.
+
+The indicator is the latest request's context footprint, not accumulated billing.
+Input already contains retained earlier answers; do not add prior request inputs
+again. The display may remain still throughout generation and update at the end.
+Compaction or changed request contents can legitimately reduce measured usage.
+Provider completion usage may include internal reasoning, so even reported usage
+is not a precise count of the history retained for the next turn. Input estimation
+for automatic compaction and request diagnostics remains a separate planning use;
+it does not overwrite the usage indicator.
+
+`agent.set_usage` saturates finite oversized UI/session counters at `INT_MAX` and
+maps negative/non-finite values to zero before conversion. Provider telemetry is
+unchanged. Percent arithmetic and formatting stay 64-bit. Legacy saved records
+without a total fall back to their input/output sum. Counts in thousands retain
+one decimal place. Without a capacity the UI shows input and output separately.
+
+Regression coverage: `test/test_runtime_timeline.lua` (late usage, resumed display,
+partial/zero/invalid counters, failures, no-usage fallback and consecutive turns),
+`test/test_usage.c`, and `test/test_agent.c`.
 
 ## Sequence
 
@@ -458,3 +484,9 @@ must be opt-in with a cheap no-hook fast path.
   belongs in `make test-http-lua` with mocked Lua globals where possible.
 - Embedded runtime loading is verified by `make test-build` because it exercises
   generated assets and `package.preload`.
+
+Structured tool history is retained across user turns through `agent.history`,
+independently of transcript presentation (see [Sessions](sessions.md)). Provider
+usage therefore describes a request that still contains prior tool evidence.
+VCS results are paged as valid JSON (see [VCS tool](vcs-tool.md)); an incomplete
+page must not be treated as the full scope of a code review.

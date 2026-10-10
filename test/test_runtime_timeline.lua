@@ -143,9 +143,12 @@ assert(measured.cached_tokens == nil and measured.reasoning_tokens == nil)
 measured = usage({cached_tokens = -1, reasoning_tokens = 'private'})
 assert(measured.cached_tokens == nil and measured.reasoning_tokens == nil)
 
--- UI output estimates work without model capacity or terminal provider usage.
+-- Provider usage is never blended with estimates, regardless of capacity.
 do
     local saved = agent.set_usage
+    local token_module = require('agent.tokens')
+    local saved_weight = token_module.text_token_weight
+    token_module.text_token_weight = function() error('must not estimate a response with usage') end
     for _, capacity in ipairs({false, 0, 4096}) do
         for _, delta in ipairs({{content = 'hello world'},
             {reasoning_content = 'consider the answer'},
@@ -157,17 +160,16 @@ do
                 if done then result = r end
             end, 48000)
             callback('data: ' .. json.encode({choices = {{delta = delta}}}) .. '\n\n', false)
-            assert(latest[1] == 48000 and latest[2] > 0)
-            assert(latest[3] == latest[1] + latest[2] and latest[4] == (capacity or 0))
-            local estimate = latest[2]
+            assert(latest == nil) -- Wait for usage; no temporary estimate.
             callback('data: {"usage":{"prompt_tokens":47000}}\n\n', false)
-            assert(latest[1] == 47000 and latest[2] == estimate)
+            assert(latest[1] == 47000 and latest[2] == 0 and latest[4] == (capacity or 0))
             callback('data: {"usage":{"prompt_tokens":47000,"completion_tokens":0,"total_tokens":47000}}\n\n', false)
             assert(latest[2] == 0) -- Measured zero must not become an estimate.
             callback(nil, true)
             assert(result.metrics.usage.completion_tokens == 0)
         end
     end
+    token_module.text_token_weight = saved_weight
     local latest, result
     agent.set_usage = function(...) latest = {...} end
     local callback = stream.stream({}, function(r, done) if done then result = r end end, 10)
@@ -182,63 +184,69 @@ do
     agent.set_usage = saved
 end
 
--- Context display across requests: old measurements are UI-only, not a floor.
+-- Reinitialization/retry preserves the C-owned display until fresh evidence.
 do
     local saved = agent.set_usage
-    local latest, result
+    local latest = {38655, 453, 39108, 272000} -- Restored from session by C.
     agent.set_usage = function(...) latest = {...} end
-    local provider = {model = 'one', endpoint = 'fixture'}
-    local history = {{role = 'user', content = 'first'}}
-    local context = stream.usage_context(provider, 'session-a', history)
-    local function start(ctx, p)
-        return stream.stream(p or provider, function(r, done) if done then result = r end end,
-            26000, nil, ctx)
+    local callback = stream.stream({}, noop, 52800)
+    callback('data: {"choices":[{"delta":{"content":"more text"}}]}\n\n', false)
+    assert(latest[1] == 38655 and latest[2] == 453 and latest[3] == 39108)
+    callback('data: {"usage":{"prompt_tokens":39000,"completion_tokens":500,"total_tokens":39500}}\n\n', false)
+    callback(nil, true)
+    assert(latest[1] == 39000 and latest[2] == 500 and latest[3] == 39500)
+    callback = stream.stream({}, noop, 90000)
+    assert(latest[3] == 39500)
+    callback('data: {"usage":{"total_tokens":1000}}\n\n', false)
+    assert(latest[1] + latest[2] == 1000)
+    callback(nil, true)
+    callback = stream.stream({}, noop, 90000)
+    callback('data: {"usage":{"prompt_tokens":0,"completion_tokens":0}}\n\n', false)
+    callback(nil, true)
+    assert(latest[1] == 0 and latest[2] == 0)
+    -- A failed transport must not replace the last reading with an estimate.
+    callback = stream.stream({}, noop, 90000)
+    callback(nil, true, 'Connection error: fixture')
+    assert(latest[1] == 0 and latest[2] == 0)
+    agent.set_usage = saved
+end
+
+-- Packet boundaries cannot change estimates; partial usage cannot erase counts.
+do
+    local saved, latest = agent.set_usage
+    agent.set_usage = function(...) latest = {...} end
+    for _, kind in ipairs({'content', 'reasoning_content', 'arguments'}) do
+        local function estimate(parts)
+            local callback = stream.stream({}, noop, 100)
+            for _, part in ipairs(parts) do
+                local delta = {[kind] = part}
+                if kind == 'arguments' then
+                    delta = {tool_calls = {{index = 0, ['function'] = {arguments = part}}}}
+                end
+                callback('data: ' .. json.encode({choices = {{delta = delta}}}) .. '\n\n', false)
+            end
+            callback(nil, true)
+            return latest[2]
+        end
+        local sample = 'abcde Привет 世界'
+        local pieces = {}
+        for i = 1, #sample do pieces[i] = sample:sub(i, i) end
+        assert(estimate({sample}) == estimate(pieces), kind)
     end
-    local function report(callback, count)
-        callback('data: ' .. json.encode({usage = {prompt_tokens = count}}) .. '\n\n', false)
+    local result
+    local callback = stream.stream({}, function(r, done) if done then result = r end end, 100)
+    local function report(value)
+        callback('data: ' .. json.encode({usage = value}) .. '\n\n', false)
     end
-    local callback = start(context)
-    report(callback, 112000)
+    report({prompt_tokens = 900, completion_tokens = 10, total_tokens = 910, cached_tokens = 800})
+    report({completion_tokens = 20})
+    assert(latest[1] == 900 and latest[2] == 20 and latest[3] == 920)
+    report({prompt_tokens = -1, completion_tokens = 'invalid'})
+    assert(latest[1] == 900 and latest[2] == 20)
+    report({completion_tokens = 0})
+    assert(latest[1] == 900 and latest[2] == 0 and latest[3] == 900)
     callback(nil, true)
-    history[#history + 1] = {role = 'assistant', content = 'answer'}
-    history[#history + 1] = {role = 'user', content = 'continue'}
-    context = stream.usage_context(provider, 'session-a', history)
-    callback = start(context)
-    assert(latest[1] == 112000 and latest[2] == 0)
-    callback('data: {"choices":[{"delta":{"content":"hello"}}]}\n\n', false)
-    assert(latest[1] == 112000 and latest[2] > 0)
-    callback(nil, true)
-    assert(result.metrics.usage == nil)
-    callback = start(context) -- Tool continuation/retry shares the same context.
-    assert(latest[1] == 112000 and latest[2] == 0)
-    report(callback, 24000)
-    assert(latest[1] == 24000) -- Real context reduction must remain visible.
-    report(callback, 0)
-    assert(latest[1] == 0)
-    callback(nil, true)
-    callback = start(context)
-    assert(latest[1] == 0)
-    report(callback, 112000)
-    callback(nil, true)
-    local child = {model = 'child', suppress_agent_state = true}
-    assert(stream.usage_context(child, 'child', {}) == nil)
-    callback = start(stream.usage_context(provider, 'session-a', history))
-    assert(latest[1] == 112000)
-    callback(nil, true)
-    -- Compaction/replaced history, session and model/provider changes reset reuse.
-    for _, change in ipairs({'history', 'session', 'model', 'endpoint', 'provider'}) do
-        context = stream.usage_context(provider, 'session-a', history)
-        callback = start(context); report(callback, 112000); callback(nil, true)
-        local p = {model = provider.model, endpoint = provider.endpoint}
-        if change == 'model' then p.model = 'other' end
-        if change == 'endpoint' then p.endpoint = 'other' end
-        local messages = change == 'history' and {{role = 'user', content = 'summary'}} or history
-        context = stream.usage_context(p, change == 'session' and 'session-b' or 'session-a', messages,
-            change == 'provider' and 'other-provider' or nil)
-        callback = start(context, p)
-        assert(latest[1] == 26000, change)
-        callback(nil, true)
-    end
+    assert(result.metrics.usage.prompt_tokens == 900 and result.metrics.usage.cached_tokens == 800)
     agent.set_usage = saved
 end
 
@@ -255,6 +263,41 @@ package.loaded['agent.tasks'] = {refresh = noop}
 local runtime = require('agent.runtime')
 local callbacks = {}
 http.post_stream = function(_, _, _, callback) callbacks[#callbacks + 1] = callback end
+-- Structured tool history survives the next user turn without duplicating UI prose.
+do
+    local saved_post = http.post_stream
+    local sent, response, history, done
+    http.post_stream = function(_, body, _, callback) sent=json.decode(body); response=callback end
+    local messages = {{role='user',content='inspect'}}
+    assert(runtime.run({messages=messages,tools=available,completion_review=false}, {
+        on_history=function(value) history=value end, on_done=function(r) done=r end,
+    }))
+    response('data: '..json.encode({choices={{delta={tool_calls={{index=0,id='saved-call',
+        type='function',['function']={name='probe',arguments='{}'}}}}}}})..'\n\n',false)
+    response(nil,true)
+    assert(history and not done)
+    response('data: {"choices":[{"delta":{"content":"finished"}}]}\n\n',false)
+    response(nil,true)
+    assert(done and done.ok)
+    local decoded=json.decode(history)
+    assert(#decoded==3 and decoded[1].tool_calls[1].id=='saved-call')
+    assert(decoded[2].role=='tool' and decoded[2].tool_call_id=='saved-call')
+    assert(decoded[3].content=='finished')
+    messages[#messages+1]={role='assistant',content='UI status plus finished',model_history_json=history}
+    messages[#messages+1]={role='user',content='continue'}
+    assert(runtime.run({messages=messages,tools=available,completion_review=false}, {}))
+    local seen=0
+    for _,m in ipairs(sent.messages) do
+        assert(m.content~='UI status plus finished')
+        if m.content=='finished' then seen=seen+1 end
+        if m.role=='tool' then assert(m.tool_call_id=='saved-call' and m.content=='ok') end
+    end
+    assert(seen==1 and sent.messages[#sent.messages].content=='continue')
+    response('data: {"choices":[{"delta":{"content":"ack"}}]}\n\n',false)
+    response(nil,true)
+    http.post_stream=saved_post
+    callbacks={}
+end
 -- Reviewer restrictions preserve provider wire format after before_request.
 do
     local hooks = package.loaded['agent.hooks']
@@ -363,6 +406,37 @@ do
     review.new=saved_new
     callbacks={}
 end
+-- Repairs resume the main executor with explicit action, not reviewer scope.
+do
+    local review = require('agent.completion_review')
+    local saved_new, saved_post = review.new, http.post_stream
+    local context, response, sent
+    review.new = function(_, ctx)
+        context = ctx
+        return {dispose=noop, poll=noop, consume=function() return true end,
+            attempt=function() end}
+    end
+    http.post_stream = function(_, body, _, callback)
+        sent, response = json.decode(body), callback
+    end
+    assert(runtime.run({messages={{role='user',content='Review only; do not change files'}},
+        tools=available,completion_review=true,update_status=false,update_usage=false}, {}))
+    response('data: '..json.encode({choices={{delta={tool_calls={{index=0,id='review',
+        type='function',['function']={name='request_completion',
+        arguments=json.encode({status='review',text='review scope'})}}}}}}})..'\n\n',false)
+    response(nil,true)
+    context.resume(json.encode({issues={{id='issue-1'}}}))
+    local instruction = sent.messages[#sent.messages]
+    assert(instruction.role=='user' and instruction.content:find('main executor',1,true))
+    assert(instruction.content:find('Fix now',1,true))
+    assert(instruction.content:find('request_completion',1,true))
+    local names={}
+    for _, tool in ipairs(sent.tools) do names[tool['function'].name]=true end
+    assert(names.probe and names.request_completion and not names.submit_review)
+    context.finalize('repair fixture ended','blocked')
+    review.new, http.post_stream = saved_new, saved_post
+    callbacks={}
+end
 -- Actual consecutive user turns must not clear usage before starting SSE.
 do
     local saved, latest = agent.set_usage
@@ -382,6 +456,46 @@ do
     agent.set_usage = saved
     callbacks = {}
 end
+-- Occupied context grows across real requests without accumulating old inputs.
+do
+    local saved_usage, saved_post = agent.set_usage, http.post_stream
+    local latest, response, sent
+    agent.set_usage = function(...) latest = {...} end
+    http.post_stream = function(_, body, _, callback)
+        sent, response = json.decode(body), callback
+    end
+    local messages = {{role = 'user', content = 'start'}}
+    local answer = string.rep('abcd', 600)
+    local previous_occupied
+    for turn = 1, 3 do
+        assert(runtime.run({messages = messages, tools = {}, process_owner = 'context-growth'}, {}))
+        if turn > 1 then
+            -- The preceding answer actually reaches the provider, not just UI.
+            assert(sent.messages[#sent.messages - 1].content == answer)
+            assert(latest[1] + latest[2] == previous_occupied)
+        else
+            assert(latest == nil)
+        end
+        local input = 1000 + (turn - 1) * 610
+        response('data: ' .. json.encode({usage = {prompt_tokens = input}}) .. '\n\n', false)
+        response('data: ' .. json.encode({choices = {{delta = {content = answer}}}}) .. '\n\n', false)
+        assert(latest[1] == input and latest[2] == 0) -- No estimated output.
+        response('data: ' .. json.encode({usage = {completion_tokens = 600}}) .. '\n\n', false)
+        previous_occupied = input + 600
+        response(nil, true)
+        assert(latest[1] + latest[2] == previous_occupied) -- No idle reset.
+        messages[#messages + 1] = {role = 'assistant', content = answer}
+        messages[#messages + 1] = {role = 'user', content = 'continue'}
+    end
+    assert(runtime.run({messages = {{role = 'user', content = 'short summary'}},
+        tools = {}, process_owner = 'context-growth'}, {}))
+    assert(latest[1] + latest[2] == previous_occupied)
+    response('data: {"choices":[{"delta":{"content":"ack"}}]}\n\n', false)
+    response(nil, true)
+    assert(latest[1] + latest[2] < previous_occupied) -- Completed without usage.
+    agent.set_usage, http.post_stream = saved_usage, saved_post
+end
+
 -- Exercise the actual scheduler and run loop together with interleaved child
 -- responses: model/tool descendants must remain beneath their own child.
 first = #records + 1

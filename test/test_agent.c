@@ -196,7 +196,7 @@ static MunitResult test_failed_active_write_keeps_current_session(
            session_manager_active_title());
 
   SessionMessage target_messages[] = {
-      {SESSION_ROLE_USER, "target message", "target message", NULL, 0, {0}},
+      {SESSION_ROLE_USER, "target message", "target message", NULL, NULL, 0, {0}},
   };
   Session target = {0};
   snprintf(target.id, sizeof(target.id), "target-session");
@@ -655,7 +655,57 @@ static MunitResult test_review_events(const MunitParameter params[], void *data)
   return MUNIT_OK;
 }
 
+static MunitResult test_usage_numeric_bounds(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  agent_init(L);
+  munit_assert_int(luaL_dostring(L,
+      "agent.set_usage(1e30, 4294967296, 1e100, 1e20)"), ==, LUA_OK);
+  UsageStats usage = agent_usage();
+  munit_assert_int(usage.prompt_tokens, ==, INT_MAX);
+  munit_assert_int(usage.completion_tokens, ==, INT_MAX);
+  munit_assert_int(usage.total_tokens, ==, INT_MAX);
+  munit_assert_int(usage.context_limit, ==, INT_MAX);
+  munit_assert_int(luaL_dostring(L,
+      "agent.set_usage(-1, 0/0, math.huge, -math.huge)"), ==, LUA_OK);
+  usage = agent_usage();
+  munit_assert_int(usage.prompt_tokens, ==, 0);
+  munit_assert_int(usage.completion_tokens, ==, 0);
+  munit_assert_int(usage.total_tokens, ==, 0);
+  munit_assert_int(usage.context_limit, ==, 0);
+  munit_assert_int(luaL_dostring(L,
+      "agent.set_usage(1200, 300, 1500, 8000)"), ==, LUA_OK);
+  usage = agent_usage();
+  munit_assert_int(usage.prompt_tokens, ==, 1200);
+  munit_assert_int(usage.completion_tokens, ==, 300);
+  munit_assert_int(usage.total_tokens, ==, 1500);
+  munit_assert_int(usage.context_limit, ==, 8000);
+  agent_reset_usage();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_model_history_sink(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  clear_messages();
+  lua_State *L=luaL_newstate(); luaL_openlibs(L); agent_init(L);
+  add_message(my_strdup(""), NULL, MSG_AGENT);
+  munit_assert_int(luaL_dostring(L,
+      "history_sink=agent.history_sink(); assert(history_sink('[{\"role\":\"assistant\",\"content\":\"saved\"}]'))\n"
+      "function should_auto_compact(history) assert(#history==1); assert(history[1].model_history_json:find('saved')); return false end\n"), ==, LUA_OK);
+  munit_assert_not_null(get_messages()->items[0]->model_history_json);
+  munit_assert_false(agent_should_auto_compact(L, ""));
+  clear_messages(); add_message(my_strdup("new"), NULL, MSG_AGENT);
+  munit_assert_int(luaL_dostring(L,"assert(not history_sink('[]'))"), ==, LUA_OK);
+  munit_assert_null(get_messages()->items[0]->model_history_json);
+  clear_messages(); lua_close(L); return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/model_history_sink", test_model_history_sink, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/usage_numeric_bounds", test_usage_numeric_bounds, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/review_events", test_review_events, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/review_status_lifetime", test_review_status_lifetime, NULL, NULL,

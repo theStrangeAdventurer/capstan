@@ -8,6 +8,7 @@ typedef void (*ShellProcessPump)(void);
 typedef struct {
   int exit_code;
   int timed_out;
+  int truncated;
   char *stdout_text;
   char *stderr_text;
 } ShellProcessResult;

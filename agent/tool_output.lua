@@ -15,6 +15,8 @@ local function limits()
         math.max(1, math.floor(max_lines))
 end
 
+M.limits = limits
+
 -- Shared by model results and shell UI/log output. Redact before bounding.
 function M.bound(text)
     local sanitized, invalid_bytes = utf8_sanitize.sanitize(text)

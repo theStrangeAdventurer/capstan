@@ -37,7 +37,19 @@ static MunitResult test_argv_does_not_invoke_shell(
   return MUNIT_OK;
 }
 
+static MunitResult test_capture_truncation(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  ShellProcessResult result;
+  munit_assert_true(shell_process_run("printf 12345678901234567890", "/tmp", 2,
+                                      8, 8, NULL, &result));
+  munit_assert_true(result.truncated);
+  munit_assert_int(result.exit_code, ==, 0);
+  shell_process_result_free(&result);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/capture_truncation", test_capture_truncation, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/timeout_kills_pipeline_process_group",
      test_timeout_kills_pipeline_process_group, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

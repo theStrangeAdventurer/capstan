@@ -249,3 +249,26 @@ uses non-prompting persistent read permissions, repeated by native reads;
 run-local allowances are not inherited yet. Denied eligible files make review
 incomplete. Sensitive/ignored paths and symlinks are excluded. The managed write
 barrier is cooperative, not an OS lock or a sandbox against external writers.
+
+## Sensitive filename heuristic
+
+`src/permit_logic.c:permit_path_is_sensitive` owns the shared basename policy,
+exposed to Lua as `tools.is_sensitive_path`. `workspace.is_sensitive_path` is its
+adapter; standalone Lua/plugin hosts have a matching compatibility fallback.
+A shared fixture (`test/sensitive_paths_cases.lua`) checks native and fallback
+classifiers. The heuristic is not content inspection or proof that a file has
+no credentials; explicit denies and workspace confinement still apply.
+
+`.env`, `.env.*`, names containing `secret` or `credential`, and token data/config
+names retain their sensitive status. The `token` substring alone does not mark
+recognized source/document extensions as sensitive (for example `tokens.lua`,
+`tokenizer.py`, `test_tokens.c`, `token-counting.md`). This exception does not
+apply to `.env.tokens.lua`, `secret_tokens.py`, `tokens.json`, `tokens.lua.bak`,
+or extensionless token stores. Matching remains case-insensitive.
+
+The same rule serves read/write permission scopes, file-read batches, and native
+review working-tree/HEAD snapshots. Snapshots additionally exclude private key,
+shell-config, credential-directory and VCS-internal paths at every component;
+those stricter exclusions remain unchanged. Native classifier failures to fit a
+name in its bounded buffer fail closed. Tests cover readable source, protected
+data files, batch results, and inclusion in review snapshots.

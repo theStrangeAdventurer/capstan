@@ -5,6 +5,8 @@
 #include "telemetry.h"
 #include "utils.h"
 #include <lauxlib.h>
+#include <limits.h>
+#include <math.h>
 #include <lua.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -252,11 +254,20 @@ UsageStats agent_usage(void) { return g_usage; }
 void agent_restore_usage(UsageStats usage) { g_usage = usage; }
 void agent_reset_usage(void) { g_usage = (UsageStats){0, 0, 0, 0}; }
 
+/* UI/session counters use int. Clamp before conversion so an oversized
+ * provider measurement cannot wrap or abort an otherwise valid stream. */
+static int usage_argument(lua_State *L, int index) {
+  lua_Number value = luaL_optnumber(L, index, 0);
+  if (!isfinite(value) || value <= 0) return 0;
+  if (value >= INT_MAX) return INT_MAX;
+  return (int)value;
+}
+
 static int l_agent_set_usage(lua_State *L) {
-  g_usage.prompt_tokens = (int)luaL_optinteger(L, 1, 0);
-  g_usage.completion_tokens = (int)luaL_optinteger(L, 2, 0);
-  g_usage.total_tokens = (int)luaL_optinteger(L, 3, 0);
-  g_usage.context_limit = (int)luaL_optinteger(L, 4, 0);
+  UsageStats usage = {
+      usage_argument(L, 1), usage_argument(L, 2),
+      usage_argument(L, 3), usage_argument(L, 4)};
+  g_usage = usage;
   return 0;
 }
 
@@ -362,6 +373,7 @@ void add_message(char *text, char *raw_text, MessageRole role) {
 
   message->text = text;
   message->raw_text = raw_text;
+  message->model_history_json = NULL;
   message->role = role;
   message->images = NULL;
   message->image_count = 0;
@@ -408,6 +420,7 @@ void free_message(Message *m) {
     free(m->text);
   if (m->raw_text && m->raw_text != m->text)
     free(m->raw_text);
+  free(m->model_history_json);
   message_images_free(m->images, m->image_count);
   shell_output_free(&m->shell_output);
   free(m);
@@ -484,6 +497,33 @@ static int l_agent_output_sink(lua_State *L) {
   return 1;
 }
 
+static int l_agent_bound_history(lua_State *L) {
+  size_t length;
+  const char *json = luaL_checklstring(L, 1, &length);
+  size_t index = (size_t)lua_tointeger(L, lua_upvalueindex(1));
+  unsigned long generation = (unsigned long)lua_tointeger(L, lua_upvalueindex(2));
+  if (generation != g_output_generation || index >= messages.size) {
+    lua_pushboolean(L, 0); return 1;
+  }
+  if (length > SESSION_HISTORY_MAX_BYTES || strlen(json) != length)
+    return luaL_error(L, "model history exceeds storage limit or contains NUL");
+  char *copy = my_strdup(json);
+  if (!copy) return luaL_error(L, "model history allocation failed");
+  free(messages.items[index]->model_history_json);
+  messages.items[index]->model_history_json = copy;
+  g_messages_revision++;
+  lua_pushboolean(L, 1); return 1;
+}
+static int l_agent_history_sink(lua_State *L) {
+  size_t index = messages.size;
+  while (index > 0 && messages.items[index - 1]->role != MSG_AGENT) index--;
+  if (!index) { lua_pushnil(L); return 1; }
+  lua_pushinteger(L, (lua_Integer)(index - 1));
+  lua_pushinteger(L, (lua_Integer)g_output_generation);
+  lua_pushcclosure(L, l_agent_bound_history, 2);
+  return 1;
+}
+
 static int l_agent_set_running(lua_State *L) {
   g_running = lua_toboolean(L, 1);
   return 0;
@@ -530,6 +570,8 @@ void agent_init(lua_State *L) {
   g_agent_lua = L;
   clear_review_status();
   lua_newtable(L);
+  lua_pushcfunction(L, l_agent_history_sink);
+  lua_setfield(L, -2, "history_sink");
   lua_pushcfunction(L, l_agent_output_sink);
   lua_setfield(L, -2, "output_sink");
   lua_pushcfunction(L, l_agent_set_running);
@@ -582,9 +624,13 @@ static void push_messages_table(lua_State *L) {
   for (size_t i = 0; i < msgs->size; i++) {
     Message *message = msgs->items[i];
     if ((!message->text || message->text[0] == '\0') &&
-        message->image_count == 0)
+        message->image_count == 0 && !message->model_history_json)
       continue;
     lua_newtable(L);
+    if (message->model_history_json) {
+      lua_pushstring(L, message->model_history_json);
+      lua_setfield(L, -2, "model_history_json");
+    }
     lua_pushstring(L, message->role == MSG_USER ? "user" : "assistant");
     lua_setfield(L, -2, "role");
     if (message->role == MSG_USER && message->image_count > 0) {

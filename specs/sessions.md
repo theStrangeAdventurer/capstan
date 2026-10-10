@@ -15,7 +15,9 @@ headless runs.
   session; new sessions start at zero. Those values never cross session boundaries.
 - Sessions persist the last displayed prompt/completion/total token counts and
   context limit as a `type: "usage"` JSONL row. These are the latest request's
-  statistics (or streaming estimate), not cumulative billing. Usage-only changes
+  statistics (or the final fallback estimate for a response without usage), not
+  cumulative billing. Pending requests preserve this displayed value until new
+  provider usage arrives; startup does not replace it with a local estimate. Usage-only changes
   trigger the same debounced save and shutdown/switch flush as message changes.
   Headless named runs also save their final displayed usage. Old sessions without
   usage remain readable with zero counters until the next request; no historical
@@ -174,3 +176,24 @@ Completion-review snapshots, held drafts, barriers and active scheduler handles
 are transient run state, not resumable session metadata. Persisting final output
 and issues does not restore an active review after restart. See
 [completion review](completion-review.md).
+
+### Structured model history
+
+Each assistant transcript record may also own `model_history_json`: the structured
+messages produced by that run, including assistant tool calls, their arguments,
+call IDs, tool results, image blocks, reasoning continuity fields and terminal
+text. The Lua history adapter expands this payload instead of replaying the UI
+text. TUI, named CLI sessions and ACP use the same adapter. Legacy records without
+a payload retain their previous text behavior; previously lost tool results
+cannot be recovered. Compaction replaces the transcript and its attached history.
+
+Completed tool batches are checkpointed before the next model request; final
+responses are checkpointed before completion callbacks. Native sinks are bound
+to the owning message and session generation. Session files store UTF-8-safe
+64 KiB `model_history_chunk` rows, limited to 64 MiB per assistant record. Missing
+final chunks, invalid ordering and oversized payloads fail closed. An invalid
+structured payload fails during request construction rather than silently
+dropping tool evidence. ACP retains this history for its in-memory session.
+
+Tests cover multi-request tool continuity, native sink invalidation, large
+Unicode payload round trips and incomplete/duplicate chunk rejection.

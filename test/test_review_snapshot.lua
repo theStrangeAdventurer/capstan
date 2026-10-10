@@ -1,5 +1,6 @@
 package.path = "./?.lua;" .. package.path
 local review = require("agent.review_snapshot")
+dofile("test/sensitive_paths_cases.lua")(require("agent.workspace").is_sensitive_path)
 _G.capstan = {realpath=function(path) if path == "/link" then return "/elsewhere" end return path end}
 local disk, extra, reads, processes, denied, on_list
 local function setup()
@@ -60,6 +61,8 @@ assert(next(current.files)==nil)
 
 setup()
 -- No forbidden bytes are opened, including descendants of excluded entries.
+disk["agent/tokens.lua"]="return token_counter"
+disk["tokens.json"]="never read"
 disk[".env"]="never read"
 disk[".zshenv"]="never read"
 disk["dir/.env.production"]="never read"
@@ -70,6 +73,8 @@ disk["private.txt"]="permission denied"
 extra={{path="skip",kind="directory",ignored=true},{path="link",kind="symlink",ignored=false}}
 denied["/work/private.txt"]=true
 local filtered=capture()
+assert(filtered.files["agent/tokens.lua"] and reads["agent/tokens.lua"])
+assert(not filtered.files["tokens.json"] and not reads["tokens.json"])
 assert(not filtered.complete)
 for _,path in ipairs({".env",".zshenv","dir/.env.production",".ssh/config","skip/data.txt","link/data.txt","private.txt"}) do
     assert(not reads[path] and not filtered.files[path],path)

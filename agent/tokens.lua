@@ -2,7 +2,8 @@ local json = require("vendor.rxi.json")
 
 local M = {}
 
-function M.estimate_text_tokens(text)
+-- Additive weight: callers streaming fragments must round only after summing.
+function M.text_token_weight(text)
     if type(text) ~= "string" or text == "" then return 0 end
     -- Keep the common ASCII approximation while charging more for multibyte
     -- scripts: roughly two Cyrillic-style code points or one CJK/emoji code
@@ -21,8 +22,12 @@ function M.estimate_text_tokens(text)
             wide_points = wide_points + 1
         end
     end
-    local estimate = ascii_bytes / 4 + two_byte_points / 2 + wide_points
-    return math.max(1, math.floor(estimate + 0.5))
+    return ascii_bytes / 4 + two_byte_points / 2 + wide_points
+end
+
+function M.estimate_text_tokens(text)
+    local weight = M.text_token_weight(text)
+    return weight > 0 and math.max(1, math.floor(weight + 0.5)) or 0
 end
 
 local function estimate_content_tokens(content)

@@ -8,6 +8,7 @@
 #include "review_snapshot.h"
 #include "permit.h"
 #include <lauxlib.h>
+#include <lualib.h>
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>
@@ -95,7 +96,14 @@ int main(void) {
   assert(getcwd(cwd,sizeof(cwd))); assert(mkdtemp(template)); assert(realpath(template,root));
   assert(!chdir(root));
   lua_State *L = luaL_newstate(); assert(L);
+  luaL_openlibs(L);
   lua_newtable(L); review_snapshot_init(L); lua_setglobal(L,"tools");
+  char policy_fixture[4096];
+  assert(snprintf(policy_fixture, sizeof(policy_fixture), "%s/test/sensitive_paths_cases.lua", cwd) < (int)sizeof(policy_fixture));
+  assert(luaL_dofile(L, policy_fixture) == LUA_OK);
+  lua_getglobal(L, "tools"); lua_getfield(L, -1, "is_sensitive_path"); lua_remove(L, -2);
+  assert(lua_pcall(L, 1, 0, 0) == LUA_OK);
+  put("tokens.lua", "return 1", 8); put("tokens.json", "", 0);
   put("plain","a\0b\n",4); assert(!mkdir("dir",0700)); put("dir/nested","yes",3);
   assert(!symlink("plain","link")); assert(!symlink("dir","alias"));
   /* Empty sensitive fixtures only: their contents are never read. */
@@ -103,9 +111,12 @@ int main(void) {
   call(L,"review_snapshot_list",root,NULL,0);
   assert(has(L,"plain","file") && has(L,"dir/nested","file") && has(L,"link","symlink"));
   assert(!has(L,".env","file") && !has(L,"credentials.json","file"));
+  assert(has(L,"tokens.lua","file") && !has(L,"tokens.json","file"));
+  call(L,"review_snapshot_read",root,"tokens.lua",8);
+  assert(lua_isstring(L,1) && !strcmp(lua_tostring(L,1),"return 1"));
   call(L,"review_snapshot_read",root,"plain",4);
   size_t n; const char *bytes = lua_tolstring(L,1,&n); assert(bytes && n == 4 && !memcmp(bytes,"a\0b\n",4));
-  const char *bad[] = {"plain","link","alias/nested","dir","../plain",".env","credentials.json",".ssh/id_rsa","/plain","dir//nested","dir/../plain",NULL};
+  const char *bad[] = {"plain","link","alias/nested","dir","../plain",".env","tokens.json","credentials.json",".ssh/id_rsa","/plain","dir//nested","dir/../plain",NULL};
   for (int i = 0; bad[i]; i++) {
     call(L,"review_snapshot_read",root,bad[i],3); assert(lua_isnil(L,1));
   }
@@ -127,7 +138,7 @@ int main(void) {
   call(L,"review_snapshot_list",unsafe,NULL,0); assert(lua_isnil(L,1));
   git("init","-q");
   put(".gitignore","ignored/\n*.skip\n",16); assert(!mkdir("ignored",0700)); put("ignored/data","",0); put("a.skip","",0);
-  git("add","plain"); git("add","dir/nested");
+  git("add","plain"); git("add","dir/nested"); git("add","tokens.lua");
   call(L,"review_snapshot_list",root,NULL,0);
   assert(has(L,"plain","file") && has(L,"dir/nested","file"));
   assert(!has(L,"a.skip","file") && !has(L,"ignored/data","file") && !has(L,".git","directory"));
@@ -142,6 +153,7 @@ int main(void) {
   lua_settop(L,0); lua_getglobal(L,"tools"); lua_getfield(L,-1,"review_snapshot_head"); lua_remove(L,-2);
   lua_pushstring(L,root); lua_pushcfunction(L,grant_read);
   assert(lua_pcall(L,2,LUA_MULTRET,0)==LUA_OK && lua_istable(L,1));
+  lua_getfield(L,1,"tokens.lua"); assert(!strcmp(lua_tostring(L,-1),"return 1")); lua_pop(L,1);
   lua_getfield(L,1,"plain"); bytes=lua_tolstring(L,-1,&n);
   assert(bytes && n==4 && !memcmp(bytes,"a\0b\n",4));
   assert(!rename("plain","renamed")); assert(!unlink("dir/nested")); put("added","new",3);

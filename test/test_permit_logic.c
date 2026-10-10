@@ -186,7 +186,20 @@ static MunitResult test_lua_escape_string_reports_truncation(
   return MUNIT_OK;
 }
 
+static MunitResult test_sensitive_paths(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  const char *ordinary[] = {"agent/tokens.lua", "test/test_tokens.c", "TOKENIZER.PY",
+      "specs/token-counting.md", "src/usage.c", NULL};
+  const char *sensitive[] = {"tokens.json", "access_token.txt", "token", ".env",
+      ".env.lua", "secrets.lua", "credentials.py", "tokens.lua.bak", NULL};
+  for (int i = 0; ordinary[i]; i++) munit_assert_false(permit_path_is_sensitive(ordinary[i]));
+  for (int i = 0; sensitive[i]; i++) munit_assert_true(permit_path_is_sensitive(sensitive[i]));
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/sensitive_paths", test_sensitive_paths, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/pattern_exact_match", test_pattern_exact_match, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/pattern_space_star_prefix", test_pattern_space_star_prefix, NULL, NULL,

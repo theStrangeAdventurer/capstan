@@ -244,14 +244,25 @@ function M.model_path_allowed(path, mode, opts)
     return false, "path does not exist"
 end
 
+-- Native permit logic owns this policy. The matching fallback supports standalone
+-- Lua/plugin hosts without native tools; regression fixtures cover both paths.
+local token_source_extensions = {}
+for ext in ("c h cc hh cpp hpp cxx hxx lua py js jsx ts tsx go rs java kt kts swift rb php cs " ..
+    "scala ex exs erl hrl clj cljs sh bash zsh md rst"):gmatch("%S+") do
+    token_source_extensions[ext] = true
+end
 function M.is_sensitive_path(path)
     if type(path) ~= "string" then return false end
+    if _G.tools and type(_G.tools.is_sensitive_path) == "function" then
+        return _G.tools.is_sensitive_path(path)
+    end
     local name = path:match("([^/]+)$") or path
+    if #name >= 4096 then return true end
     local lower = name:lower()
-    return lower == ".env" or lower:match("^%.env%.") ~= nil or
-        lower:find("secret", 1, true) ~= nil or
-        lower:find("token", 1, true) ~= nil or
-        lower:find("credential", 1, true) ~= nil
+    if lower == ".env" or lower:match("^%.env%.") or
+        lower:find("secret", 1, true) or lower:find("credential", 1, true) then return true end
+    if not lower:find("token", 1, true) then return false end
+    return not token_source_extensions[lower:match("%.([^.]+)$")]
 end
 
 function M.normalize_path(path, workdir)

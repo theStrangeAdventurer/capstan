@@ -298,7 +298,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
             if case == 'background_monitor':
                 send('background_monitor\r')
                 until(lambda: (root / 'background_started').exists(), 'background start')
-                until(lambda: b'Capstan background: 1' in screen, 'Capstan background footer indicator')
+                until(lambda: b'Background working' in screen, 'background status spinner')
                 send('question while monitoring\r')
                 until(lambda: (root / 'captured').exists(), 'foreground answer during monitoring')
                 assert json.loads((root / 'captured').read_text())[-1]['content'] == 'question while monitoring'
@@ -307,6 +307,10 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 until(lambda: (root / 'background_restarted').exists(), 'autonomous failure repair')
                 until(lambda: (root / 'background_reported').exists(), 'autonomous final report')
                 until(lambda: b'BACKGROUND_FINAL_RESULT' in screen, 'visible final result')
+                assert b'Background:' in screen
+                assert b'Background process event (runtime state' not in screen
+                assert b'Continue the previously authorized' not in screen
+                assert b'Capstan background:' not in screen
                 (root / 'captured').unlink()
                 send(' suffix\r')
                 until(lambda: (root / 'captured').exists(), 'draft preserved across notifications')

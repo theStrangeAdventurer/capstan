@@ -677,16 +677,11 @@ static void render_workspace_footer(WINDOW *win, int y, int width) {
   TuiWorkspaceFooter footer;
   tui_layout_workspace_footer(width, app_workdir(), getenv("HOME"),
                                workspace_status_poll(app_workspace_root()),
-                               background_work_capstan_active_count(), &footer);
+                               &footer);
   int saved = getattrs(win);
   if (footer.path[0]) {
     wattrset(win, dim_gray_attr());
     mvwprintw(win, y, 2, " %s ", footer.path);
-  }
-  if (footer.activity_width) {
-    int x = 3 + text_columns(footer.path, strlen(footer.path));
-    wattrset(win, A_BOLD);
-    mvwaddnstr(win, y, x, footer.activity, (int)strlen(footer.activity));
   }
   if (footer.summary_width) {
     int x = width - footer.summary_width - 4;
@@ -1242,10 +1237,6 @@ void render_all(void) {
     wattroff(input_win, label_attr);
 
     UsageStats usage = agent_usage();
-    if (http_is_loading() && usage.context_limit > 0 &&
-        usage.total_tokens > usage.prompt_tokens) {
-      usage.prompt_tokens = usage.total_tokens;
-    }
     char usage_buf[32];
     int usage_len = usage_format(usage, usage_buf, sizeof(usage_buf));
     if (!g_tasks.height && g_tasks.summary[0]) {
@@ -1321,16 +1312,11 @@ void render_all(void) {
   int loading = http_is_loading();
   const char *activity = agent_activity();
   char activity_label[512] = "";
-  if (loading || (activity && activity[0])) {
-    const char *label = activity && activity[0] ? activity :
-                        agent_is_thinking() ? "Thinking" :
-                        msgs->size ? "Answering" : "Connecting";
-    if (activity && activity[0]) {
-      long long elapsed = agent_activity_elapsed_seconds();
-      snprintf(activity_label, sizeof(activity_label), "%s · %llds", label, elapsed);
-    } else {
-      snprintf(activity_label, sizeof(activity_label), "%s", label);
-    }
+  tui_layout_activity_label(activity_label, sizeof(activity_label), activity,
+                            loading, agent_is_thinking(), msgs->size > 0,
+                            agent_activity_elapsed_seconds(),
+                            background_work_capstan_active_count());
+  if (activity_label[0]) {
     const char *dots[] = {"·", "•", "●", "•"};
     wattrset(stdscr, COLOR_PAIR(14));
     mvaddstr(rows - 1, MARGIN + 1, dots[(spinner_tick / 8) % 4]);

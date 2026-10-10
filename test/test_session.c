@@ -49,10 +49,10 @@ static MunitResult test_round_trip(const MunitParameter params[], void *data) {
   session.title_generated = 1;
   SessionImage images[] = {{"image/png", "YWJj"}};
   SessionMessage messages[] = {
-      {SESSION_ROLE_USER, "привет\n\"мир\"", "raw\\user\ncontext", images,
+      {SESSION_ROLE_USER, "привет\n\"мир\"", "raw\\user\ncontext", NULL, images,
        1, {0}},
-      {SESSION_ROLE_ASSISTANT, "ответ", "ответ", NULL, 0, {0}},
-      {SESSION_ROLE_ASSISTANT, "", "", NULL, 0, {0}},
+      {SESSION_ROLE_ASSISTANT, "ответ", "ответ", NULL, NULL, 0, {0}},
+      {SESSION_ROLE_ASSISTANT, "", "", NULL, NULL, 0, {0}},
   };
   session.messages = messages;
   session.message_count = 3;
@@ -165,7 +165,7 @@ static MunitResult test_oversized_line_fails_closed(
   Session session;
   munit_assert_true(session_create(&session));
   SessionMessage messages[] = {
-      {SESSION_ROLE_USER, "valid prefix", "valid prefix", NULL, 0, {0}},
+      {SESSION_ROLE_USER, "valid prefix", "valid prefix", NULL, NULL, 0, {0}},
   };
   session.messages = messages;
   session.message_count = 1;
@@ -204,7 +204,7 @@ static MunitResult test_incomplete_image_chunk_fails_closed(
   Session session;
   munit_assert_true(session_create(&session));
   SessionMessage messages[] = {
-      {SESSION_ROLE_USER, "image", "image", NULL, 0, {0}},
+      {SESSION_ROLE_USER, "image", "image", NULL, NULL, 0, {0}},
   };
   session.messages = messages;
   session.message_count = 1;
@@ -626,7 +626,56 @@ static MunitResult test_issues_unicode_chunks(const MunitParameter params[], voi
   return MUNIT_OK;
 }
 
+static MunitResult test_model_history(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  munit_assert_true(session_store_init("/history"));
+  Session session = {0}, loaded = {0};
+  munit_assert_true(session_create(&session));
+  SessionMessage message = {.role = SESSION_ROLE_ASSISTANT, .text = "", .raw_text = ""};
+  size_t length = 180000;
+  char *history = malloc(length + 1);
+  munit_assert_not_null(history);
+  /* UTF-8 spans the 64 KiB chunk boundary. */
+  for (size_t i = 0; i < length; i += 3) memcpy(history + i, "界", 3);
+  history[length] = 0;
+  message.model_history_json = history;
+  session.messages = &message; session.message_count = 1;
+  munit_assert_true(session_save(&session));
+  munit_assert_true(session_load(session.id, &loaded));
+  munit_assert_size(loaded.message_count, ==, 1);
+  munit_assert_string_equal(loaded.messages[0].model_history_json, history);
+  session_free(&loaded);
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/%s.jsonl", session_store_dir(), session.id);
+  const char *invalid[] = {
+    "{\"type\":\"model_history_chunk\",\"data\":\"[\",\"final\":0}\n",
+    "{\"type\":\"model_history_chunk\",\"data\":\"[]\",\"final\":2}\n",
+    ("{\"type\":\"model_history_chunk\",\"data\":\"[]\",\"final\":1}\n"
+    "{\"type\":\"model_history_chunk\",\"data\":\"[]\",\"final\":1}\n"),
+  };
+  for (size_t i=0; i<sizeof(invalid)/sizeof(invalid[0]); i++) {
+    FILE *f=fopen(path,"wb"); munit_assert_not_null(f);
+    fprintf(f,"{\"version\":1,\"id\":\"%s\",\"title\":\"history\"}\n",session.id);
+    fputs("{\"role\":\"assistant\",\"text\":\"\",\"raw_text\":\"\"}\n",f);
+    fputs(invalid[i],f); fclose(f);
+    munit_assert_false(session_load(session.id,&loaded));
+    /* The same header/message must load with a valid final chunk. */
+    f=fopen(path,"wb"); munit_assert_not_null(f);
+    fprintf(f,"{\"version\":1,\"id\":\"%s\",\"title\":\"history\"}\n",session.id);
+    fputs("{\"role\":\"assistant\",\"text\":\"\",\"raw_text\":\"\"}\n"
+          "{\"type\":\"model_history_chunk\",\"data\":\"[]\",\"final\":1}\n",f);
+    fclose(f);
+    munit_assert_true(session_load(session.id,&loaded));
+    munit_assert_string_equal(loaded.messages[0].model_history_json, "[]");
+    session_free(&loaded);
+  }
+  free(history);
+  session.messages=NULL; session.message_count=0; session_free(&session);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/model_history", test_model_history, setup, teardown, MUNIT_TEST_OPTION_NONE, NULL},
     {"/issues_chunk_failures", test_issues_chunk_failures, setup, teardown,
      MUNIT_TEST_OPTION_NONE, NULL},
     {"/issues_unicode_chunks", test_issues_unicode_chunks, setup, teardown,

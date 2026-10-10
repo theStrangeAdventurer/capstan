@@ -409,17 +409,18 @@ void dispatch_tick(void) {
       lua_settop(L, top);
       return;
     }
-    if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
+    if (lua_pcall(L, 0, 2, 0) != LUA_OK) {
       log_event("background", lua_tostring(L, -1) ? lua_tostring(L, -1) : "notification failed");
       lua_settop(L, top);
       return;
     }
-    if (!lua_isstring(L, -1)) {
+    if (!lua_isstring(L, -2)) {
       lua_settop(L, top);
       return;
     }
-    const char *event = lua_tostring(L, -1);
-    add_message(my_strdup(event), my_strdup(event), MSG_USER);
+    const char *event = lua_tostring(L, -2);
+    const char *ui = lua_isstring(L, -1) ? lua_tostring(L, -1) : "Background process update.";
+    add_message(my_strdup(ui), my_strdup(event), MSG_USER);
     lua_settop(L, top);
   }
 

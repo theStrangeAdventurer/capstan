@@ -1,7 +1,34 @@
 #include "permit_logic.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+int permit_path_is_sensitive(const char *path) {
+  if (!path) return 0;
+  const char *name = strrchr(path, '/');
+  name = name && name[1] ? name + 1 : path;
+  char lower[PERMIT_MAX_TARGET];
+  size_t n = strlen(name);
+  if (n >= sizeof(lower)) return 1;
+  for (size_t i = 0; i <= n; i++) lower[i] = (char)tolower((unsigned char)name[i]);
+  if (!strcmp(lower, ".env") || !strncmp(lower, ".env.", 5) ||
+      strstr(lower, "secret") || strstr(lower, "credential")) return 1;
+  if (!strstr(lower, "token")) return 0;
+  /* Token counting, parsing and design-token modules are ordinary source.
+   * Keep data/config files, extensionless token stores and backup suffixes
+   * sensitive. Explicit secret/credential names above still take priority. */
+  const char *extension = strrchr(lower, '.');
+  static const char *source_extensions[] = {
+      ".c", ".h", ".cc", ".hh", ".cpp", ".hpp", ".cxx", ".hxx",
+      ".lua", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs",
+      ".java", ".kt", ".kts", ".swift", ".rb", ".php", ".cs",
+      ".scala", ".ex", ".exs", ".erl", ".hrl", ".clj", ".cljs",
+      ".sh", ".bash", ".zsh", ".md", ".rst", NULL};
+  for (int i = 0; extension && source_extensions[i]; i++)
+    if (!strcmp(extension, source_extensions[i])) return 0;
+  return 1;
+}
 
 static const char *expand_home_pattern(const char *pattern, char *buf,
                                        size_t buf_size) {

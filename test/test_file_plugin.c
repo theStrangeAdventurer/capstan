@@ -233,8 +233,8 @@ static MunitResult test_tool_paths_reads_multiple_files_once(
 
   char first[4096];
   char second[4096];
-  snprintf(first, sizeof(first), "%s/FIRST.md", dir);
-  snprintf(second, sizeof(second), "%s/SECOND.md", dir);
+  snprintf(first, sizeof(first), "%s/tokens.lua", dir);
+  snprintf(second, sizeof(second), "%s/test_tokens.c", dir);
   FILE *first_file = fopen(first, "w");
   FILE *second_file = fopen(second, "w");
   munit_assert_not_null(first_file);
@@ -248,15 +248,27 @@ static MunitResult test_tool_paths_reads_multiple_files_once(
   set_capstan_workdir(L, dir);
   load_file_plugin(L);
 
-  call_handler_tool_paths(L, "FIRST.md", "SECOND.md");
+  call_handler_tool_paths(L, "tokens.lua", "test_tokens.c");
   const char *ui = lua_tostring(L, -2);
   const char *llm = lua_tostring(L, -1);
   munit_assert_not_null(ui);
   munit_assert_not_null(llm);
-  munit_assert_true(strstr(ui, "FIRST.md") != NULL);
-  munit_assert_true(strstr(ui, "SECOND.md") != NULL);
+  munit_assert_true(strstr(ui, "tokens.lua") != NULL);
+  munit_assert_true(strstr(ui, "test_tokens.c") != NULL);
   munit_assert_true(strstr(llm, "first batch value") != NULL);
   munit_assert_true(strstr(llm, "second batch value") != NULL);
+
+  char protected_path[4096];
+  snprintf(protected_path, sizeof(protected_path), "%s/tokens.json", dir);
+  munit_assert_int(rename(second, protected_path), ==, 0);
+  lua_pop(L, 2); /* Previous UI/model results; keep the plugin table. */
+  call_handler_tool_paths(L, "tokens.lua", "tokens.json");
+  llm = lua_tostring(L, -1);
+  munit_assert_not_null(llm);
+  munit_assert_not_null(strstr(llm, "first batch value"));
+  munit_assert_null(strstr(llm, "second batch value"));
+  munit_assert_not_null(strstr(llm, "batch reads cannot include sensitive paths"));
+  unlink(protected_path);
 
   lua_close(L);
   unlink(first);

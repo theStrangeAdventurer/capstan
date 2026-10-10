@@ -58,6 +58,20 @@ synchronous with the existing default of 60 seconds and existing output format.
 Both modes appear in the panel. Processes are non-interactive; stdin is
 `/dev/null`. Use foreground server commands, not `nohup`, daemonization or `&`.
 
+## Agent validation policy
+
+The embedded system prompt directs the agent to run potentially long builds,
+test suites, benchmarks and other validation with `shell(background=true)`,
+register `processes(action="watch", id=..., interval=300)` and return control to
+the user. Quick, bounded checks remain synchronous. Repeated blocking waits or
+polls must not be used merely to finish validation in the same conversation turn.
+A launched check is pending, not passed. On completion the agent inspects output;
+before a final conclusion or dependent commit, push, tag or release it explicitly
+waits for the required result. This policy does not authorize additional work.
+
+Validation: `make test-build` verifies the updated prompt is embedded in the
+standalone binary. This is packaging coverage, not proof of model compliance.
+
 ## Canonical ownership and adapters
 
 `process_manager.c` owns managed PID/PGID lifecycle, wait status, deadlines,
@@ -288,3 +302,20 @@ process ownership and user-visible background behavior are unchanged.
 by a real stream callback, cancellation, and both async completion APIs pumped
 from another coroutine. Tests use injected curl chunks and protocol rejection
 to exercise these paths without external network access.
+
+## Compact interactive process notifications
+
+The runtime notification returns two strings: full agent context first, compact
+UI summary second. Dispatch stores the summary as message `text` and the complete
+JSON plus continuation instructions as `raw_text`. Existing session persistence
+keeps both; model history uses `raw_text`. The visible summary contains only counts
+of running/finished/jobs needing attention, never command lines, paths, PIDs or
+agent-only instructions. Existing saved messages are not rewritten. The same
+summary policy covers watch ticks, completion, timeouts and watch errors.
+
+The existing bottom status spinner displays background activity when foreground
+activity is idle. There is no background label beside the workspace path. MCP
+servers remain excluded from the activity count. Pure layout and process-watch
+tests cover precedence and summary privacy; the ncurses `background_monitor`
+scenario verifies full events still reach the agent while technical text stays
+out of the rendered chat and user drafts survive notifications.

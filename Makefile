@@ -15,7 +15,7 @@ TEST_SRCS = src/otlp_wire.c test/test_otlp_wire.c src/app_config.c src/cli_args.
 
 CORE_PLUGIN_ASSETS = plugins/file.lua plugins/file_write.lua plugins/file_edit.lua plugins/shell.lua plugins/fetch.lua plugins/logs.lua plugins/skills.lua plugins/wiki.lua plugins/models.lua plugins/info.lua plugins/mcp.lua plugins/plan.lua plugins/implement.lua plugins/auth.lua plugins/logout.lua plugins/connect.lua plugins/vcs.lua plugins/tasks.lua plugins/issues.lua plugins/completion_review.lua plugins/show.lua plugins/processes.lua plugins/process_stop.lua
 PROFILE_ASSETS = profiles/implement.lua profiles/plan.lua
-AGENT_RUNTIME_ASSETS = agent/process_watch.lua agent/telemetry.lua agent/runtime.lua agent/tasks.lua agent/issues.lua agent/review_verdict.lua agent/review_config.lua agent/review_snapshot.lua agent/completion_review.lua agent/acp.lua agent/provider_config.lua agent/models.lua agent/stream.lua agent/subagents.lua agent/tools.lua agent/tool_output.lua agent/workspace.lua agent/tokens.lua agent/images.lua agent/logging.lua agent/ui.lua agent/utf8.lua agent/hooks.lua agent/state.lua agent/auth.lua agent/lua_serialize.lua agent/shell_safe.lua agent/mcp.lua agent/profiles.lua agent/redact.lua agent/vcs.lua $(PROFILE_ASSETS)
+AGENT_RUNTIME_ASSETS = agent/history.lua agent/process_watch.lua agent/telemetry.lua agent/runtime.lua agent/tasks.lua agent/issues.lua agent/review_verdict.lua agent/review_config.lua agent/review_snapshot.lua agent/completion_review.lua agent/acp.lua agent/provider_config.lua agent/models.lua agent/stream.lua agent/subagents.lua agent/tools.lua agent/tool_output.lua agent/workspace.lua agent/tokens.lua agent/images.lua agent/logging.lua agent/ui.lua agent/utf8.lua agent/hooks.lua agent/state.lua agent/auth.lua agent/lua_serialize.lua agent/shell_safe.lua agent/mcp.lua agent/profiles.lua agent/redact.lua agent/vcs.lua $(PROFILE_ASSETS)
 EMBEDDED_ASSETS = $(AGENT_RUNTIME_ASSETS) agent/vcs_git_stats.sh ai/system_prompt.txt vendor/rxi/json.lua skills/self-improvement/SKILL.md skills/wiki-onboarding/SKILL.md $(CORE_PLUGIN_ASSETS)
 EMBEDDED_SRCS = build/embedded_assets.c
 SRCS = $(wildcard src/*.c) vendor/md4c/md4c.c $(EMBEDDED_SRCS)
@@ -38,6 +38,7 @@ test: $(TEST_TARGET)
 	./$(TEST_TARGET)
 
 test-build: $(TARGET)
+	python3 test/test_history_cli.py $(TARGET)
 	sh test/test_acp.sh $(TARGET)
 	sh test/test_build_smoke.sh $(TARGET)
 	sh test/test_release_package.sh $(TARGET)
@@ -74,6 +75,9 @@ test-http-lua: $(HTTP_LUA_TARGET)
 	$(LUA_DIR)/src/lua test/test_stream_packets.lua
 	python3 test/test_openrouter_probe.py
 	$(LUA_DIR)/src/lua test/test_runtime_timeline.lua
+	$(LUA_DIR)/src/lua test/test_vcs_pages.lua
+	$(LUA_DIR)/src/lua test/test_history.lua
+	$(LUA_DIR)/src/lua test/test_acp_history.lua
 	$(LUA_DIR)/src/lua test/test_context_limits.lua
 	$(LUA_DIR)/src/lua test/test_background_subagents.lua
 	$(LUA_DIR)/src/lua test/test_internal_subagents.lua
@@ -129,6 +133,6 @@ build/test_process_panel: test/test_process_panel.c src/process_panel.c src/proc
 build/test_process_bindings: test/test_process_bindings.c src/permit.c src/review_snapshot.c src/permit_logic.c src/app_config.c src/utils.c src/process_manager.c src/background_work.c src/process_observe.c src/shell_process.c src/redact.c include/process_manager.h
 	$(CC) $(HTTP_LUA_FLAGS) test/test_process_bindings.c src/permit.c src/review_snapshot.c src/permit_logic.c src/app_config.c src/utils.c src/process_manager.c src/background_work.c src/process_observe.c src/shell_process.c src/redact.c $(LUA_DIR)/src/liblua.a -lm -o $@
 
-build/test_review_snapshot_native: src/review_snapshot.c include/review_snapshot.h test/test_review_snapshot_native.c
+build/test_review_snapshot_native: src/review_snapshot.c src/permit_logic.c include/permit_logic.h include/review_snapshot.h test/test_review_snapshot_native.c
 	mkdir -p build
-	$(CC) $(HTTP_LUA_FLAGS) -DREVIEW_SNAPSHOT_TEST src/review_snapshot.c test/test_review_snapshot_native.c $(LUA_DIR)/src/liblua.a -lm -o $@
+	$(CC) $(HTTP_LUA_FLAGS) -DREVIEW_SNAPSHOT_TEST src/review_snapshot.c src/permit_logic.c test/test_review_snapshot_native.c $(LUA_DIR)/src/liblua.a -lm -o $@

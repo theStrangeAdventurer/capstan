@@ -21,6 +21,7 @@ typedef struct {
   MessageRole role;
   char *text;
   char *raw_text;
+  char *model_history_json; /* Owned structured model messages for this turn. */
   MessageImage *images;
   size_t image_count;
   ShellOutput shell_output;

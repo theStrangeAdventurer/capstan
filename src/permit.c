@@ -528,6 +528,8 @@ static int l_tools_exec(lua_State *L) {
   lua_setfield(L, -2, "stdout");
   lua_pushstring(L, started ? result.stderr_text : "failed to start process");
   lua_setfield(L, -2, "stderr");
+  lua_pushboolean(L, started && result.truncated);
+  lua_setfield(L, -2, "truncated");
   lua_pushboolean(L, started && result.timed_out);
   lua_setfield(L, -2, "timed_out");
   if (started)

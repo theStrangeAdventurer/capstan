@@ -213,3 +213,11 @@ finalization, not merely the end of a provider stream. Only the explicit
 terminal text complete without review.
 Cancellation is scoped to the root and its owned reviewer, not unrelated groups.
 Issues remain session-local; active-review restoration is not supported.
+
+### Cancellation history checkpoint
+
+`session/cancel` and active `session/close` call runtime cancellation before
+persisting the assistant history. The synchronous runtime checkpoint includes
+partial streamed text after completed tool rounds. Cancellation responds to the
+prompt exactly once with `cancelled`, even when runtime `on_done` runs during
+cancellation. Offline regression: `test/test_acp_history.lua`.

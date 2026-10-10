@@ -25,15 +25,18 @@ typedef struct {
 void tui_layout_status_row(int width, const char *activity, const char *profile,
                            const char *model, const char *effort, TuiStatusRow *row);
 
+void tui_layout_activity_label(char *out, size_t size, const char *activity,
+                               int loading, int thinking, int has_messages,
+                               long long elapsed, size_t background_count);
+
 typedef struct {
   char path[4096];
-  char activity[64], files[80], added[32], deleted[32];
-  int activity_width, summary_width;
+  char files[80], added[32], deleted[32];
+  int summary_width;
 } TuiWorkspaceFooter;
 
 void tui_layout_workspace_footer(int width, const char *workdir,
                                  const char *home, const WorkspaceStatus *status,
-                                 size_t capstan_active_count,
                                  TuiWorkspaceFooter *footer);
 /* Bounded task viewport, including its chevron row; always leaves chat space. */
 int tui_layout_tasks_height(int available, int lines, int expanded);

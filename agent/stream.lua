@@ -5,38 +5,9 @@ local tokens = require("agent.tokens")
 
 local M = {}
 
--- One bounded UI cache, not request telemetry. Only extending the same owner's
--- conversation/model may reuse a measured input count while awaiting fresh usage.
--- Per-owner scoped so background reviews and subagents don't clobber the
--- foreground run's cached prompt token count.
-local contexts = {}
-local function copy_value(value)
-    if type(value) ~= 'table' then return value end
-    local out = {}
-    for k, v in pairs(value) do out[k] = copy_value(v) end
-    return out
-end
-local function equal(a, b)
-    if type(a) ~= 'table' or type(b) ~= 'table' then return a == b end
-    for k, v in pairs(a) do if not equal(v, b[k]) then return false end end
-    for k in pairs(b) do if a[k] == nil then return false end end
-    return true
-end
-function M.usage_context(provider, owner, messages, provider_name)
-    if provider.suppress_agent_state then return nil end
-    local previous = contexts[owner]
-    local extends = previous and previous.provider == provider_name and
-        previous.model == provider.model and previous.endpoint == provider.endpoint and
-        #previous.messages > 0 and #messages >= #previous.messages
-    if extends then
-        for i, message in ipairs(previous.messages) do
-            if not equal(message, messages[i]) then extends = false; break end
-        end
-    end
-    local context = {provider = provider_name, model = provider.model, endpoint = provider.endpoint,
-        messages = copy_value(messages), prompt = extends and previous.prompt or nil}
-    contexts[owner] = context
-    return context
+local function valid_counter(value)
+    return type(value) == "number" and value >= 0 and value < math.huge and
+        value == math.floor(value)
 end
 
 local function structured_error_message(value)
@@ -228,7 +199,7 @@ end
 -- callback argument to http.post_stream. Accumulates text, reasoning, and
 -- tool_call fragments across partial SSE chunks, calls on_result for each
 -- text delta and a final result with collected tool_calls on stream end.
-function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_context)
+function M.stream(provider, on_result, initial_prompt_tokens, run_opts)
     local buf = ""
     local accumulated_text = ""
     local accumulated_reasoning = ""
@@ -254,9 +225,6 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
     local reasoning_chunks = 0
     local tool_delta_chunks = 0
     local usage_chunks = 0
-    local text_token_estimate = 0
-    local reasoning_token_estimate = 0
-    local tool_token_estimate = 0
     local has_chunk_hooks = hooks.has("on_stream_chunk")
     local buffer_text_until_done = minimax_model(provider)
     local finished = false
@@ -271,29 +239,37 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
     local first_tool_ms = nil
     local request_outcome = "in_progress"
 
-    -- UI estimates do not depend on knowing the model's context capacity.
-    -- Provider counters, including measured zero, take precedence when present.
-    local function update_usage()
+    -- Keep the last displayed request while awaiting provider usage. Only a
+    -- completed response without counters may fall back to local estimates.
+    -- No Lua cache is needed: C already preserves/restores the displayed usage.
+    local function update_usage(allow_estimate)
         if provider.suppress_agent_state then return end
-        local function counter(name, fallback)
+        local function counter(name)
             local value = final_usage and final_usage[name]
-            if type(value) == "number" and value >= 0 and value < math.huge then
-                return value
+            return valid_counter(value) and value or nil
+        end
+        local prompt, completion, total = counter("prompt_tokens"),
+            counter("completion_tokens"), counter("total_tokens")
+        if prompt ~= nil or completion ~= nil or total ~= nil then
+            -- Derive missing components only from provider counters, never
+            -- from a tokenizer estimate. Missing input/output otherwise is 0.
+            prompt = prompt or (total and math.max(0, total - (completion or 0))) or 0
+            completion = completion or (total and math.max(0, total - prompt)) or 0
+            total = total or (prompt + completion)
+        elseif allow_estimate then
+            prompt = prompt_estimate
+            local weight = tokens.text_token_weight(accumulated_text) +
+                tokens.text_token_weight(accumulated_reasoning)
+            for _, call in pairs(tool_calls_accum) do
+                weight = weight + tokens.text_token_weight(call.name) + tokens.text_token_weight(call.arguments)
             end
-            return fallback
+            completion = math.floor(weight + 0.5)
+            total = prompt + completion
+        else
+            return
         end
-        local measured_prompt = counter("prompt_tokens", nil)
-        if usage_context and measured_prompt ~= nil then
-            usage_context.prompt = measured_prompt
-        end
-        local prompt = measured_prompt or (usage_context and usage_context.prompt) or prompt_estimate
-        local completion = counter("completion_tokens",
-            text_token_estimate + reasoning_token_estimate + tool_token_estimate)
-        agent.set_usage(prompt, completion, counter("total_tokens", prompt + completion),
-            provider.context_limit or 0)
+        agent.set_usage(prompt, completion, total, provider.context_limit or 0)
     end
-
-    update_usage() -- Request start uses the same policy as subsequent chunks.
 
     local function elapsed_ms()
         local now = (_G.capstan and _G.capstan.now_ms and _G.capstan.now_ms()) or os.clock() * 1000
@@ -411,11 +387,9 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
             end
             reasoning_chunks = reasoning_chunks + 1
             accumulated_reasoning = accumulated_reasoning .. reasoning_content
-            reasoning_token_estimate = reasoning_token_estimate + tokens.estimate_text_tokens(reasoning_content)
             for _, detail in ipairs(chunk.reasoning_details or {}) do
                 merge_reasoning_detail(detail)
             end
-            update_usage()
             if not reasoning_active then
                 reasoning_active = true
                 if not provider.suppress_agent_state then agent.set_thinking(true) end
@@ -433,8 +407,6 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
                 if not provider.suppress_agent_state then agent.set_thinking(false) end
             end
             accumulated_text = accumulated_text .. content
-            text_token_estimate = text_token_estimate + tokens.estimate_text_tokens(content)
-            update_usage()
             if buffer_text_until_done then
                 return
             end
@@ -457,13 +429,9 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
                 if tc["function"] then
                     if tc["function"].name then
                         tool_calls_accum[idx].name = tool_calls_accum[idx].name .. tc["function"].name
-                        tool_token_estimate = tool_token_estimate +
-                            tokens.estimate_text_tokens(tc["function"].name)
                     end
                     if tc["function"].arguments then
                         tool_calls_accum[idx].arguments = tool_calls_accum[idx].arguments .. tc["function"].arguments
-                        tool_token_estimate = tool_token_estimate +
-                            tokens.estimate_text_tokens(tc["function"].arguments)
                     end
                 end
                 logging.debug("stream", string.format(
@@ -474,22 +442,34 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
                     #tool_calls_accum[idx].arguments
                 ))
             end
-            update_usage()
         elseif chunk.type == "usage" and type(chunk.usage) == "table" then
             -- Preserve provider usage for legacy observers, adding only validated
             -- normalized optional counters. Missing details are not measured zero.
-            final_usage = {}
-            for key, value in pairs(chunk.usage) do final_usage[key] = value end
+            final_usage = final_usage or {}
+            -- Usage events can be partial snapshots (input first, output later).
+            -- A new component count invalidates an older aggregate total.
+            if not valid_counter(chunk.usage.total_tokens) and
+                (valid_counter(chunk.usage.prompt_tokens) or valid_counter(chunk.usage.completion_tokens)) then
+                final_usage.total_tokens = nil
+            end
+            for key, value in pairs(chunk.usage) do
+                local counter = key == "prompt_tokens" or key == "completion_tokens" or
+                    key == "total_tokens" or key == "cached_tokens" or key == "reasoning_tokens"
+                if not counter or valid_counter(value) then
+                    final_usage[key] = value
+                end
+            end
             for field, details in pairs({cached_tokens = "prompt_tokens_details",
                 reasoning_tokens = "completion_tokens_details"}) do
                 local nested = chunk.usage[details]
                 local value = chunk.usage[field]
                 if value == nil and type(nested) == "table" then value = nested[field] end
-                final_usage[field] = type(value) == "number" and value >= 0 and
-                    value < math.huge and value or nil
+                if valid_counter(value) then
+                    final_usage[field] = value
+                end
             end
             usage_chunks = usage_chunks + 1
-            update_usage()
+            update_usage(false)
         end
     end
 
@@ -615,8 +595,6 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
             if remaining_text ~= "" then
                 mark_output("text", not buffer_text_until_done)
                 accumulated_text = accumulated_text .. remaining_text
-                text_token_estimate = text_token_estimate + tokens.estimate_text_tokens(remaining_text)
-                update_usage()
                 if not buffer_text_until_done then
                     on_result({type = "text", content = remaining_text}, false)
                 end
@@ -723,6 +701,7 @@ function M.stream(provider, on_result, initial_prompt_tokens, run_opts, usage_co
                 request_outcome = "empty"
             end
 
+            update_usage(accumulated_text ~= "" or accumulated_reasoning ~= "" or #final_calls > 0)
             logging.runtime_log("stream", string.format(
                 "done events=%d raw_bytes=%d text_chunks=%d reasoning_chunks=%d tool_delta_chunks=%d usage_chunks=%d text_bytes=%d reasoning_bytes=%d final_tool_calls=%d",
                 event_count,

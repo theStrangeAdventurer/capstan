@@ -190,6 +190,7 @@ function M.run(operation, path, authorized_path)
     local argv, err = argv_for(command, path)
     if not argv then return nil, err end
     local result = tools.exec(argv, 30)
+    if result.truncated then return nil, "VCS output exceeded process capture limit; request a narrower path" end
     if result.exit ~= 0 then
         local message = result.stderr ~= "" and result.stderr or result.stdout
         return nil, string.format("%s %s failed (exit %d): %s", name, reported_operation,
@@ -201,6 +202,7 @@ function M.run(operation, path, authorized_path)
         local worktree_argv, worktree_err = argv_for(worktree_command, path)
         if not worktree_argv then return nil, worktree_err end
         local worktree = tools.exec(worktree_argv, 30)
+        if worktree.truncated then return nil, "VCS output exceeded process capture limit; request a narrower path" end
         if worktree.exit ~= 0 then
             local message = worktree.stderr ~= "" and worktree.stderr or worktree.stdout
             return nil, string.format("%s %s failed (exit %d): %s", name, reported_operation,

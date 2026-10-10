@@ -67,4 +67,21 @@ function M.collect(owner)
     if not ok then error(err, 0) end
     return events
 end
+-- UI never includes command lines, paths, PIDs, JSON or agent instructions.
+function M.describe(events)
+    local running, completed, attention = 0, 0, 0
+    for _, event in ipairs(events) do
+        local exit = event.exit or event.exit_code
+        if event.watch_error or event.timed_out or
+           event.status == 'failed' or (type(exit) == 'number' and exit ~= 0) then
+            attention = attention + 1
+        elseif event.running then running = running + 1
+        else completed = completed + 1 end
+    end
+    local parts = {}
+    if running > 0 then parts[#parts + 1] = running .. ' running' end
+    if completed > 0 then parts[#parts + 1] = completed .. ' finished' end
+    if attention > 0 then parts[#parts + 1] = attention .. ' need attention' end
+    return 'Background: ' .. table.concat(parts, ', ') .. '.'
+end
 return M

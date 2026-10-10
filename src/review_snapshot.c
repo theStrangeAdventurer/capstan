@@ -36,7 +36,7 @@ static int sensitive(const char *name) {
   if (n >= sizeof(p)) return 1;
   for (size_t i = 0; i <= n; i++) p[i] = (char)tolower((unsigned char)name[i]);
   return !strncmp(p, ".env", 4) || !strncmp(p, ".zshenv", 7) ||
-    strstr(p, "secret") || strstr(p, "token") || strstr(p, "credential") ||
+    permit_path_is_sensitive(name) ||
     !strcmp(p, ".ssh") || !strcmp(p, ".aws") || !strcmp(p, ".gnupg") ||
     !strcmp(p, ".netrc") || !strcmp(p, ".npmrc") || !strcmp(p, ".bashrc") ||
     !strcmp(p, ".bash_profile") || !strcmp(p, ".profile") || !strcmp(p, ".zshrc") ||
@@ -462,7 +462,12 @@ static int l_snapshot_head(lua_State *L) {
   if (!ok) { lua_pop(L,1); return failure(L,"HEAD snapshot incomplete or unauthorized"); }
   return 1;
 }
+static int l_is_sensitive_path(lua_State *L) {
+  lua_pushboolean(L, permit_path_is_sensitive(luaL_checkstring(L, 1)));
+  return 1;
+}
 void review_snapshot_init(lua_State *L) {
+  lua_pushcfunction(L,l_is_sensitive_path); lua_setfield(L,-2,"is_sensitive_path");
   lua_pushcfunction(L,l_snapshot_head); lua_setfield(L,-2,"review_snapshot_head");
   lua_pushcfunction(L,l_snapshot_list); lua_setfield(L,-2,"review_snapshot_list");
   lua_pushcfunction(L,l_snapshot_read); lua_setfield(L,-2,"review_snapshot_read");

@@ -139,3 +139,22 @@ diffs. Dispatcher tests cover forged internal path arguments, missing and
 out-of-workspace paths, explicit denies, valid path-specific diffs, and symlink
 changes after authorization. The embedded build smoke test verifies that the built-in plugin and
 runtime module are available from the standalone binary.
+
+### Paged tool results
+
+The model-facing VCS tool returns valid JSON with `output`, `snapshot`, `offset`,
+`total_bytes`, `complete`, and (when incomplete) `next_offset`. Continue with
+the same operation/path and returned snapshot/offset until `complete=true`.
+Pages fit the configured shared tool-output budget including JSON escaping and
+metadata; UTF-8 characters are never split. Redaction occurs before pagination.
+
+Pages read an immutable process-local snapshot, never re-run Git between pages.
+The eight newest snapshots are retained and scoped to workspace/session/path.
+Expired handles or changed scopes return an explicit error requiring a fresh
+read. Handles are not resumable after restart. If native process capture itself
+was truncated, the tool returns an error requiring a narrower path instead of
+claiming that incomplete output is a complete diff. The public `agent.vcs.run`
+adapter retains its existing shape; pagination belongs to the tool plugin.
+
+Offline tests reconstruct a large escaped Unicode diff under a 1 KiB budget,
+change the source between pages, and check scope, eviction and offset errors.
