@@ -28,7 +28,7 @@ Each job:
 4. Packages the binary with `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES`.
 5. Uploads the resulting `.tar.gz` as a GitHub Actions artifact.
 
-On tag pushes matching `v*`, a follow-up release job downloads the three
+On tag pushes matching `v*` or `[0-9]*` (for example `0.4.1`), a follow-up release job downloads the three
 artifacts and uploads them as assets on the matching GitHub Release. If the
 release does not exist yet, the job creates it with generated release notes.
 The release job also publishes `SHA256SUMS` covering all three archives and

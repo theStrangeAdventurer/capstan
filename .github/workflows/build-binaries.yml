@@ -3,7 +3,7 @@ name: Build binaries
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["v*", "[0-9]*"]
   pull_request:
   workflow_dispatch:
 
@@ -40,11 +40,11 @@ jobs:
           sudo apt-get install -y build-essential libcurl4-openssl-dev ncurses-bin file
 
       - name: Build
-        if: "!startsWith(github.ref, 'refs/tags/v')"
+        if: "!startsWith(github.ref, 'refs/tags/')"
         run: ./build.sh
 
       - name: Build release tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         run: VERSION="${GITHUB_REF_NAME}" ./build.sh
 
       - name: Smoke test standalone binary
@@ -68,7 +68,7 @@ jobs:
   release:
     name: Publish release assets
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
 
     steps:
