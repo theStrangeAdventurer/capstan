@@ -11,6 +11,29 @@ two-pixel strokes, chamfered corners, and two blank columns between letters
 (54 columns total). Pairs of pixel rows produce four terminal rows.
 The bitmap matches the pre-eye wordmark, including its two-row A crossbars.
 
+On the first start-screen display in an application, all seven letters begin assembling together. Each has a different ordered fill: top-down, bottom-up, right-to-left,
+center-out by rows, center-out by columns, outside-in, and reverse row order.
+Launch times are normalized per glyph so both the first launch (0 ms) and final
+arrival (2320 ms) coincide, including the two differently animated A letters. Each square follows exactly one axis,
+using letter- and pixel-specific left/right/top/bottom approaches, with a 120 ms constant-speed flight.
+Flights cover up to eight horizontal or six vertical pixels, starting inside
+the padded canvas so all letters visibly begin together. Settled pixels are dim.
+The assembly phase ends at 2600 ms, followed by a 900 ms faulty-contact phase:
+only pixel (row 0, column 1, upper-left of C) makes a weak attempt, fades, retries brighter, then dips briefly before staying
+lit. Unequal pauses and brightness ramps replace identical square pulses.
+The whole word then lights white for 200 ms and settles over 300 ms into the
+original wave. Only the wave repeats after the 4000 ms intro.
+
+Only assembly runs at 1.5× speed (about 1.73 seconds in real time).
+The contact-light phase retains 900 ms for a readable irregular startup;
+ignition/settling retain 500 ms. Each subsequent wave has its original leisurely
+2500 ms period. TUI and exporter use this same piecewise clock mapping.
+
+The timeline starts on the first display, including compact layouts, and never
+restarts on resize or after leaving/reopening the start screen. A clock failure
+shows the complete word. All frames use the existing event loop: no waits,
+threads, allocations or new runtime dependencies. Input interrupts normally.
+
 A silk-like wave of light travels left to right inside the unchanged letter
 strokes, repeating in the same direction without a return pass.
 A broad curved ribbon (22-pixel half-width) uses a smoothstep
@@ -23,26 +46,16 @@ right edge around 1250 ms, and slows off-screen. Peak speed is 64.8 pixels/secon
 velocity is zero at the loop boundary. Brightness and ribbon geometry are unchanged.
 Both occupied halves of each terminal cell share one shade to avoid
 speckled half-pixel highlights; half-blocks still preserve the letter edges.
-There is no eye, blinking, catchlight, particle, dot pattern or dithering.
-Only brightness changes; letter geometry and the rest of the screen stay fixed.
+After the intro there are no particles or isolated blinking pixels.
+After the intro, only brightness changes; letter geometry stays fixed.
 
-All terminals use the original `▀`, `▄`, `█` glyphs with the default
-background. Animation changes only foreground brightness, never glyph shape.
-In particular, a lower-only edge uses `▄`, not `▀` with default foreground:
-default foreground is not transparent and would fill the empty upper half.
-On 256-color terminals six foreground-only color pairs are used. Palette indices are
-245 through 250, in increasing brightness order. These close neutral grays
-keep the reflection soft, without black patches or sharp white highlights.
-Pixels outside strokes retain the terminal's default background, including
-letter counters and gaps. This neutral palette is a logo-only exception;
-white may lose contrast on light themes. Other terminals use `▀`, `▄`, `█`
-with dim/normal/bold default foreground at cell resolution: less detail,
-but no color-pair dependency or change to the letter silhouette.
-
-Animation time starts after a 500 ms opening hold. The TUI supplies monotonic timestamps; pure animation state owns the
-opening time, resetting when conversation messages replace the screen.
-Ordinary redraws and layout changes do not restart it. Clock failure leaves
-the wave at its initial position. No Braille glyphs are used.
+The TUI consumes a 58×12 shaded pixel canvas (two pixels of padding on each
+side); the word itself remains the original 54×8 bitmap. On 256-color terminals,
+paired half-pixels use separate foreground/background shades to light exactly
+one square during the contact flicker. Shades 1–6 retain baseline grays 245–250;
+white 255 is reserved for the intro flash. Empty halves retain default background,
+and lower-only pixels use `▄`. Limited-color terminals use dim/normal/bold at
+cell resolution, preserving geometry but reducing flicker detail.
 
 Two blank rows separate the wide wordmark from the muted `version: <version>`,
 with one blank row before the settings. Labels and version use gray 245 on
@@ -75,7 +88,7 @@ The start screen disappears as soon as the first user or agent message exists.
 The renderer chooses among three layouts based on the available message window:
 
 - wide: animated wordmark for at least 20 rows and 64 columns; content is
-  14 rows high and 56 columns wide
+  16 rows high and 56 columns wide
 - compact: borderless text/status view for at least 12 rows and 48 columns;
   content is 9 rows high and up to 56 columns wide
 - minimal: unchanged centered title for very small terminals
@@ -92,25 +105,14 @@ geometry. The ncurses-specific drawing stays in `src/tui.c`, using a single
 renderer for wide/compact status and hints. This change is presentation-only:
 model context, logs, persisted state, CLI mode, and plugin APIs are unchanged.
 
-The wordmark bitmap, wave geometry, timing and masking policy live
-in `src/start_screen.c`; ncurses
-renders packed half-block cells and derives animation time from the monotonic
-clock. Runtime values come from `agent_provider_name()`,
-`agent_provider_model()`, `agent_reasoning_effort()`, `agent_profile_name()`,
-and `app_workdir()`.
+The bitmap, axis-only trajectories, intro timeline and original wave live in
+`src/start_screen.c`. TUI and `tools/preview_start_spin.c` consume the same frame;
+`tools/preview_start_spin.py` uses Pillow solely to create preview artifacts.
+Model context, runtime logs, persisted state and plugin APIs are unaffected.
 
-## Tests
-
-`make test` covers layout selection, centered content bounds across terminal
-sizes, wordmark bounds and letter spacing, wave travel and smoothness across
-neighboring pixels and frames (including the loop boundary), cycle/reopening,
-pixel masking and all six gray levels, `$HOME` path collapse, UTF-8-safe
-truncation, and status/hint formatting.
-`make test-tui-input` checks all six foreground shades, default backgrounds
-and the original block glyphs across a full wave cycle
-and the attribute fallback on 16-color terminals, compact layout, neutral
-tasks, accented profile/keys, muted border/version, user gutter and purple status
-dot. Light/dark contrast needs visual review.
-`make` checks the ncurses renderer compiles. Visual review should check softness
-of the wave, wide/compact terminals and transition to chat.
-`make test-build` verifies standalone embedded runtime assets.
+Tests cover simultaneous assembly of all seven letters, launch order, exact axes, monotonic travel without overshoot,
+assembly completion, the unique blinking pixel and three flashes, global
+ignition, unchanged original wave over three periods, and no intro replay.
+PTY tests check palette, compact resize, input during assembly and chat transition.
+The GIF exports a single opening plus two wave cycles; replaying the GIF repeats
+the recording, not the runtime intro.

@@ -55,10 +55,10 @@ static MunitResult test_content_geometry(const MunitParameter params[],
       munit_assert_int(content.x + content.width, <=, width - 2);
       munit_assert_int(content.y + content.height, <=, height);
       munit_assert_int(content.status_y, ==, content.y +
-                       (layout == START_SCREEN_WIDE ? 8 : 3));
+                       (layout == START_SCREEN_WIDE ? START_SCREEN_CANVAS_DISPLAY_ROWS + 4 : 3));
       if (layout == START_SCREEN_WIDE) {
         munit_assert_int(content.version_y, ==,
-                         content.y + START_SCREEN_WORDMARK_DISPLAY_ROWS + 2);
+                         content.y + START_SCREEN_CANVAS_DISPLAY_ROWS + 2);
         munit_assert_int(content.status_y, ==, content.version_y + 2);
       } else {
         munit_assert_int(content.version_y, ==, content.y);
@@ -206,18 +206,104 @@ static MunitResult test_animation_opening(const MunitParameter params[], void *d
   (void)data;
   StartScreenAnimation animation = {0};
   long long opened = 1234567;
-  int resting = start_screen_animation_frame(&animation, 1, opened);
-  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 499), ==, resting);
-  int first = start_screen_animation_frame(&animation, 1, opened + 500);
-  munit_assert_int(first, ==, start_screen_animation_tick(0));
-  munit_assert_int(resting, ==, 0);
-  /* Redraws (including resize) keep the same opening timestamp. */
-  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 1700), ==, 1200);
-  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 500 + START_SCREEN_WAVE_PERIOD_MS), ==, first);
-  start_screen_animation_frame(&animation, 0, opened + 4200);
-  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 8000), ==, resting);
-  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 8499), ==, resting);
-  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 8500), ==, first);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened), ==, 0);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 1700), ==, 2550);
+  int first = start_screen_animation_frame(&animation, 1, opened + 3134);
+  munit_assert_int(first, ==, START_SCREEN_INTRO_MS);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 5634), ==, first);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 1734), ==, START_SCREEN_ASSEMBLY_MS);
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 4384), ==, START_SCREEN_INTRO_MS + 1250);
+  start_screen_animation_frame(&animation, 0, 0);
+  /* Leaving/reopening the screen never replays assembly. */
+  munit_assert_int(start_screen_animation_frame(&animation, 1, opened + 99999), >=, START_SCREEN_INTRO_MS);
+  return MUNIT_OK;
+}
+
+static MunitResult test_assembly(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  int directions[4] = {0};
+  int starts[7] = {0}, ends[7] = {0}, different_a = 0;
+  for (int col = 0; col < START_SCREEN_WORDMARK_COLUMNS; col++) {
+    for (int row = 0; row < START_SCREEN_WORDMARK_ROWS; row++) {
+      if (!start_screen_wordmark_pixel(row, col)) continue;
+      int previous = 100, x, y;
+      int launch = start_screen_particle_launch(row, col);
+      if (launch == 0) starts[col/8]++;
+      if (launch == 2200) ends[col/8]++;
+      if (col >= 8 && col < 14 && launch != start_screen_particle_launch(row, col+32)) different_a++;
+      munit_assert_int(launch, >=, 0);
+      munit_assert_int(launch+120, <, START_SCREEN_ASSEMBLY_MS);
+      munit_assert_int(start_screen_particle_position(row, col, launch-1, &y, &x), ==, 0);
+      for (int age = 0; age <= 120; age++) {
+        int state = start_screen_particle_position(row, col, launch+age, &y, &x);
+        munit_assert_int(x, >=, 0); munit_assert_int(x, <, START_SCREEN_CANVAS_COLUMNS);
+        munit_assert_int(y, >=, 0); munit_assert_int(y, <, START_SCREEN_CANVAS_ROWS);
+        int dx = abs(x-col-2), dy = abs(y-row-2);
+        munit_assert_true(dx == 0 || dy == 0);
+        munit_assert_int(dx+dy, <=, previous); /* No bounce or direction reversal. */
+        if (age < 120) munit_assert_int(dx+dy, >, 0);
+        previous = dx+dy;
+        munit_assert_int(state, ==, age == 120 ? 2 : 1);
+      }
+      munit_assert_int(previous, ==, 0);
+      directions[(row+col%8+col/8)%4]++;
+    }
+  }
+  for (int i = 0; i < 4; i++) munit_assert_int(directions[i], >, 0);
+  for (int letter = 0; letter < 7; letter++) {
+    munit_assert_int(starts[letter], ==, 1);
+    munit_assert_int(ends[letter], ==, 1);
+  }
+  munit_assert_int(different_a, >, 0);
+  StartScreenFrame frame;
+  /* Every letter has settled pixels while all seven are still assembling. */
+  start_screen_render_frame(600, &frame);
+  for (int letter = 0; letter < 7; letter++) {
+    int settled = 0, missing = 0;
+    for (int row = 0; row < 8; row++)
+      for (int col = letter*8; col < letter*8+6; col++) {
+        if (!start_screen_wordmark_pixel(row, col)) continue;
+        settled += frame.pixels[row+2][col+2] == 1;
+        missing += frame.pixels[row+2][col+2] == 0;
+      }
+    munit_assert_int(settled, >, 0);
+    munit_assert_int(missing, >, 0);
+  }
+  int flash_starts = 0, was_bright = 0;
+  for (int t = 0; t < START_SCREEN_FLICKER_MS; t++) {
+    start_screen_render_frame(START_SCREEN_ASSEMBLY_MS+t, &frame);
+    int bright = 0;
+    for (int y = 0; y < START_SCREEN_CANVAS_ROWS; y++)
+      for (int x = 0; x < START_SCREEN_CANVAS_COLUMNS; x++) {
+        int level = frame.pixels[y][x];
+        munit_assert_int(level != 0, ==, start_screen_wordmark_pixel(y-2, x-2));
+        if (level > 1) {
+          munit_assert_int(y, ==, 2); munit_assert_int(x, ==, 3);
+          munit_assert_int(level, <=, 7); bright++;
+        }
+      }
+    munit_assert_int(bright, <=, 1);
+    if (bright && !was_bright) flash_starts++;
+    was_bright = bright;
+  }
+  munit_assert_int(flash_starts, ==, 3);
+  const int light_times[] = {120, 230, 375, 500, 630, 665, 690, 899};
+  const int light_levels[] = {4, 1, 7, 1, 5, 2, 7, 7};
+  for (int i = 0; i < 8; i++) {
+    start_screen_render_frame(START_SCREEN_ASSEMBLY_MS+light_times[i], &frame);
+    munit_assert_int(frame.pixels[2][3], ==, light_levels[i]);
+  }
+  start_screen_render_frame(START_SCREEN_ASSEMBLY_MS+START_SCREEN_FLICKER_MS, &frame);
+  for (int y = 0; y < START_SCREEN_CANVAS_ROWS; y++)
+    for (int x = 0; x < START_SCREEN_CANVAS_COLUMNS; x++)
+      munit_assert_int(frame.pixels[y][x], ==, 7*start_screen_wordmark_pixel(y-2,x-2));
+  /* The post-intro wave is pixel-for-pixel the unchanged baseline renderer. */
+  for (int t = 0; t < 3*START_SCREEN_WAVE_PERIOD_MS; t += 25) {
+    start_screen_render_frame(START_SCREEN_INTRO_MS+t, &frame);
+    for (int y = 0; y < START_SCREEN_CANVAS_ROWS; y++)
+      for (int x = 0; x < START_SCREEN_CANVAS_COLUMNS; x++)
+        munit_assert_int(frame.pixels[y][x], ==, start_screen_wave_level(y-2,x-2,t));
+  }
   return MUNIT_OK;
 }
 
@@ -329,6 +415,7 @@ static MunitResult test_build_status_fallbacks(const MunitParameter params[],
 }
 
 static MunitTest tests[] = {
+    {"/assembly", test_assembly, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/layout_wide", test_layout_wide, NULL, NULL, MUNIT_TEST_OPTION_NONE,
      NULL},
     {"/layout_compact", test_layout_compact, NULL, NULL, MUNIT_TEST_OPTION_NONE,

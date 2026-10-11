@@ -36,19 +36,110 @@ int start_screen_animation_tick(long long elapsed_ms) {
 
 int start_screen_animation_frame(StartScreenAnimation *animation, int visible,
                                  long long now_ms) {
-  const int resting_tick = 0;
-  if (!visible) {
-    animation->visible = 0;
-    return resting_tick;
-  }
-  if (!animation->visible) {
-    animation->visible = 1;
+  if (!visible) return 0;
+  if (!animation->started) {
+    animation->started = 1;
     animation->opened_ms = now_ms;
   }
-  long long elapsed_ms = now_ms - animation->opened_ms;
-  if (elapsed_ms < 500)
-    return resting_tick;
-  return start_screen_animation_tick(elapsed_ms - 500);
+  long long elapsed = now_ms - animation->opened_ms;
+  if (elapsed < 0) return 0;
+  /* Only assembly runs at 1.5x; flicker and the original wave use real time. */
+  if (elapsed < START_SCREEN_ASSEMBLY_WALL_MS) elapsed += elapsed / 2;
+  else elapsed += START_SCREEN_ASSEMBLY_MS - START_SCREEN_ASSEMBLY_WALL_MS;
+  if (elapsed < START_SCREEN_INTRO_MS) return (int)elapsed;
+  return START_SCREEN_INTRO_MS + start_screen_animation_tick(elapsed - START_SCREEN_INTRO_MS);
+}
+
+/* Distinct, ordered fills: top, bottom, right, middle, spine, outline, reverse. */
+static int assembly_order(int row, int x, int letter) {
+  switch (letter) {
+  case 0: return row * 6 + x;
+  case 1: return (7-row) * 6 + x;
+  case 2: return (5-x) * 8 + row;
+  case 3: return abs(2*row-7) * 12 + row + x * 2;
+  case 4: return abs(2*x-5) * 16 + x + row * 2;
+  case 5: return (5-abs(2*x-5)) * 16 + x + (7-row) * 2;
+  default: return (7-row) * 6 + 5-x;
+  }
+}
+
+int start_screen_particle_launch(int row, int column) {
+  if (!start_screen_wordmark_pixel(row, column)) return -1;
+  int letter = column / 8, key = assembly_order(row, column % 8, letter);
+  int rank = 0, count = 0;
+  for (int y = 0; y < 8; y++)
+    for (int x = 0; x < 6; x++) {
+      if (!start_screen_wordmark_pixel(y, letter*8+x)) continue;
+      int other = assembly_order(y, x, letter);
+      if (other < key || (other == key && y*6+x < row*6+column%8)) rank++;
+      count++;
+    }
+  /* All first pixels launch at zero; all last pixels land together. */
+  return rank * 2200 / (count-1);
+}
+
+int start_screen_particle_position(int row, int column, int elapsed, int *y, int *x) {
+  int launch = start_screen_particle_launch(row, column);
+  int age = elapsed - launch;
+  *y = row + 2; *x = column + 2;
+  if (launch < 0 || age < 0) return 0;
+  if (age >= 120) return 2;
+  int direction = (row + column % 8 + column / 8) % 4;
+  int distance = direction < 2 ? 8 : 6;
+  int available = direction == 0 ? *x : direction == 1 ? START_SCREEN_CANVAS_COLUMNS-1-*x :
+                  direction == 2 ? *y : START_SCREEN_CANVAS_ROWS-1-*y;
+  if (distance > available) distance = available;
+  int offset = (distance * (120 - age) + 119) / 120;
+  if (direction == 0) *x -= offset;
+  if (direction == 1) *x += offset;
+  if (direction == 2) *y -= offset;
+  if (direction == 3) *y += offset;
+  return 1;
+}
+
+static int start_screen_contact_light(int elapsed) {
+  /* Weak start, brighter retry, brief voltage dip, then stable ignition. */
+  static const int keys[][2] = {
+    {0,1}, {110,1}, {120,4}, {170,2}, {230,1}, {360,1}, {375,7},
+    {420,3}, {500,1}, {610,1}, {630,5}, {665,2}, {690,7}, {900,7}
+  };
+  for (size_t i = 1; i < sizeof(keys)/sizeof(keys[0]); i++) {
+    if (elapsed < keys[i][0]) {
+      int t = elapsed-keys[i-1][0], duration = keys[i][0]-keys[i-1][0];
+      return keys[i-1][1] + (keys[i][1]-keys[i-1][1])*t/duration;
+    }
+  }
+  return 7;
+}
+
+void start_screen_render_frame(int elapsed, StartScreenFrame *frame) {
+  memset(frame, 0, sizeof(*frame));
+  if (elapsed < 0) elapsed = 0;
+  for (int col = 0; col < START_SCREEN_WORDMARK_COLUMNS; col++) {
+    for (int row = 0; row < START_SCREEN_WORDMARK_ROWS; row++) {
+      if (!start_screen_wordmark_pixel(row, col)) continue;
+      int y = row + 2, x = col + 2, level = 1;
+      if (elapsed < START_SCREEN_ASSEMBLY_MS) {
+        int state = start_screen_particle_position(row, col, elapsed, &y, &x);
+        if (!state) continue;
+        level = state == 1 ? 4 : 1;
+      } else if (elapsed < START_SCREEN_ASSEMBLY_MS + START_SCREEN_FLICKER_MS) {
+        int t = elapsed - START_SCREEN_ASSEMBLY_MS;
+        if (row == 0 && col == 1) level = start_screen_contact_light(t);
+      } else if (elapsed < START_SCREEN_INTRO_MS) {
+        int t = elapsed - START_SCREEN_ASSEMBLY_MS - START_SCREEN_FLICKER_MS;
+        level = 7;
+        if (t >= START_SCREEN_IGNITION_MS) {
+          int wave = start_screen_wave_level(row, col, 0);
+          level -= (7 - wave) * (t - START_SCREEN_IGNITION_MS) / START_SCREEN_SETTLE_MS;
+        }
+      } else {
+        level = start_screen_wave_level(row, col, elapsed - START_SCREEN_INTRO_MS);
+      }
+      if (y >= 0 && y < START_SCREEN_CANVAS_ROWS && x >= 0 && x < START_SCREEN_CANVAS_COLUMNS &&
+          level > frame->pixels[y][x]) frame->pixels[y][x] = (unsigned char)level;
+    }
+  }
 }
 
 int start_screen_wave_level(int row, int column, int tick) {
@@ -92,11 +183,11 @@ StartScreenContent start_screen_content_for_size(int height, int width) {
   if (content.width > 56)
     content.width = 56;
   content.height = layout == START_SCREEN_WIDE
-                       ? START_SCREEN_WORDMARK_DISPLAY_ROWS + 10 : 9;
+                       ? START_SCREEN_CANVAS_DISPLAY_ROWS + 10 : 9;
   content.x = (width - content.width) / 2;
   content.y = (height - content.height) / 2;
   content.version_y = layout == START_SCREEN_WIDE
-                          ? content.y + START_SCREEN_WORDMARK_DISPLAY_ROWS + 2
+                          ? content.y + START_SCREEN_CANVAS_DISPLAY_ROWS + 2
                           : content.y;
   content.status_y = content.y + content.height - 6;
   content.shortcuts_y = content.y + content.height - 1;

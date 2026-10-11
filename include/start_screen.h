@@ -52,14 +52,33 @@ int start_screen_wordmark_pixel(int row, int column);
 /* Terminal cell mask: bit 0 = upper half, bit 1 = lower half. */
 int start_screen_wordmark_cell(int row, int column);
 int start_screen_animation_tick(long long elapsed_ms);
-/* Zero-initialize; hiding the screen resets its opening time. */
+/* Zero-initialize; opening is played once per application lifetime. */
 typedef struct {
-  int visible;
+  int started;
   long long opened_ms;
 } StartScreenAnimation;
 int start_screen_animation_frame(StartScreenAnimation *animation, int visible,
                                  long long now_ms);
 /* Masked silk wave: 0 = outside letters, 1..6 = increasing brightness. */
 int start_screen_wave_level(int row, int column, int tick);
+
+#define START_SCREEN_ASSEMBLY_MS 2600
+#define START_SCREEN_ASSEMBLY_WALL_MS ((START_SCREEN_ASSEMBLY_MS * 2 + 2) / 3)
+#define START_SCREEN_FLICKER_MS 900
+#define START_SCREEN_IGNITION_MS 200
+#define START_SCREEN_SETTLE_MS 300
+#define START_SCREEN_INTRO_MS (START_SCREEN_ASSEMBLY_MS + START_SCREEN_FLICKER_MS + START_SCREEN_IGNITION_MS + START_SCREEN_SETTLE_MS)
+#define START_SCREEN_CANVAS_ROWS 12
+#define START_SCREEN_CANVAS_COLUMNS (START_SCREEN_WORDMARK_COLUMNS + 4)
+#define START_SCREEN_CANVAS_DISPLAY_ROWS (START_SCREEN_CANVAS_ROWS / 2)
+typedef struct {
+  unsigned char pixels[START_SCREEN_CANVAS_ROWS][START_SCREEN_CANVAS_COLUMNS];
+} StartScreenFrame;
+/* Logical launch time in milliseconds, or -1 outside the bitmap. */
+int start_screen_particle_launch(int row, int column);
+/* Returns 0 before launch, 1 in flight, 2 at destination. Coordinates include padding. */
+int start_screen_particle_position(int row, int column, int elapsed,
+                                  int *y, int *x);
+void start_screen_render_frame(int elapsed, StartScreenFrame *frame);
 
 #endif

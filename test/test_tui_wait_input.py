@@ -317,19 +317,37 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 assert json.loads((root / 'captured').read_text())[-1]['content'] == 'preserved_draft suffix'
                 print('TUI background monitor: timer, chat, restart, final delivery and draft: ok')
                 return
+            if case == 'assembly_input':
+                send('assembly draft')
+                before = len(screen)
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 20, 60, 0, 0))
+                proc.send_signal(signal.SIGWINCH)
+                until(lambda: b'CAPSTAN' in screen[before:], 'compact during assembly')
+                before = len(screen)
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 34, 110, 0, 0))
+                proc.send_signal(signal.SIGWINCH)
+                until(lambda: any(g.encode() in screen[before:] for g in ('▀', '▄', '█')), 'wide during assembly')
+                send('\r')
+                until(lambda: (root / 'captured').exists(), 'input interrupts assembly')
+                users = [m['content'] for m in json.loads((root / 'captured').read_text()) if m['role'] == 'user']
+                assert users == ['assembly draft'], users
+                assert proc.poll() is None
+                print('TUI assembly: resize out/back, preserved draft and immediate submission: ok')
+                return
             if case.startswith("palette"):
-                pause(7.0)  # Opening delay plus a whole silk-wave cycle.
+                pause(7.0)  # One-time assembly, ignition and a full original wave.
                 output = bytes(screen)
                 prefixes = [output[:m.start()] for m in re.finditer('▀|▄|█'.encode(), output)]
                 styles = {sgr_attributes(prefix) for prefix in prefixes}
                 expected = ({(None, False, True), (None, False, False),
                              (None, True, False)} if case == 'palette_16' else
-                            {(color, False, False) for color in (245, 246, 247, 248, 249, 250)})
+                            {(color, False, False) for color in (245, 246, 247, 248, 249, 250, 255)})
                 assert styles == expected, styles
                 if case != 'palette_16':
                     lower = {sgr_attributes(prefix, background=True) for prefix in prefixes}
-                    assert lower == {(None, False, False)}, lower
-                    assert all(glyph.encode() in output for glyph in ('▀', '▄', '█')), \
+                    assert (None, False, False) in lower, lower
+                    assert any(color is not None for color, _, _ in lower), lower
+                    assert all(glyph.encode() in output for glyph in ('▀', '▄')), \
                         'preserve original glyphs, including lower-only edges'
                 assert b' ready' not in output
                 accent = 5 if case == 'palette_16' else 141
@@ -358,7 +376,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 history = bytes(screen[before:])
                 marker = history.index('│'.encode())
                 assert sgr_attributes(history[:marker])[0] == (None if case == 'palette_16' else 245)
-                print(f'TUI {case}: silk wave, half-pixel palette, profile, tasks and status accent: ok')
+                print(f'TUI {case}: pixel assembly, original wave, half-pixel palette, profile, tasks and status accent: ok')
                 return
 
             if case == "session_copy":
@@ -813,7 +831,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
 
 
 if __name__ == "__main__":
-    for scenario in ("background_monitor", "palette", "palette_16", "session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
+    for scenario in ("assembly_input", "background_monitor", "palette", "palette_16", "session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
                      "permit_handoff", "permit_new", "shell_multiline",
                      "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear"):
         run_case(scenario)

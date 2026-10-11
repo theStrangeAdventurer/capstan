@@ -102,10 +102,10 @@ void init_tui(void) {
       init_pair(12, 65, -1);
       init_pair(13, 95, -1);
       init_pair(20, 179, -1);
-      /* Shade the original block glyphs, never their background. */
-      static const short logo_colors[] = {245, 246, 247, 248, 249, 250};
-      for (int i = 0; i < 6; i++)
-        init_pair(22 + i, logo_colors[i], -1);
+      for (int top = 0; COLOR_PAIRS >= 92 && top <= 7; top++)
+        for (int bottom = 0; bottom <= 7; bottom++)
+          init_pair(28 + top * 8 + bottom, top ? (top == 7 ? 255 : 244 + top) : -1,
+                    bottom ? (bottom == 7 ? 255 : 244 + bottom) : -1);
     } else {
       init_pair(12, COLOR_GREEN, -1);
       init_pair(13, COLOR_RED, -1);
@@ -376,29 +376,31 @@ static StartScreenAnimation g_start_animation;
 static int start_screen_current_animation_tick(void) {
   struct timespec now;
   if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
-    return 0; /* Resting logo if the clock is unavailable. */
+    return START_SCREEN_INTRO_MS; /* Preserve a readable logo if the clock fails. */
   long long now_ms = now.tv_sec * 1000LL + now.tv_nsec / 1000000LL;
   return start_screen_animation_frame(&g_start_animation, 1, now_ms);
 }
 
 static void render_start_screen_wordmark(WINDOW *win, int y, int x) {
-  int tick = start_screen_current_animation_tick();
-  static const char *const cells[] = {" ", "▀", "▄", "█"};
-  for (int row = 0; row < START_SCREEN_WORDMARK_DISPLAY_ROWS; row++) {
-    for (int column = 0; column < START_SCREEN_WORDMARK_COLUMNS; column++) {
-      int cell = start_screen_wordmark_cell(row, column);
-      if (!cell)
-        continue;
-      int top = start_screen_wave_level(row * 2, column, tick);
-      int bottom = start_screen_wave_level(row * 2 + 1, column, tick);
-      int colored = has_colors() && COLORS >= 256;
-      /* Attribute-only terminals retain the silhouette, at cell resolution. */
+  StartScreenFrame frame;
+  start_screen_render_frame(start_screen_current_animation_tick(), &frame);
+  int colored = has_colors() && COLORS >= 256 && COLOR_PAIRS >= 92;
+  for (int row = 0; row < START_SCREEN_CANVAS_DISPLAY_ROWS; row++) {
+    for (int col = 0; col < START_SCREEN_CANVAS_COLUMNS; col++) {
+      int top = frame.pixels[row * 2][col], bottom = frame.pixels[row * 2 + 1][col];
+      if (!top && !bottom) continue;
+      const char *glyph = top ? "▀" : "▄";
       int level = top > bottom ? top : bottom;
-      int attrs = colored ? COLOR_PAIR(21 + level)
-                          : level <= 2 ? A_DIM :
-                            level >= 5 ? A_BOLD : A_NORMAL;
+      int attrs;
+      if (colored) {
+        /* Lower-only cells use foreground, never opaque default foreground. */
+        attrs = COLOR_PAIR(top ? 28 + top * 8 + bottom : 28 + bottom * 8);
+      } else {
+        if (top && bottom) glyph = "█";
+        attrs = level <= 3 ? A_DIM : level >= 6 ? A_BOLD : A_NORMAL;
+      }
       wattron(win, attrs);
-      mvwaddstr(win, y + row, x + column, cells[cell]);
+      mvwaddstr(win, y + row, x + col - 2, glyph);
       wattroff(win, attrs);
     }
   }
@@ -701,6 +703,7 @@ static void render_workspace_footer(WINDOW *win, int y, int width) {
 }
 
 static void render_start_screen(WINDOW *win, int height, int width) {
+  (void)start_screen_current_animation_tick(); /* Compact layouts also consume the one-time intro. */
   StartScreenStatus status = {
       .provider = agent_provider_name(),
       .model = agent_provider_model(),
