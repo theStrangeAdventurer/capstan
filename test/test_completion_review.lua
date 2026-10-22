@@ -263,6 +263,16 @@ function tests.turn_limit_preserves_unread_detail()
     blocked(c,'max agent turns exceeded: 80')
     assert(env.finals[1].reason:find('"large.lua" offset=48000',1,true))
 end
+function tests.prompt_append_inheritance()
+    for _, inherit in ipairs({false, true, 'default'}) do
+        local c = setup()
+        if inherit ~= 'default' then c.context.inherit_system_prompt_append = inherit end
+        local h = queue(c)
+        assert(h.ctx.inherit_system_prompt_append == c.context.inherit_system_prompt_append)
+        deliver(c, clean)
+        disposed(c)
+    end
+end
 function tests.clean()
     local c = setup(); queue(c)
     c:poll(); assert(#env.finals == 0)

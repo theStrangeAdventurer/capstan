@@ -47,6 +47,36 @@ run.
   allows the queued batch to start from the main loop.
 - The queue is in-memory only and is cleared when Capstan exits.
 
+## Collapsed pasted text
+
+- A completed bracketed paste occupying more than two visible input rows is
+  displayed inline as `[Pasted N chars]`. N counts Unicode codepoints (including
+  newlines), not bytes or terminal cells. Short pastes remain ordinary text.
+- The threshold measures the pasted payload alone, starting at column zero,
+  using explicit newlines and Unicode terminal-cell wrapping at the content
+  width captured at paste begin (terminal width minus margins and borders).
+  Exactly two rows remain expanded; a trailing newline adds a row. Resizing
+  does not reclassify completed blocks. The non-TUI default width is 80 cells.
+- The paste appears progressively as raw text until its complete end marker
+  arrives. Existing CR-to-LF normalization and literal partial-marker handling
+  remain unchanged.
+- Blocks keep their inline positions among ordinary text, other blocks, and
+  image prefixes. Left/right traverse a block atomically; Backspace immediately
+  after one deletes its entire payload. Word/line deletion touching any part of
+  a block removes that whole block rather than leaving a partial hidden range.
+  Ctrl+U immediately after a block also deletes it when its payload ends in a
+  newline; an ordinary uncollapsed trailing newline retains existing behavior.
+- Clear, initialization, and replacement of the draft discard block metadata.
+  The original normalized bytes remain the canonical input for submission,
+  queued messages, and model context. Paste labels are input-editor-only: chat
+  history and saved messages contain the expanded text, retaining image labels
+  when images are attached.
+- The existing draft limit remains **8191 bytes** plus its NUL terminator.
+  Excess paste bytes are ignored as before, but the end marker is still consumed.
+  Labels count only retained content. Metadata allocation failure leaves the
+  paste expanded with no additional data loss. Display storage covers worst-case
+  label expansion independently of the fixed raw-input capacity.
+
 ## Architecture
 
 C owns queue storage and dispatch timing. Lua calls `agent.finish_run()` from the

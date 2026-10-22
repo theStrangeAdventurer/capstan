@@ -312,4 +312,46 @@ local success, failure = pcall(delta, #requests, {content = 'fail'})
 assert(not success and tostring(failure):find('fixture callback error', 1, true))
 assert(capstan.workdir == '/other' and native_dir == '/other')
 runtime.shutdown_background()
+-- Plugin runs can omit global instruction additions without changing policy.
+capstan.config.agent = {system_prompt_append = 'Load external ponytail/SKILL.md'}
+for _, inherit in ipairs({true, false}) do
+    assert(runtime.run({background = true, depth = 1, tools = {},
+        system_prompt = 'Dedicated analyzer',
+        inherit_system_prompt_append = inherit,
+        profile = {name = 'implement', prompt = 'Analyzer profile',
+            allowed_tools = {file_read = true, vcs = true}}}, {}))
+    local prompt = requests[#requests].body.messages[1].content
+    assert(prompt:find('Dedicated analyzer', 1, true))
+    assert(prompt:find('Analyzer profile', 1, true))
+    assert(prompt:find('Workspace root:', 1, true))
+    assert((prompt:find('Load external ponytail/SKILL.md', 1, true) ~= nil) == inherit)
+    assert(not prompt:find('changed prompt', 1, true))
+    runtime.shutdown_background()
+end
+assert(runtime.run({background = true, tools = {}}, {}))
+assert(requests[#requests].body.messages[1].content:find('Load external ponytail/SKILL.md', 1, true))
+runtime.shutdown_background()
+capstan.config.agent = nil
+-- Verify the runtime adapter, independently of the controller/scheduler test.
+local review = require('agent.completion_review')
+local original_new = review.new
+local tool_runtime = package.loaded['agent.tools']
+local original_completion_tool = tool_runtime.completion_tool
+local review_context
+tool_runtime.completion_tool = function()
+    return {type = 'function', ['function'] = {name = 'request_completion', parameters = {}}}
+end
+review.new = function(_, ctx)
+    review_context = ctx
+    return {dispose = noop, poll = noop, consume = function() return true end}
+end
+for _, inherit in ipairs({false, true, 'default'}) do
+    local opts = {background = true, tools = {}, completion_review = true}
+    if inherit ~= 'default' then opts.inherit_system_prompt_append = inherit end
+    assert(runtime.run(opts, {}))
+    assert(review_context.inherit_system_prompt_append == opts.inherit_system_prompt_append)
+    runtime.shutdown_background()
+end
+review.new = original_new
+tool_runtime.completion_tool = original_completion_tool
 print('background runtime tests passed')

@@ -447,7 +447,7 @@ void dispatch_submit(void) {
   char submitted[INPUT_BUFFER_SIZE];
   char display[INPUT_DISPLAY_BUFFER_SIZE];
   snprintf(submitted, sizeof(submitted), "%s", text);
-  snprintf(display, sizeof(display), "%s", input_get_display_text());
+  snprintf(display, sizeof(display), "%s", input_get_message_text());
 
   char command[MAX_COMMAND_LEN];
   size_t cmd_end;

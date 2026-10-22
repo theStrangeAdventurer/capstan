@@ -223,6 +223,47 @@ static void push_headers_table(lua_State *L, const char *raw_headers) {
   }
 }
 
+#ifdef CAPSTAN_HTTP_TESTING
+static int g_test_failure = 0;
+void http_test_fail_next(int failure) { g_test_failure = failure; }
+static int http_test_take_failure(int failure) {
+  if (g_test_failure != failure)
+    return 0;
+  g_test_failure = 0;
+  return 1;
+}
+#endif
+
+static CURL *http_easy_init(lua_State *L, struct curl_slist *headers,
+                            int callback_ref) {
+  CURL *easy;
+#ifdef CAPSTAN_HTTP_TESTING
+  easy = http_test_take_failure(HTTP_TEST_FAIL_EASY_INIT) ? NULL : curl_easy_init();
+#else
+  easy = curl_easy_init();
+#endif
+  if (!easy) {
+    luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+    curl_slist_free_all(headers);
+    luaL_error(L, "failed to initialize curl easy handle");
+  }
+  return easy;
+}
+
+static void http_sync_wait(lua_State *L, CURL *easy) {
+  g_sync_active = 1;
+  curl_multi_add_handle(multi_handle, easy);
+  int still_running = 1;
+  while (still_running) {
+    perform_transfers(&still_running);
+    if (still_running)
+      http_wait_frame();
+  }
+  http_poll(L);
+  curl_multi_remove_handle(multi_handle, easy);
+  g_sync_active = 0;
+}
+
 static void configure_http_handle(CURL *easy, const char *url) {
   curl_easy_setopt(easy, CURLOPT_URL, url);
   curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
@@ -328,7 +369,51 @@ int http_test_deliver_chunk(int async_id, const char *chunk) {
  * loading state and user-triggered stream cancellation.
  * Returns async_id.
  */
-static int l_http_post_stream(lua_State *L) {
+static void stream_dispose(StreamCtx *ctx) {
+  luaL_unref(ctx->L, LUA_REGISTRYINDEX, ctx->callback_ref);
+  curl_slist_free_all(ctx->headers);
+  curl_easy_cleanup(ctx->easy);
+  stream_ctx_free(ctx);
+}
+
+static int stream_register(lua_State *L, StreamCtx *ctx) {
+  if (stream_count >= stream_cap) {
+    int new_cap = stream_cap ? stream_cap * 2 : 4;
+    StreamCtx **new_streams;
+#ifdef CAPSTAN_HTTP_TESTING
+    new_streams = http_test_take_failure(HTTP_TEST_FAIL_REGISTRY) ? NULL :
+        realloc(streams, new_cap * sizeof(StreamCtx *));
+#else
+    new_streams = realloc(streams, new_cap * sizeof(StreamCtx *));
+#endif
+    if (!new_streams) {
+      stream_dispose(ctx);
+      return luaL_error(L, "failed to allocate stream registry");
+    }
+    streams = new_streams;
+    stream_cap = new_cap;
+  }
+
+  CURLMcode rc;
+#ifdef CAPSTAN_HTTP_TESTING
+  rc = http_test_take_failure(HTTP_TEST_FAIL_ADD_HANDLE) ? CURLM_OUT_OF_MEMORY :
+      curl_multi_add_handle(multi_handle, ctx->easy);
+#else
+  rc = curl_multi_add_handle(multi_handle, ctx->easy);
+#endif
+  if (rc != CURLM_OK) {
+    stream_dispose(ctx);
+    return luaL_error(L, "failed to register curl easy handle: %s",
+                      curl_multi_strerror(rc));
+  }
+  ctx->async_id = g_next_async_id;
+  g_next_async_id = g_next_async_id == INT_MAX ? 1 : g_next_async_id + 1;
+  streams[stream_count++] = ctx;
+  lua_pushinteger(L, ctx->async_id);
+  return 1;
+}
+
+static int http_post_async(lua_State *L, int response_mode) {
   const char *url = luaL_checkstring(L, 1);
   const char *body = NULL;
   size_t body_len = 0;
@@ -338,32 +423,33 @@ static int l_http_post_stream(lua_State *L) {
   }
 
   struct curl_slist *headers = parse_headers(L, 3);
-  lua_Integer timeout_ms = luaL_optinteger(L, 5, 0);
+  lua_Integer timeout_ms = luaL_optinteger(L, response_mode ? 4 : 5,
+                                          response_mode ? 30000 : 0);
   int background = lua_opt_background(L, 6);
+  int callback_index = response_mode ? 5 : 4;
 
-  luaL_checktype(L, 4, LUA_TFUNCTION);
-  lua_pushvalue(L, 4);
+  luaL_checktype(L, callback_index, LUA_TFUNCTION);
+  lua_pushvalue(L, callback_index);
   int callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
-  CURL *easy = curl_easy_init();
-  if (!easy) {
-    luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-    curl_slist_free_all(headers);
-    return luaL_error(L, "failed to initialize curl easy handle");
-  }
+  CURL *easy = http_easy_init(L, headers, callback_ref);
 
   StreamCtx *ctx = calloc(1, sizeof(StreamCtx));
   if (!ctx) {
     luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
     curl_slist_free_all(headers);
     curl_easy_cleanup(easy);
-    return luaL_error(L, "failed to allocate stream context");
+    return luaL_error(L, "%s", response_mode ?
+                      "failed to allocate async response context" :
+                      "failed to allocate stream context");
   }
   ctx->easy = easy;
   ctx->L = http_callback_state(L);
   ctx->callback_ref = callback_ref;
   ctx->headers = headers;
+  ctx->response_mode = response_mode;
   ctx->background = background;
+  ctx->response.max_size = HTTP_MAX_RESPONSE_BYTES;
   ctx->response_headers.max_size = HTTP_MAX_HEADER_BYTES;
 
   configure_http_handle(easy, url);
@@ -373,11 +459,10 @@ static int l_http_post_stream(lua_State *L) {
   if (body) {
     ctx->body = malloc(body_len + 1);
     if (!ctx->body) {
-      luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-      curl_slist_free_all(headers);
-      curl_easy_cleanup(easy);
-      stream_ctx_free(ctx);
-      return luaL_error(L, "failed to allocate stream request body");
+      stream_dispose(ctx);
+      return luaL_error(L, "%s", response_mode ?
+                        "failed to allocate async response body" :
+                        "failed to allocate stream request body");
     }
     memcpy(ctx->body, body, body_len);
     ctx->body[body_len] = '\0';
@@ -394,29 +479,7 @@ static int l_http_post_stream(lua_State *L) {
   curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_HEADERDATA, &ctx->response_headers);
 
-  if (stream_count >= stream_cap) {
-    int new_cap = stream_cap ? stream_cap * 2 : 4;
-    StreamCtx **new_streams = realloc(streams, new_cap * sizeof(StreamCtx *));
-    if (!new_streams) {
-      luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-      curl_slist_free_all(headers);
-      curl_easy_cleanup(easy);
-      stream_ctx_free(ctx);
-      return luaL_error(L, "failed to allocate stream registry");
-    }
-    streams = new_streams;
-    stream_cap = new_cap;
-  }
-
-  curl_multi_add_handle(multi_handle, easy);
-
-  ctx->async_id = g_next_async_id;
-  g_next_async_id = g_next_async_id == INT_MAX ? 1 : g_next_async_id + 1;
-  streams[stream_count] = ctx;
-  stream_count++;
-
-  lua_pushinteger(L, ctx->async_id);
-  return 1;
+  return stream_register(L, ctx);
 }
 
 static int l_http_post(lua_State *L) {
@@ -430,7 +493,7 @@ static int l_http_post(lua_State *L) {
 
   struct curl_slist *headers = parse_headers(L, 3);
 
-  CURL *easy = curl_easy_init();
+  CURL *easy = http_easy_init(L, headers, LUA_NOREF);
   configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
   curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, HTTP_DEFAULT_TIMEOUT_MS);
@@ -449,19 +512,7 @@ static int l_http_post(lua_State *L) {
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
 
-  g_sync_active = 1;
-  curl_multi_add_handle(multi_handle, easy);
-
-  int still_running = 1;
-  while (still_running) {
-    perform_transfers(&still_running);
-    if (still_running)
-      http_wait_frame();
-  }
-
-  http_poll(L);
-  curl_multi_remove_handle(multi_handle, easy);
-  g_sync_active = 0;
+  http_sync_wait(L, easy);
 
   long status = 0;
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
@@ -490,7 +541,7 @@ static int l_http_post_response(lua_State *L) {
   struct curl_slist *headers = parse_headers(L, 3);
   lua_Integer timeout_ms = luaL_optinteger(L, 4, 30000);
 
-  CURL *easy = curl_easy_init();
+  CURL *easy = http_easy_init(L, headers, LUA_NOREF);
   configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_POST, 1L);
   curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS,
@@ -514,19 +565,7 @@ static int l_http_post_response(lua_State *L) {
   curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_HEADERDATA, &response_headers);
 
-  g_sync_active = 1;
-  curl_multi_add_handle(multi_handle, easy);
-
-  int still_running = 1;
-  while (still_running) {
-    perform_transfers(&still_running);
-    if (still_running)
-      http_wait_frame();
-  }
-
-  http_poll(L);
-  curl_multi_remove_handle(multi_handle, easy);
-  g_sync_active = 0;
+  http_sync_wait(L, easy);
 
   long status = 0;
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
@@ -555,11 +594,7 @@ static int l_http_delete_response(lua_State *L) {
   struct curl_slist *headers = parse_headers(L, 2);
   lua_Integer timeout_ms = luaL_optinteger(L, 3, 30000);
 
-  CURL *easy = curl_easy_init();
-  if (!easy) {
-    curl_slist_free_all(headers);
-    return luaL_error(L, "failed to initialize curl easy handle");
-  }
+  CURL *easy = http_easy_init(L, headers, LUA_NOREF);
   configure_http_handle(easy, url);
   curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "DELETE");
   curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS,
@@ -576,17 +611,7 @@ static int l_http_delete_response(lua_State *L) {
   curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_HEADERDATA, &response_headers);
 
-  g_sync_active = 1;
-  curl_multi_add_handle(multi_handle, easy);
-  int still_running = 1;
-  while (still_running) {
-    perform_transfers(&still_running);
-    if (still_running)
-      http_wait_frame();
-  }
-  http_poll(L);
-  curl_multi_remove_handle(multi_handle, easy);
-  g_sync_active = 0;
+  http_sync_wait(L, easy);
 
   long status = 0;
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
@@ -607,105 +632,18 @@ static int l_http_delete_response(lua_State *L) {
 }
 
 static int l_http_post_response_async(lua_State *L) {
-  const char *url = luaL_checkstring(L, 1);
-  const char *body = NULL;
-  size_t body_len = 0;
+  return http_post_async(L, 1);
+}
 
-  if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
-    body = luaL_checklstring(L, 2, &body_len);
-  }
-
-  struct curl_slist *headers = parse_headers(L, 3);
-  lua_Integer timeout_ms = luaL_optinteger(L, 4, 30000);
-  int background = lua_opt_background(L, 6);
-
-  luaL_checktype(L, 5, LUA_TFUNCTION);
-  lua_pushvalue(L, 5);
-  int callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-  CURL *easy = curl_easy_init();
-  if (!easy) {
-    luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-    curl_slist_free_all(headers);
-    return luaL_error(L, "failed to initialize curl easy handle");
-  }
-
-  StreamCtx *ctx = calloc(1, sizeof(StreamCtx));
-  if (!ctx) {
-    luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(easy);
-    return luaL_error(L, "failed to allocate async response context");
-  }
-  ctx->easy = easy;
-  ctx->L = http_callback_state(L);
-  ctx->callback_ref = callback_ref;
-  ctx->headers = headers;
-  ctx->response_mode = 1;
-  ctx->background = background;
-  ctx->response.max_size = HTTP_MAX_RESPONSE_BYTES;
-  ctx->response_headers.max_size = HTTP_MAX_HEADER_BYTES;
-
-  configure_http_handle(easy, url);
-  curl_easy_setopt(easy, CURLOPT_POST, 1L);
-  if (timeout_ms > 0)
-    curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
-
-  if (body) {
-    ctx->body = malloc(body_len + 1);
-    if (!ctx->body) {
-      luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-      curl_slist_free_all(headers);
-      curl_easy_cleanup(easy);
-      stream_ctx_free(ctx);
-      return luaL_error(L, "failed to allocate async response body");
-    }
-    memcpy(ctx->body, body, body_len);
-    ctx->body[body_len] = '\0';
-    ctx->body_len = body_len;
-    curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)body_len);
-    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, ctx->body);
-  }
-
-  if (headers) {
-    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
-  }
-
-  curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, stream_write_cb);
-  curl_easy_setopt(easy, CURLOPT_WRITEDATA, ctx);
-  curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
-  curl_easy_setopt(easy, CURLOPT_HEADERDATA, &ctx->response_headers);
-
-  if (stream_count >= stream_cap) {
-    int new_cap = stream_cap ? stream_cap * 2 : 4;
-    StreamCtx **new_streams = realloc(streams, new_cap * sizeof(StreamCtx *));
-    if (!new_streams) {
-      luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-      curl_slist_free_all(headers);
-      curl_easy_cleanup(easy);
-      stream_ctx_free(ctx);
-      return luaL_error(L, "failed to allocate stream registry");
-    }
-    streams = new_streams;
-    stream_cap = new_cap;
-  }
-
-  curl_multi_add_handle(multi_handle, easy);
-
-  ctx->async_id = g_next_async_id;
-  g_next_async_id = g_next_async_id == INT_MAX ? 1 : g_next_async_id + 1;
-  streams[stream_count] = ctx;
-  stream_count++;
-
-  lua_pushinteger(L, ctx->async_id);
-  return 1;
+static int l_http_post_stream(lua_State *L) {
+  return http_post_async(L, 0);
 }
 
 static int l_http_get(lua_State *L) {
   const char *url = luaL_checkstring(L, 1);
   struct curl_slist *headers = parse_headers(L, 2);
 
-  CURL *easy = curl_easy_init();
+  CURL *easy = http_easy_init(L, headers, LUA_NOREF);
   configure_http_handle(easy, url);
   if (headers) {
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
@@ -716,19 +654,7 @@ static int l_http_get(lua_State *L) {
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
 
-  g_sync_active = 1;
-  curl_multi_add_handle(multi_handle, easy);
-
-  int still_running = 1;
-  while (still_running) {
-    perform_transfers(&still_running);
-    if (still_running)
-      http_wait_frame();
-  }
-
-  http_poll(L);
-  curl_multi_remove_handle(multi_handle, easy);
-  g_sync_active = 0;
+  http_sync_wait(L, easy);
 
   long status = 0;
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
@@ -1026,10 +952,8 @@ static void cancel_stream_at(lua_State *L, int index) {
     return;
   }
   curl_multi_remove_handle(multi_handle, ctx->easy);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->callback_ref);
-  curl_slist_free_all(ctx->headers);
-  curl_easy_cleanup(ctx->easy);
-  stream_ctx_free(ctx);
+  (void)L;
+  stream_dispose(ctx);
   streams[index] = NULL;
 }
 

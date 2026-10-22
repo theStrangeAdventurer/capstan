@@ -1458,6 +1458,7 @@ int tui_focus_input_at_point(int rows, int cols, int y, int x) {
 
 static int tui_feed_paste(WINDOW *win, int ch) {
   if (ch == TUI_KEY_PASTE_BEGIN) {
+    input_set_paste_width(getmaxx(stdscr) - 2 * MARGIN - 2);
     input_paste_begin();
     /* Every reader, including modal windows, must consume the body literally. */
     keypad(win, FALSE);

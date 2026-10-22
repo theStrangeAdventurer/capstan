@@ -295,6 +295,41 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
             until(lambda: b"\x1b[?2004h" in screen, "terminal startup")
             # Wait for initial rendering after plugin and session initialization.
             until(lambda: b"Shift+Tab" in screen, "initial screen")
+            if case in ('paste_blocks', 'paste_blocks_wait'):
+                if case == 'paste_blocks_wait':
+                    send('delegate\r')
+                    until(lambda: (root / 'waiting').exists(), 'nested wait before large paste')
+                payload = 'Ж' * 230 + '\nконец'
+                marker = f'[Pasted {len(payload)} chars]'.encode()
+                send('before \x1b[200~' + payload + '\x1b[201~ after')
+                until(lambda: marker in screen, 'collapsed Unicode paste')
+                assert not (root / 'captured').exists(), 'paste submitted without Enter'
+                if case == 'paste_blocks_wait':
+                    (root / 'release').touch()
+                    until(lambda: (root / 'finished').exists(), 'nested wait finished')
+                history_start = len(screen)
+                send('\r')
+                until(lambda: (root / 'captured').exists(), 'full pasted payload submitted')
+                captured = json.loads((root / 'captured').read_text())
+                expected = 'before ' + payload + ' after'
+                assert captured[-1]['content'] == expected, captured
+                until(lambda: 'конец after'.encode() in screen[history_start:], 'expanded pasted text in chat')
+                def expanded_history_saved():
+                    records = [json.loads(line)
+                               for path in (home / '.local/state/capstan/sessions').rglob('*.jsonl')
+                               for line in path.read_text().splitlines()]
+                    return any(record.get('role') == 'user' and record.get('text') == expected
+                               and record.get('raw_text') == expected for record in records)
+                until(expanded_history_saved, 'expanded pasted text persisted by autosave')
+                (root / 'captured').unlink()
+                send('keep \x1b[200~' + payload + '\x1b[201~')
+                pause()
+                send('\x7ftail\r')
+                until(lambda: (root / 'captured').exists(), 'atomic paste deletion')
+                captured = json.loads((root / 'captured').read_text())
+                assert captured[-1]['content'] == 'keep tail', captured
+                print(f'TUI {case}: marker, Unicode count, raw submission and atomic Backspace: ok')
+                return
             if case == 'background_monitor':
                 send('background_monitor\r')
                 until(lambda: (root / 'background_started').exists(), 'background start')
@@ -831,7 +866,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
 
 
 if __name__ == "__main__":
-    for scenario in ("assembly_input", "background_monitor", "palette", "palette_16", "session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
+    for scenario in ("paste_blocks", "paste_blocks_wait", "assembly_input", "background_monitor", "palette", "palette_16", "session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
                      "permit_handoff", "permit_new", "shell_multiline",
                      "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear"):
         run_case(scenario)

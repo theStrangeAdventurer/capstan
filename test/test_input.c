@@ -352,7 +352,133 @@ static MunitResult test_paste_full_buffer_still_consumes_end(
   return MUNIT_OK;
 }
 
+static void complete_paste(const char *text) {
+  input_paste_begin();
+  paste_bytes(text);
+  paste_bytes("\033[201~");
+}
+
+static MunitResult test_collapsed_paste(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  input_init();
+  input_set_paste_width(4);
+  complete_paste("12345678");
+  munit_assert_string_equal(input_get_display_text(), "12345678");
+  input_clear();
+  input_set_text("+-");
+  input_move_left();
+  input_paste_begin();
+  paste_bytes("123456789");
+  munit_assert_string_equal(input_get_display_text(), "+123456789-");
+  paste_bytes("\033[201~");
+  munit_assert_string_equal(input_get_text(), "+123456789-");
+  munit_assert_string_equal(input_get_display_text(), "+[Pasted 9 chars]-");
+  munit_assert_int(input_get_display_cursor(), ==, 17);
+  input_move_left();
+  munit_assert_int(input_get_cursor(), ==, 1);
+  munit_assert_int(input_get_display_cursor(), ==, 1);
+  input_insert('x');
+  input_move_right();
+  munit_assert_int(input_get_cursor(), ==, 11);
+  input_insert('y');
+  input_backspace();
+  input_backspace();
+  munit_assert_string_equal(input_get_text(), "+x-");
+  munit_assert_string_equal(input_get_display_text(), "+x-");
+  return MUNIT_OK;
+}
+
+static MunitResult test_multiple_paste_blocks(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  input_init();
+  input_set_paste_width(4);
+  complete_paste("123456789");
+  complete_paste("abcdefghi");
+  input_move_left();
+  complete_paste("ABCDEFGHI");
+  munit_assert_string_equal(input_get_text(), "123456789ABCDEFGHIabcdefghi");
+  munit_assert_string_equal(input_get_display_text(),
+      "[Pasted 9 chars][Pasted 9 chars][Pasted 9 chars]");
+  munit_assert_int(input_get_display_cursor(), ==, 32);
+  input_backspace();
+  munit_assert_string_equal(input_get_text(), "123456789abcdefghi");
+  input_move_left();
+  input_insert('!');
+  input_backspace();
+  input_move_right();
+  input_backspace();
+  munit_assert_string_equal(input_get_text(), "abcdefghi");
+  munit_assert_string_equal(input_get_display_text(), "[Pasted 9 chars]");
+  input_move_right();
+  input_backspace();
+  munit_assert_string_equal(input_get_text(), "");
+  return MUNIT_OK;
+}
+
+static MunitResult test_paste_unicode_and_deletions(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  input_init();
+  input_set_paste_width(80);
+  input_set_text("prefix ");
+  complete_paste("я\n猫\n😀");
+  munit_assert_string_equal(input_get_text(), "prefix я\n猫\n😀");
+  munit_assert_string_equal(input_get_display_text(), "prefix [Pasted 5 chars]");
+  munit_assert_string_equal(input_get_message_text(), "prefix я\n猫\n😀");
+  munit_assert_string_equal(input_get_display_text(), "prefix [Pasted 5 chars]");
+  munit_assert_true(input_add_image("image/png", "YWJj"));
+  munit_assert_string_equal(input_get_message_text(), "[Image 1] prefix я\n猫\n😀");
+  munit_assert_string_equal(input_get_display_text(), "[Image 1] prefix [Pasted 5 chars]");
+  munit_assert_int(input_get_display_cursor(), ==, (int)strlen(input_get_display_text()));
+  input_delete_to_line_start();
+  munit_assert_string_equal(input_get_text(), "prefix ");
+  complete_paste("a\nb\n");
+  input_delete_to_line_start();
+  munit_assert_string_equal(input_get_text(), "prefix ");
+  complete_paste("a\nb\n\n");
+  input_delete_to_line_start();
+  munit_assert_string_equal(input_get_text(), "prefix ");
+  input_insert('\n');
+  input_delete_to_line_start();
+  munit_assert_string_equal(input_get_text(), "prefix \n");
+  input_backspace();
+  complete_paste("a\nb\nc");
+  input_delete_word_backward();
+  munit_assert_string_equal(input_get_text(), "prefix ");
+  complete_paste("a\nb\nc");
+  input_set_text("a\nb\nc");
+  munit_assert_string_equal(input_get_display_text(), "[Image 1] a\nb\nc");
+  input_clear();
+  munit_assert_string_equal(input_get_display_text(), "");
+  complete_paste("a\nb\nc");
+  input_init();
+  munit_assert_string_equal(input_get_display_text(), "");
+  return MUNIT_OK;
+}
+
+static MunitResult test_paste_display_capacity(const MunitParameter params[], void *data) {
+  (void)params; (void)data;
+  input_init();
+  input_set_paste_width(1);
+  for (int i = 0; i < (INPUT_BUFFER_SIZE - 1) / 3; i++)
+    complete_paste("abc");
+  size_t blocks = (INPUT_BUFFER_SIZE - 1) / 3;
+  munit_assert_size(strlen(input_get_text()), ==, blocks * 3);
+  munit_assert_size(strlen(input_get_display_text()), ==, blocks * 16);
+  munit_assert_int(input_get_display_cursor(), ==, (int)(blocks * 16));
+  input_clear();
+  complete_paste("a\n");
+  munit_assert_string_equal(input_get_display_text(), "a\n");
+  input_clear();
+  complete_paste("a\n\n");
+  munit_assert_string_equal(input_get_display_text(), "[Pasted 3 chars]");
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+  {"/collapsed_paste", test_collapsed_paste, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/multiple_paste_blocks", test_multiple_paste_blocks, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/paste_unicode_and_deletions", test_paste_unicode_and_deletions, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+  {"/paste_display_capacity", test_paste_display_capacity, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/paste_utf8_multiline", test_paste_utf8_multiline, NULL, NULL,
    MUNIT_TEST_OPTION_NONE, NULL},
   {"/paste_split_and_literal_markers", test_paste_split_and_literal_markers,

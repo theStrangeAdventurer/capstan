@@ -24,7 +24,13 @@ assert(not tasks.update({revision=1,tasks={item('one','invalid')}}))
 assert(not tasks.update({revision=1,tasks={item('bad id')}}))
 assert(not tasks.update({revision=1,tasks={}}))
 assert(not tasks.update({revision=1,tasks={invalid=item('three')}}))
-assert(store.json == saved)
+-- Reject holes before ipairs can silently apply only a prefix of the update.
+-- Pin the length boundary: Lua may otherwise choose either side of the hole.
+local sparse = setmetatable({item('one','in_progress'), nil, item('three'), item('four')},
+    {__len=function() return 4 end})
+local rejected, sparse_err = tasks.update({revision=1,tasks=sparse})
+assert(not rejected and sparse_err:find('dense array',1,true))
+assert(store.json == saved and tasks.read().revision == 1)
 plan = assert(tasks.update({revision=1,tasks={item('one','in_progress')}}))
 assert(plan.tasks[2].id == 'two')
 plan = assert(tasks.update({revision=2,tasks={item('one','completed','make test passed')}}))

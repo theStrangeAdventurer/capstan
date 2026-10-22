@@ -114,5 +114,11 @@ Tests cover simultaneous assembly of all seven letters, launch order, exact axes
 assembly completion, the unique blinking pixel and three flashes, global
 ignition, unchanged original wave over three periods, and no intro replay.
 PTY tests check palette, compact resize, input during assembly and chat transition.
+Record the real terminal intro with `make && vhs docs/assets/start-screen/start-screen.tape`
+from the repository root. Output: `docs/assets/start-screen.gif` (Dracula,
+900×600, 20 fps, real-time playback). The launcher creates a fresh isolated HOME
+under ignored `tmp/`, with no personal configuration or existing session and no
+model requests. Recording workspaces remain there for diagnostics.
+
 The GIF exports a single opening plus two wave cycles; replaying the GIF repeats
 the recording, not the runtime intro.

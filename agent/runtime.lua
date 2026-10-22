@@ -103,7 +103,9 @@ local function build_messages(messages, profile, opts)
     local msgs = {}
     local system = (opts and opts.system_prompt) or _G.system_prompt or ""
     local configured = config_table("agent")
-    system = append_system_prompt(system, configured and configured.system_prompt_append)
+    if not opts or opts.inherit_system_prompt_append ~= false then
+        system = append_system_prompt(system, configured and configured.system_prompt_append)
+    end
     if profile and profile.prompt then
         system = append_system_prompt(system, profile.prompt)
     end
@@ -839,6 +841,7 @@ local function run_impl(opts, callbacks, run_span)
             profile=profile and profile.name,profile_snapshot=profile,permission_scope=permission_scope,
             process_owner=opts.process_owner,mcp_scope=opts.mcp_scope,workdir=opts.workdir,
             workspace_root=opts.workspace_root,system_prompt=opts.system_prompt,read_tool=read_tool,
+            inherit_system_prompt_append=opts.inherit_system_prompt_append,
             telemetry_context=run_span,
             authorize=function(path) return tools_runtime.review_read_allowed(path,permission_scope) end,
             guard_error=function() return guard_duration_error(guard) end,
@@ -1108,6 +1111,7 @@ the blocker through request_completion.]]})
                     workdir = opts.workdir,
                     workspace_root = opts.workspace_root,
                     system_prompt = opts.system_prompt,
+                    inherit_system_prompt_append = opts.inherit_system_prompt_append,
                     callbacks = callbacks,
                     guard = guard,
                     state = run_state,

@@ -1,4 +1,5 @@
 build
+/tmp/
 vendor/ncurses-build
 vendor/ncurses-install
 

@@ -346,7 +346,8 @@ function M.new(config, context)
                  profile=context.profile,profile_snapshot=context.profile_snapshot,
                  tools={tool,submit_tool},permission_scope=context.permission_scope,mcp_scope=context.mcp_scope,
                  process_owner=context.process_owner,workdir=context.workdir,workspace_root=context.workspace_root,
-                 system_prompt=reviewer_system_prompt,depth=0},
+                 system_prompt=reviewer_system_prompt,
+                 inherit_system_prompt_append=context.inherit_system_prompt_append,depth=0},
                 {notify=false,is_cancelled=function() return self.disposed or context.cancelled() end,
                  telemetry_parent=self.span,reviewer=self.reviewer})
             if not self.group then self:stop(err); return end

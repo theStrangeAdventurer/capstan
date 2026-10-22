@@ -490,6 +490,7 @@ local function start_one(g, s)
         background = g.background, background_id = s.native_id,
         workdir = g.ctx.workdir, workspace_root = g.ctx.workspace_root,
         system_prompt = g.ctx.system_prompt, process_owner = g.ctx.process_owner,
+        inherit_system_prompt_append = g.ctx.inherit_system_prompt_append,
         tools = child_tools, silent_tools = true, update_status = false, update_usage = false,
         reviewer = g.reviewer,
         review_budget = g.reviewer and g.reviewer.budget,
@@ -591,7 +592,7 @@ local function run(args, run_ctx, internal)
     end
     if #groups >= 128 then return "Subagents failed: retained group limit reached (128)", false end
     local ctx = {}
-    for _, key in ipairs({"provider_name", "provider", "profile", "profile_snapshot", "tools", "permission_scope", "mcp_scope", "process_owner", "workdir", "workspace_root", "system_prompt"}) do ctx[key] = copy(run_ctx[key]) end
+    for _, key in ipairs({"provider_name", "provider", "profile", "profile_snapshot", "tools", "permission_scope", "mcp_scope", "process_owner", "workdir", "workspace_root", "system_prompt", "inherit_system_prompt_append"}) do ctx[key] = copy(run_ctx[key]) end
     ctx.process_owner = ctx.process_owner or run_ctx.session_id or run_ctx.mcp_scope
     if background and not ctx.process_owner then return "Subagents failed: missing process owner", false end
     ctx.workdir = ctx.workdir or workspace.runtime_workdir() or workspace.configured_workdir()

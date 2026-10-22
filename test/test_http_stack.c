@@ -173,7 +173,70 @@ static MunitResult test_completion_from_coroutine_poll(const MunitParameter p[],
   return MUNIT_OK;
 }
 
+static MunitResult test_easy_init_failure(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  lua_State *L = new_state();
+  http_init(L);
+  const char *calls[] = {
+      "http.get('http://127.0.0.1:1/', {Accept='text/plain'})",
+      "http.post('http://127.0.0.1:1/', '{}', {Accept='text/plain'})",
+      "http.post_response('http://127.0.0.1:1/', '{}', {Accept='text/plain'})",
+      "http.delete_response('http://127.0.0.1:1/', {Accept='text/plain'})",
+      "http.post_stream('http://127.0.0.1:1/', '{}', {Accept='text/plain'}, function() end)",
+      "http.post_response_async('http://127.0.0.1:1/', '{}', {Accept='text/plain'}, 100, function() end)"
+  };
+  for (size_t i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+    http_test_fail_next(HTTP_TEST_FAIL_EASY_INIT);
+    munit_assert_int(luaL_dostring(L, calls[i]), !=, LUA_OK);
+    munit_assert_not_null(strstr(lua_tostring(L, -1),
+                               "failed to initialize curl easy handle"));
+    lua_pop(L, 1);
+    munit_assert_false(http_is_loading());
+    munit_assert_false(http_has_background_work());
+    munit_assert_int(lua_gettop(L), ==, 0);
+  }
+  http_cleanup();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_async_registration_failure(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  for (int response_mode = 0; response_mode <= 1; response_mode++) {
+    for (int failure = HTTP_TEST_FAIL_EASY_INIT;
+         failure <= HTTP_TEST_FAIL_ADD_HANDLE; failure++) {
+      lua_State *L = new_state();
+      http_init(L);
+      munit_assert_int(luaL_dostring(L, response_mode ?
+          "function submit(cb) return http.post_response_async('file:///unused', 'a\\0b', {Accept='text/plain'}, 100, cb, {background=true}) end" :
+          "function submit(cb) return http.post_stream('file:///unused', 'a\\0b', {Accept='text/plain'}, cb, 100, {background=true}) end"), ==, LUA_OK);
+      http_test_fail_next(failure);
+      const char *script =
+          "local weak = setmetatable({}, {__mode='v'}); "
+          "local cb = function() end; weak[1] = cb; "
+          "local ok, err = pcall(submit, cb); assert(not ok and type(err) == 'string'); "
+          "cb = nil; collectgarbage('collect'); assert(weak[1] == nil); "
+          "assert(not http.is_loading()); "
+          "local calls = 0; local first = submit(function() calls = calls + 1 end); "
+          "local second = submit(function() calls = calls + 1 end); "
+          "assert(first == 1 and second == 2); "
+          "assert(http.cancel(first)); assert(http.cancel(second)); "
+          "assert(not http.cancel(first)); assert(calls == 0)";
+      int rc = luaL_dostring(L, script);
+      if (rc != LUA_OK) munit_logf(MUNIT_LOG_ERROR, "%s", lua_tostring(L, -1));
+      munit_assert_int(rc, ==, LUA_OK);
+      munit_assert_false(http_has_background_work());
+      munit_assert_int(lua_gettop(L), ==, 0);
+      http_cleanup();
+      lua_close(L);
+    }
+  }
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/easy_init_failure", test_easy_init_failure, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/async_registration_failure", test_async_registration_failure, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/completion_from_coroutine_poll", test_completion_from_coroutine_poll, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/stream_outlives_coroutine", test_stream_outlives_coroutine, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/stable", test_success_stable_stack, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

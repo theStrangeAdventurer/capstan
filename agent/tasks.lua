@@ -16,17 +16,20 @@ local function valid_task(task)
         ((task.status ~= 'completed' and task.status ~= 'blocked' and task.status ~= 'cancelled') or
             text(task.result, 2048, true))
 end
-local function valid_plan(plan)
-    if type(plan) ~= 'table' or type(plan.revision) ~= 'number' or
-        plan.revision < 0 or plan.revision % 1 ~= 0 or plan.revision >= 2147483647 or
-        type(plan.tasks) ~= 'table' or #plan.tasks > 100 then return false end
+local function valid_tasks(tasks)
+    if type(tasks) ~= 'table' or #tasks > 100 then return false end
     local ids, count = {}, 0
-    for key, task in pairs(plan.tasks) do
-        if type(key) ~= 'number' or key % 1 ~= 0 or key < 1 or key > #plan.tasks or
+    for key, task in pairs(tasks) do
+        if type(key) ~= 'number' or key % 1 ~= 0 or key < 1 or key > #tasks or
             not valid_task(task) or ids[task.id] then return false end
         ids[task.id], count = true, count + 1
     end
-    return count == #plan.tasks
+    return count == #tasks
+end
+local function valid_plan(plan)
+    return type(plan) == 'table' and type(plan.revision) == 'number' and
+        plan.revision >= 0 and plan.revision % 1 == 0 and plan.revision < 2147483647 and
+        valid_tasks(plan.tasks)
 end
 
 -- ACP calls this only between serialized prompts; TUI/CLI use the C adapter.
@@ -80,15 +83,11 @@ function M.update(args)
     if type(args.tasks) ~= 'table' or #args.tasks == 0 or #args.tasks > 100 then
         return nil, 'Provide 1–100 task updates.'
     end
-    local by_id, seen = {}, {}
-    for i, task in ipairs(plan.tasks) do by_id[task.id] = i end
-    for key, task in pairs(args.tasks) do
-        if type(key) ~= 'number' or key % 1 ~= 0 or key < 1 or key > #args.tasks or
-            not valid_task(task) or seen[task.id] then
-            return nil, 'Invalid or duplicate task: require id, title, status; completed/blocked/cancelled require a result or reason.'
-        end
-        seen[task.id] = true
+    if not valid_tasks(args.tasks) then
+        return nil, 'Invalid or duplicate task: require a dense array with id, title, status; completed/blocked/cancelled require a result or reason.'
     end
+    local by_id = {}
+    for i, task in ipairs(plan.tasks) do by_id[task.id] = i end
     for _, task in ipairs(args.tasks) do
         local item = {id=task.id, title=task.title, status=task.status,
             criteria=task.criteria or '', result=task.result or ''}

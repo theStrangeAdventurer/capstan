@@ -243,7 +243,45 @@ Hook scope:
 "notify the user after the whole turn is done." Set `scope = "all"` only when
 subagent completions should also trigger the hook.
 
+## Dedicated Model Runs
+
+Plugins can run focused model tasks through `capstan.agent.run(opts, callbacks)`;
+prefer this API over starting another Capstan process. For a dedicated analyzer
+or generator, compose its instructions explicitly rather than inheriting the
+implementation assistant's instructions:
+
+- Pass a task-specific `system_prompt`, never `_G.system_prompt` unchanged.
+- Pass `inherit_system_prompt_append = false` to omit the global
+  `agent.system_prompt_append` for this run and its subagents.
+- Pass a minimal profile snapshot with a registered `name` (such as
+  `implement`), a task-specific `prompt`, and an `allowed_tools` map. The flag
+  above does not suppress profile instructions or replace the base prompt.
+- Set `completion_review = false` when the task must not start completion review.
+- Preserve the active provider/model/reasoning selection explicitly when
+  supplying a profile; do not assume profile overrides inherit that selection.
+- Narrow tools to the task, preserve normal permissions and workspace limits,
+  and respect disabled subagent capabilities. Prompt isolation is not a sandbox;
+  hooks still run normally. Never change global configuration to isolate a run.
+- For background work, use managed task registration, bounded turns/output,
+  cancellation and completion callbacks. Settle failed starts as well as async
+  failures, retaining their reasons and releasing duplicate-run locks.
+
+Check the actual runtime API and assembled messages, including profile additions
+and hooks. Unknown options may be silently ignored by older runtimes; verify
+support rather than assuming that passing the flag proves isolation. Use local
+runtime tests before a token-consuming provider test. If the user reserved
+command invocation for themselves, do not run it on their behalf; report the
+remaining integration gap without calling local tests end-to-end success.
+
 ## Implementation Rules
+
+- Implement directly within the authorized scope and make routine technical
+  decisions yourself. Ask only for missing authorization or information that
+  materially changes correctness or safety, not ordinary implementation choices.
+- Do not treat a hypothetical risk as a blocker. Verify whether it actually
+  applies, use supported per-run options, and continue when it does not. Report
+  a concrete limitation only with evidence; do not propose core changes or a
+  restart merely because a possible configuration conflict exists.
 
 - Keep extensions narrow, reversible, and named for the user workflow.
 - Reuse built-in helpers when available: `http.get`, `http.post`,

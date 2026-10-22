@@ -36,6 +36,26 @@ Capstan process. Only install or generate plugins you are willing to run as
 local code. The self-improvement skill is disabled unless
 `capabilities.self_improvement = true` is set explicitly.
 
+## Dedicated analyzer prompts
+
+`capstan.agent.run` accepts `inherit_system_prompt_append = false` to omit
+`config.agent.system_prompt_append` for that run and its subagents, including
+completion-review runs. Omitted or
+true preserves existing behavior. This is a prompt-composition option, not a
+permission override or a sandbox; hooks still run normally.
+
+For a dedicated analyzer, also pass an explicit `system_prompt` and a minimal
+profile snapshot (with a registered name such as `implement`, a dedicated
+`prompt`, and `allowed_tools`). Otherwise the base system prompt and active
+profile instructions are still inherited. Set `completion_review = false` for
+runs that must not start review. Workspace boundaries and tool permissions are
+unchanged; no global configuration is mutated.
+
+Offline regression coverage: `test/test_background_runtime.lua` exercises real
+runtime message assembly with a mocked transport, including default inheritance,
+explicit opt-out, retained profile/environment instructions and a dedicated base
+prompt. This is not a real-provider integration check.
+
 ## Hot Reload
 
 Capstan watches the user plugin directory while the process is running. The
