@@ -8,6 +8,8 @@
 
 *If you find this project interesting, consider giving it a ⭐ — it helps more people discover Capstan.*
 
+![Capstan animated startup](docs/assets/start-screen.gif)
+
 ![Capstan in different terminal themes](docs/assets/themes-demo.gif)
 
 Capstan combines a native ncurses interface, headless automation, explicit tool
