@@ -2,7 +2,11 @@
 #define TUI_H
 
 #include <stddef.h>
+#include <signal.h>
 struct MessageImage;
+
+/* Set only by the TUI signal handler; main and modal loops share shutdown. */
+extern volatile sig_atomic_t g_tui_exit_signal;
 
 #define TUI_KEY_PASTE_BEGIN 0x2000
 #define TUI_KEY_TASKS_COLLAPSE 0x2001

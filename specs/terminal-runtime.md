@@ -25,6 +25,38 @@ requiring users to export `TERMINFO` or `TERMINFO_DIRS` manually.
   or confirm a permission. A paste started inside the dialog follows the same
   rule. Key decoding is restored on both the dialog and main window at the end.
 
+## Session titles
+
+The interactive TUI publishes the active session name using standard OSC 0
+(`ESC ] 0 ; title BEL`), including named/restored sessions, session switches,
+first-message names and generated titles. It writes only when the sanitized title
+changes, never in CLI/ACP output or redirected stdout. C0/C1 controls and invalid
+UTF-8 are removed, and the payload is bounded without splitting UTF-8 characters.
+UTF-8 decoding does not depend on the process locale. On exit Capstan clears the
+OSC title, then restores the prior title using the xterm title stack. Terminals
+without CSI 22/23 support (including Herdr 0.9.5) get an empty title rather than
+a stale session name; restoring the prior title requires stack support.
+SIGINT (including Ctrl+C) and SIGTERM request main-loop shutdown, which releases
+Herdr, restores the title and closes the TUI before re-raising the signal.
+The signal handler only sets a shared TUI flag. Permission and choice modals
+observe it before and after input waits, cancel as `deny` / `NULL`, release their
+windows, and refuse to open subsequent prompts while shutdown unwinds. Other
+blocking callbacks must still return before cleanup can finish. CLI/ACP signal
+behavior is unchanged. `make test-terminal-title` covers both signal types while
+idle and in both modal prompts, including cancellation, terminal attributes,
+OSC restoration and Herdr release.
+
+Herdr 0.9.5 can display these names independently of tab names:
+
+```toml
+[ui.sidebar.agents]
+rows = [["state_icon", "terminal_title_stripped"], ["agent", "workspace"]]
+```
+
+Other terminal emulators and multiplexers that consume OSC titles work without
+Herdr-specific configuration in Capstan. `make test` covers sanitization;
+`make test-terminal-title` checks actual TUI OSC output in a pseudo-terminal.
+
 ## Build Contract
 
 `build.sh` configures vendored ncurses with:

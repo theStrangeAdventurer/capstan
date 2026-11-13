@@ -1,4 +1,6 @@
 #include "tui.h"
+#include "terminal_title.h"
+#include "herdr.h"
 #include "process_panel.h"
 #include "process_manager.h"
 #include "background_work.h"
@@ -31,6 +33,7 @@
 #include <string.h>
 #include <time.h>
 
+volatile sig_atomic_t g_tui_exit_signal;
 BufferedPluginResults g_buffered_results = {0};
 static int g_diff_add_color_pair = 0;
 static int g_diff_del_color_pair = 0;
@@ -825,6 +828,8 @@ int tui_handle_shell_mouse(int y, int x, int activate) {
 }
 
 void render_all(void) {
+  terminal_title_update(session_manager_active_title());
+  herdr_tick(session_manager_active_id(), agent_is_running() ? "working" : "idle");
   erase(); /* Also clear overlay borders/shadow outside the chat window. */
   const char *input = input_get_display_text();
   int input_pos = input_get_display_cursor();
@@ -1606,6 +1611,8 @@ void tui_pump_blocking(void) {
 }
 
 const char *tui_permit_prompt(const char *tool, const char *target) {
+  if (g_tui_exit_signal)
+    return "deny";
   int rows, cols;
   getmaxyx(stdscr, rows, cols);
 
@@ -1650,7 +1657,7 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   int choice_count = 4;
   int list_y = 4;
 
-  while (1) {
+  while (!g_tui_exit_signal) {
     for (int i = 0; i < choice_count; i++) {
       int y = list_y + i;
       if (i == choice)
@@ -1667,6 +1674,7 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
 
     process_manager_poll(); /* Drain output without allowing modal bypass. */
     int ch = wgetch(win);
+    if (g_tui_exit_signal) break;
     if (ch == ERR) continue;
     /* A paste may begin here or arrive half-consumed from the main/wait loop.
        Preserve it in the editor, never interpret it as permission shortcuts. */
@@ -1697,7 +1705,7 @@ done:
   wnoutrefresh(win);
   delwin(win);
 
-  return permit_prompt_result(choice);
+  return g_tui_exit_signal ? "deny" : permit_prompt_result(choice);
 }
 
 /* Generic single-choice modal. Returns the selected choice string, or NULL on
@@ -1705,7 +1713,7 @@ done:
  * or Tab confirms, Esc cancels. */
 const char *tui_choice_prompt(const char *title, const char *message,
                               const char *const *choices, int count) {
-  if (!choices || count <= 0)
+  if (g_tui_exit_signal || !choices || count <= 0)
     return NULL;
 
   int rows, cols;
@@ -1754,7 +1762,7 @@ const char *tui_choice_prompt(const char *title, const char *message,
   if (visible < 1)
     visible = 1;
 
-  while (1) {
+  while (!g_tui_exit_signal) {
     for (int i = 0; i < visible; i++) {
       int y = list_y + i;
       if (i == choice)
@@ -1771,6 +1779,7 @@ const char *tui_choice_prompt(const char *title, const char *message,
 
     process_manager_poll();
     int ch = wgetch(win);
+    if (g_tui_exit_signal) break;
     if (ch == ERR)
       continue;
     if (tui_feed_paste(win, ch))
@@ -1828,7 +1837,7 @@ done:
   wnoutrefresh(win);
   delwin(win);
 
-  if (choice < 0 || choice >= count)
+  if (g_tui_exit_signal || choice < 0 || choice >= count)
     return NULL;
   return choices[choice];
 }

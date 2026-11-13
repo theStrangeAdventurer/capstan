@@ -19,6 +19,8 @@
 #include "session_manager.h"
 #include "tui.h"
 #include "terminal_guard.h"
+#include "terminal_title.h"
+#include "herdr.h"
 #include "process_manager.h"
 #include "background_work.h"
 #include "process_panel.h"
@@ -31,6 +33,7 @@
 #include <lualib.h>
 #include <ncursesw/curses.h>
 #include <ncursesw/term.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +68,10 @@ static TraceWriter g_headless_trace = TRACE_WRITER_INIT;
 static int g_mouse_selecting_messages = 0;
 static int g_headless_context = LUA_NOREF;
 static char *g_headless_history = NULL;
+
+static void request_tui_exit(int sig) {
+  g_tui_exit_signal = sig;
+}
 
 #define ACTIVE_RENDER_INTERVAL_MS 16
 #define IDLE_RENDER_INTERVAL_MS 50
@@ -1626,6 +1633,17 @@ int main(int argc, char *argv[]) {
   set_escdelay(50);
   terminal_guard_start();
   initscr();
+  /* ncurses installs its own handlers in initscr; override only for the TUI. */
+  struct sigaction exit_action = {0};
+  exit_action.sa_handler = request_tui_exit;
+  sigemptyset(&exit_action.sa_mask);
+  if (sigaction(SIGINT, &exit_action, NULL) != 0 ||
+      sigaction(SIGTERM, &exit_action, NULL) != 0) {
+    endwin();
+    terminal_guard_stop();
+    perror("capstan: install exit handlers");
+    return 1;
+  }
   /* Deliver control keys immediately instead of waiting for a cooked line. */
   cbreak();
   noecho();
@@ -1687,7 +1705,7 @@ int main(int argc, char *argv[]) {
   long long last_idle_render_ms = main_now_ms();
   long long last_mcp_tick_ms = 0;
 
-  while (1) {
+  while (!g_tui_exit_signal) {
     process_manager_poll();
     telemetry_poll();
     int ch = getch();
@@ -1920,6 +1938,8 @@ int main(int argc, char *argv[]) {
 
     render_all();
   }
+  herdr_shutdown();
+  terminal_title_restore();
   session_manager_shutdown();
   terminal_disable_bracketed_paste();
   terminal_reset_mouse_modes();
@@ -1927,6 +1947,11 @@ int main(int argc, char *argv[]) {
   terminal_guard_stop();
   plugin_registry_cleanup();
   plugins_cleanup();
-  system("reset");
+  if (g_tui_exit_signal) {
+    process_manager_shutdown();
+    signal(g_tui_exit_signal, SIG_DFL);
+    raise(g_tui_exit_signal);
+    return 128 + g_tui_exit_signal;
+  }
   return 0;
 }
