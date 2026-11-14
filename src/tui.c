@@ -396,8 +396,10 @@ static void render_start_screen_wordmark(WINDOW *win, int y, int x) {
       int level = top > bottom ? top : bottom;
       int attrs;
       if (colored) {
-        /* Lower-only cells use foreground, never opaque default foreground. */
-        attrs = COLOR_PAIR(top ? 28 + top * 8 + bottom : 28 + bottom * 8);
+        /* Solid cells need no background fill: keep wave updates glyph-only. */
+        if (top == bottom) glyph = "█";
+        int background = top && top != bottom ? bottom : 0;
+        attrs = COLOR_PAIR(28 + (top ? top : bottom) * 8 + background);
       } else {
         if (top && bottom) glyph = "█";
         attrs = level <= 3 ? A_DIM : level >= 6 ? A_BOLD : A_NORMAL;
@@ -862,6 +864,19 @@ static void report_agent_state(void) {
              agent_is_running() ? "working" : "idle", resume);
 }
 
+static void present_frame(int synchronized) {
+  /* Keep terminals from displaying partially updated animation strokes. */
+  if (synchronized) {
+    fputs("\033[?2026h", stdout);
+    fflush(stdout);
+  }
+  doupdate();
+  if (synchronized) {
+    fputs("\033[?2026l", stdout);
+    fflush(stdout);
+  }
+}
+
 void render_all(void) {
   terminal_title_update(session_manager_active_title());
   report_agent_state();
@@ -1253,7 +1268,7 @@ void render_all(void) {
   WINDOW *input_win = newwin(input_h, inner_w, input_y, margin);
   if (!input_win) {
     wnoutrefresh(msg_win);
-    doupdate();
+    present_frame(msgs->size == 0);
     delwin(msg_win);
     return;
   }
@@ -1406,7 +1421,7 @@ void render_all(void) {
   process_panel_render();
   popup_render_message();
   popup_render();
-  doupdate();
+  present_frame(msgs->size == 0);
 
   delwin(msg_win);
   delwin(input_win);

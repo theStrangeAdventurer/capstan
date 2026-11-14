@@ -139,6 +139,23 @@ def sgr_attributes(prefix, background=False):
     return foreground, bold, dim
 
 
+def assert_atomic_wordmark(output):
+    active = False
+    frames = 0
+    for match in re.finditer(rb'\x1b\[\?2026[hl]|' + '▀|▄|█'.encode(), output):
+        token = match.group()
+        if token == b'\x1b[?2026h':
+            assert not active, 'nested synchronized frame'
+            active = True
+        elif token == b'\x1b[?2026l':
+            assert active, 'unpaired synchronized frame end'
+            active = False
+            frames += 1
+        else:
+            assert active, 'wordmark update exposed outside an atomic frame'
+    assert frames > 1, 'animation must present complete frames'
+
+
 def run_case(case):
     with tempfile.TemporaryDirectory(prefix="tui-wait-", dir="build") as tmp:
         root = Path(tmp).resolve()
@@ -372,6 +389,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
             if case.startswith("palette"):
                 pause(7.0)  # One-time assembly, ignition and a full original wave.
                 output = bytes(screen)
+                assert_atomic_wordmark(output)
                 prefixes = [output[:m.start()] for m in re.finditer('▀|▄|█'.encode(), output)]
                 styles = {sgr_attributes(prefix) for prefix in prefixes}
                 expected = ({(None, False, True), (None, False, False),
@@ -382,8 +400,20 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                     lower = {sgr_attributes(prefix, background=True) for prefix in prefixes}
                     assert (None, False, False) in lower, lower
                     assert any(color is not None for color, _, _ in lower), lower
-                    assert all(glyph.encode() in output for glyph in ('▀', '▄')), \
-                        'preserve original glyphs, including lower-only edges'
+                    assert all(glyph.encode() in output for glyph in ('▀', '▄', '█')), \
+                        'preserve half-block edges and solid interiors'
+                    before_wave = len(screen)
+                    pause(2.6)  # A complete wave after the one-time intro.
+                    wave_output = bytes(screen)
+                    assert_atomic_wordmark(wave_output)
+                    wave_glyphs = list(re.finditer('▀|▄|█'.encode(), wave_output[before_wave:]))
+                    assert wave_glyphs, 'wave must keep animating'
+                    shifts = re.findall(rb'\x1b\[[0-9;]*[@P]|\x1b\[4h', wave_output[before_wave:])
+                    assert not shifts, f'brightness updates must not shift letter strokes: {shifts[:10]}'
+                    for match in wave_glyphs:
+                        prefix = wave_output[:before_wave + match.start()]
+                        assert sgr_attributes(prefix, background=True) == (None, False, False), \
+                            'wave cells must not depend on changing background fills'
                 assert b' ready' not in output
                 accent = 5 if case == 'palette_16' else 141
                 assert sgr_attributes(output.split(b"implement", 1)[0]) == (accent, True, False)

@@ -49,12 +49,23 @@ speckled half-pixel highlights; half-blocks still preserve the letter edges.
 After the intro there are no particles or isolated blinking pixels.
 After the intro, only brightness changes; letter geometry stays fixed.
 
+Start-screen terminal updates wrap `doupdate()` in synchronized-output mode
+(DEC private mode 2026), flushed before and after the update. Supporting terminals
+present the completed frame rather than intermediate stroke brightness updates.
+The mode is released immediately, including when ncurses has nothing to paint;
+ordinary chat frames are unchanged. Terminals without mode 2026 retain ordinary
+ncurses updates. PTY tests assert that intro and wave glyph writes stay inside
+paired synchronization markers for both 256-color and limited-color palettes.
+
 The TUI consumes a 58×12 shaded pixel canvas (two pixels of padding on each
 side); the word itself remains the original 54×8 bitmap. On 256-color terminals,
 paired half-pixels use separate foreground/background shades to light exactly
 one square during the contact flicker. Shades 1–6 retain baseline grays 245–250;
-white 255 is reserved for the intro flash. Empty halves retain default background,
-and lower-only pixels use `▄`. Limited-color terminals use dim/normal/bold at
+white 255 is reserved for the intro flash. Equal occupied halves use `█` with
+foreground color only, avoiding background-fill artifacts during wave updates.
+Separate foreground/background shades are used only for unequal occupied halves
+in the intro. Empty halves retain default background, and lower-only pixels use
+`▄`. Limited-color terminals use dim/normal/bold at
 cell resolution, preserving geometry but reducing flicker detail.
 
 Two blank rows separate the wide wordmark from the muted `version: <version>`,
