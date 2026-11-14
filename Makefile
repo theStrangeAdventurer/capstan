@@ -50,6 +50,10 @@ test-acp: $(TARGET)
 test-tui-input: $(TARGET)
 	python3 test/test_tui_wait_input.py $(TARGET)
 
+.PHONY: test-mouse-selection
+test-mouse-selection: $(TARGET)
+	python3 test/test_mouse_selection.py $(TARGET)
+
 .PHONY: test-terminal-guard
 test-terminal-guard: $(TARGET)
 	python3 test/test_terminal_guard.py $(TARGET)

@@ -25,6 +25,25 @@ requiring users to export `TERMINFO` or `TERMINFO_DIRS` manually.
   or confirm a permission. A paste started inside the dialog follows the same
   rule. Key decoding is restored on both the dialog and main window at the end.
 
+## Mouse selection
+
+The main message pane highlights text while the left button is held, not only
+on release. ncurses delivers presses immediately (`mouseinterval(0)`) and accepts
+`REPORT_MOUSE_POSITION`; explicit terminal mode 1002 requests button-held motion
+because terminfo's XM commonly enables only mode 1000. Hover tracking (1003) is
+not enabled. The press sets the existing visual-selection anchor; motion updates
+only its cursor through the existing cell/Unicode mapping and redraw path.
+Release retains the existing copy behavior. Motion without a message-pane press
+is ignored; outside-pane motion leaves the last in-pane endpoint unchanged.
+Shutdown and crash recovery already disable mode 1002. CLI/ACP, model context,
+logs, persistence and plugin APIs are unchanged. Terminals must forward mouse
+motion; native terminal selection modifiers may bypass application tracking.
+
+`make test-mouse-selection` feeds SGR and legacy mouse reports to the real binary
+in a PTY and checks reverse-video output **before release**, repeated movement,
+range contraction and copy on release. Physical terminal forwarding still needs
+manual verification.
+
 ## Session titles
 
 The interactive TUI publishes the active session name using standard OSC 0

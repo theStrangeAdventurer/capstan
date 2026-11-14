@@ -295,6 +295,13 @@ static int stop_active_stream(void) {
 }
 
 static void handle_mouse_event(MEVENT *event) {
+  if (event->bstate & REPORT_MOUSE_POSITION) {
+    int line, col;
+    if (g_mouse_selecting_messages &&
+        mouse_to_visual_position(event, &line, &col))
+      visual_set_cursor(line, col);
+    return;
+  }
   if (process_panel_mouse(event->y, event->x, event->bstate)) {
     g_mouse_selecting_messages = 0;
     return;
@@ -1657,7 +1664,10 @@ int main(int argc, char *argv[]) {
   define_key("\033[5;6~", TUI_KEY_TASKS_PREV);
   define_key("\033[6;6~", TUI_KEY_TASKS_NEXT);
   terminal_reset_mouse_modes();
-  mousemask(ALL_MOUSE_EVENTS, NULL);
+  mouseinterval(0); /* Deliver presses immediately, without click synthesis. */
+  mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
+  /* terminfo's XM typically enables only press/release reporting (1000). */
+  fputs("\033[?1002h", stdout);
   terminal_enable_bracketed_paste();
   init_tui();
   popup_init();
