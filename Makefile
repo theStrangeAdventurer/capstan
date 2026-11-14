@@ -147,4 +147,4 @@ test-herdr: build/test_herdr
 
 build/test_herdr: src/herdr.c include/herdr.h test/test_herdr.c
 	mkdir -p build
-	$(CC) $(TEST_CFLAGS) src/herdr.c test/test_herdr.c -o $@
+	$(CC) $(TEST_CFLAGS) test/test_herdr.c -o $@

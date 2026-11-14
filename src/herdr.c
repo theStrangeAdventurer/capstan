@@ -16,6 +16,9 @@ static double started;
 static double retry_after;
 static char *pending_session;
 static const char *pending_state;
+static char *pending_resume;
+static char *last_resume;
+static size_t pending_resume_size, last_resume_size;
 
 static double monotonic_now(void) {
   struct timespec now;
@@ -38,10 +41,47 @@ static int enabled(void) {
   return 1;
 }
 
-static pid_t send_report(const char *session, const char *state) {
-  char *argv[] = {getenv("HERDR_BIN_PATH"), "pane",
+/* Herdr's resume contract: plain command, <=64 args, <=8 KiB, no quotes or
+ * controls. Return a NUL-separated cache key, or an empty key on rejection. */
+static char *resume_key(const char *const *argv, size_t *count, size_t *size) {
+  *count = 0;
+  *size = 1;
+  size_t bytes = 0;
+  if (argv && argv[0] && argv[0][0]) {
+    for (const unsigned char *p = (const unsigned char *)argv[0]; *p; p++)
+      if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+            (*p >= '0' && *p <= '9') || *p == '_' || *p == '-' || *p == '.'))
+        goto invalid;
+    for (; argv[*count]; (*count)++) {
+      if (*count >= 64) goto invalid;
+      for (const unsigned char *p = (const unsigned char *)argv[*count]; *p; p++)
+        if (*p == '\'' || *p < 32 || *p == 127 ||
+            (*p == 0xc2 && p[1] >= 0x80 && p[1] <= 0x9f)) goto invalid;
+      size_t len = strlen(argv[*count]) + 1;
+      if (len > 8192 - bytes) goto invalid;
+      bytes += len;
+    }
+  }
+  char *key = calloc(bytes + 1, 1);
+  if (!key) return NULL;
+  size_t offset = 0;
+  for (size_t i = 0; i < *count; i++) {
+    size_t len = strlen(argv[i]) + 1;
+    memcpy(key + offset, argv[i], len);
+    offset += len;
+  }
+  *size = bytes + 1;
+  return key;
+invalid:
+  *count = 0;
+  return calloc(1, 1);
+}
+
+static pid_t send_report(const char *session, const char *state,
+                          const char *const *resume, size_t resume_count) {
+  char *argv[8 + 4 + 1 + 64 + 1] = {getenv("HERDR_BIN_PATH"), "pane",
     state ? "report-agent" : "release-agent", getenv("HERDR_PANE_ID"),
-    "--source", "capstan", "--agent", "capstan", NULL, NULL, NULL, NULL, NULL};
+    "--source", "capstan", "--agent", "capstan"};
   posix_spawn_file_actions_t actions;
   pid_t pid = 0;
   if (state) {
@@ -50,6 +90,11 @@ static pid_t send_report(const char *session, const char *state) {
     if (session && *session) {
       argv[10] = "--agent-session-id";
       argv[11] = (char *)session;
+      if (resume_count) {
+        argv[12] = "--";
+        for (size_t i = 0; i < resume_count; i++)
+          argv[13 + i] = (char *)resume[i];
+      }
     }
   }
   if (posix_spawn_file_actions_init(&actions)) return 0;
@@ -63,7 +108,8 @@ static pid_t send_report(const char *session, const char *state) {
   return error ? 0 : pid;
 }
 
-void herdr_tick(const char *session_id, const char *state) {
+void herdr_tick(const char *session_id, const char *state,
+                const char *const *resume_argv) {
   if (!enabled()) return;
   if (!cleanup_registered) {
     if (atexit(herdr_shutdown) != 0) return;
@@ -82,10 +128,16 @@ void herdr_tick(const char *session_id, const char *state) {
       last_session = pending_session;
       pending_session = NULL;
       last_state = pending_state;
+      free(last_resume);
+      last_resume = pending_resume;
+      last_resume_size = pending_resume_size;
+      pending_resume = NULL;
     } else {
       retry_after = now + 1;
     }
     free(pending_session);
+    free(pending_resume);
+    pending_resume = NULL;
     pending_session = NULL;
     pending_state = NULL;
     child = 0;
@@ -96,18 +148,28 @@ void herdr_tick(const char *session_id, const char *state) {
   else if (!strcmp(state, "blocked")) state = "blocked";
   else return;
   if (!session_id) session_id = "";
+  size_t resume_count, resume_size;
+  char *key = resume_key(*session_id ? resume_argv : NULL,
+                         &resume_count, &resume_size);
+  if (!key) return;
   if (last_state && !strcmp(last_state, state) && last_session &&
-      !strcmp(last_session, session_id))
+      !strcmp(last_session, session_id) && last_resume &&
+      last_resume_size == resume_size && !memcmp(last_resume, key, resume_size)) {
+    free(key);
     return;
+  }
   char *copy = malloc(strlen(session_id) + 1);
-  if (!copy) return;
+  if (!copy) { free(key); return; }
   strcpy(copy, session_id);
-  child = send_report(session_id, state);
+  child = send_report(session_id, state, resume_argv, resume_count);
   if (!child) {
     free(copy);
+    free(key);
     retry_after = now + 1;
     return;
   }
+  pending_resume = key;
+  pending_resume_size = resume_size;
   pending_session = copy;
   pending_state = state;
   started = now;
@@ -130,7 +192,11 @@ void herdr_shutdown(void) {
   finish_on_shutdown(child);
   child = 0;
   /* A session leader exiting can SIGHUP the release command: let it finish. */
-  if (reported && enabled()) finish_on_shutdown(send_report(NULL, NULL));
+  if (reported && enabled()) finish_on_shutdown(send_report(NULL, NULL, NULL, 0));
+  free(last_resume);
+  free(pending_resume);
+  last_resume = pending_resume = NULL;
+  last_resume_size = pending_resume_size = 0;
   free(last_session);
   free(pending_session);
   last_session = NULL;

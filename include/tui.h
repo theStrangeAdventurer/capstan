@@ -2,6 +2,7 @@
 #define TUI_H
 
 #include <stddef.h>
+#include "cli_args.h"
 #include <signal.h>
 struct MessageImage;
 
@@ -40,6 +41,7 @@ typedef struct {
 extern BufferedPluginResults g_buffered_results;
 
 void init_tui(void);
+void tui_set_resume_options(const CliOptions *options);
 void render_all(void);
 int tui_tasks_height(void);
 int tui_session_height(void);

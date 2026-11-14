@@ -1,17 +1,34 @@
 # Built-in Herdr agent reporting
 
 `src/herdr.c` owns a narrow native adapter; it needs no plugin configuration.
-Call `herdr_tick(active_session_id, state)` each render on the main thread.
+Call `herdr_tick(active_session_id, state, resume_argv)` on the main thread.
 The TUI reports `working` while the root agent is running and `idle` otherwise.
-The adapter also accepts `blocked`, but permission-dialog reporting is not wired
-by this feature. `herdr_shutdown()` releases on normal exit and main-loop
-SIGINT/SIGTERM shutdown, not session switches.
+Permission and choice dialogs override this with `blocked` for their lifetime,
+including their input/paste wait loops. On acceptance, rejection or cancellation,
+the TUI reports the current root state again (not a saved, potentially stale
+state). A modal depth keeps any nested render blocked as well. Failed dialog
+creation and shutdown follow-up prompts do not enter the blocked state.
+`herdr_shutdown()` releases on normal exit and main-loop SIGINT/SIGTERM shutdown,
+not session switches.
 
 Only `HERDR_ENV=1` plus nonempty `HERDR_BIN_PATH`, `HERDR_PANE_ID`, and
 `HERDR_SOCKET_PATH` enable reporting. The inherited socket environment is passed
 through to the Herdr CLI. Reports identify both agent and source as `capstan`
-and include the active session ID when nonempty. No resume command or sequence
-number is supplied.
+and include the active session ID when nonempty. State reports attach literal
+resume argv after `--`: `capstan --session-id ID --workdir DIR --workspace ROOT`,
+plus the current profile/provider/model/reasoning effort, and explicit startup
+max-turns, no-MCP, no-wiki, no-preserve-reasoning and yolo options. The session ID
+is explicit: restoration does not depend on the workspace's active-session
+pointer. Changed model/profile/paths also invalidate the successful-report cache.
+
+Herdr requires `capstan` to be installed on the restored pane's `PATH` (not an
+absolute binary path), at most 64 arguments and 8 KiB including argument NULs,
+and no apostrophes or control characters. The adapter validates these limits
+before spawning. Invalid resume argv omit only the resume command; status reports
+continue. This means paths containing apostrophes cannot be restored by this
+contract. CLI startup flags are preserved; subsequent runtime-only permission
+changes and unsaved configuration are not captured. Conversation recovery is
+limited to the last durable session snapshot. No sequence number is supplied.
 
 Commands use `posix_spawn` with literal argv and all standard streams redirected
 to `/dev/null`. A single report runs at a time; ticks reap with `WNOHANG` and
@@ -28,26 +45,24 @@ may race with release; Herdr's idle-shell cleanup remains the fallback.
 Focused standalone test (no real Herdr panes or socket access):
 
 ```sh
-cc -Iinclude -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE src/herdr.c test/test_herdr.c -o build/test_herdr
-./build/test_herdr
+make test-herdr
+make test-terminal-title
 ```
 
-The fixture verifies environment gating, literal argv, all supported states,
-session changes, duplicate suppression, and release. It deliberately writes to
-stdout/stderr to exercise redirection. Production compilation already picks up
-`src/herdr.c` through `SRCS = $(wildcard src/*.c)`; add a standalone test target
-rather than adding this test's `main` to the munit runner.
+The adapter fixture verifies environment gating, literal argv, all supported
+states, session and resume-command changes, duplicate suppression, retry cooldown,
+resume validation boundaries, and release. It deliberately writes to stdout/stderr
+to exercise redirection. The standalone test includes the adapter implementation
+so it can coordinate on actual child completion and the committed cache; it does
+not assume the child finishes within a fixed sleep. Deadline-bounded polling
+still fails if the child genuinely hangs. Production compilation picks up
+`src/herdr.c` through `SRCS = $(wildcard src/*.c)`.
 
-## Remaining integration work
-
-This is the first usable integration, not the complete Herdr lifecycle contract.
-
-- Report `blocked` while waiting for permission, then restore the current state
-  when the user decides. The current TUI keeps reporting `working` during a prompt.
-- Supply the resume command required to reopen the same Capstan conversation
-  after a Herdr restart. A session ID alone is not enough.
-- Replace timing-dependent waits in `test-herdr` with deterministic coordination.
-  A parallel test run has failed even though the standalone run passed; do not
-  treat the current fixture as proven stable under contention.
+The isolated PTY fixture checks permission/choice acceptance and cancellation,
+restoring idle or working state, blocked reporting throughout modal waits,
+SIGINT/SIGTERM modal cancellation and release. It inspects resume argv, then
+executes it through a fixture PATH to restore the original titled session after
+a different session became active. No real Herdr socket or LLM requests are used.
+A real Herdr server stop/start remains a manual integration check.
 
 Contract: https://herdr.dev/tui/docs/add-herdr-support/

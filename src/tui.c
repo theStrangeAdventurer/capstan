@@ -827,9 +827,44 @@ int tui_handle_shell_mouse(int y, int x, int activate) {
   return 1;
 }
 
+static CliOptions g_resume_options;
+static int g_decision_depth;
+
+void tui_set_resume_options(const CliOptions *options) {
+  g_resume_options = *options; /* argv-backed strings live for the process. */
+}
+
+static void report_agent_state(void) {
+  const char *resume[32] = {"capstan", "--session-id", session_manager_active_id(),
+    "--workdir", app_workdir(), "--workspace", app_workspace_root()};
+  size_t n = 7;
+  const char *values[] = {agent_profile_name(), agent_provider_name(),
+                         agent_provider_model(), agent_reasoning_effort()};
+  const char *flags[] = {"--profile", "--provider", "--model", "--reasoning-effort"};
+  for (size_t i = 0; i < 4; i++) {
+    if (values[i] && values[i][0]) {
+      resume[n++] = flags[i];
+      resume[n++] = values[i];
+    }
+  }
+  char turns[32];
+  if (g_resume_options.max_turns_set) {
+    snprintf(turns, sizeof(turns), "%d", g_resume_options.max_turns);
+    resume[n++] = "--max-turns";
+    resume[n++] = turns;
+  }
+  if (g_resume_options.no_mcp) resume[n++] = "--no-mcp";
+  if (g_resume_options.no_wiki) resume[n++] = "--no-wiki";
+  if (g_resume_options.no_preserve_reasoning) resume[n++] = "--no-preserve-reasoning";
+  if (g_resume_options.yolo) resume[n++] = "--yolo";
+  resume[n] = NULL;
+  herdr_tick(session_manager_active_id(), g_decision_depth ? "blocked" :
+             agent_is_running() ? "working" : "idle", resume);
+}
+
 void render_all(void) {
   terminal_title_update(session_manager_active_title());
-  herdr_tick(session_manager_active_id(), agent_is_running() ? "working" : "idle");
+  report_agent_state();
   erase(); /* Also clear overlay borders/shadow outside the chat window. */
   const char *input = input_get_display_text();
   int input_pos = input_get_display_cursor();
@@ -1657,7 +1692,9 @@ const char *tui_permit_prompt(const char *tool, const char *target) {
   int choice_count = 4;
   int list_y = 4;
 
+  g_decision_depth++;
   while (!g_tui_exit_signal) {
+    report_agent_state();
     for (int i = 0; i < choice_count; i++) {
       int y = list_y + i;
       if (i == choice)
@@ -1704,6 +1741,8 @@ done:
   werase(win);
   wnoutrefresh(win);
   delwin(win);
+  g_decision_depth--;
+  if (!g_tui_exit_signal) report_agent_state();
 
   return g_tui_exit_signal ? "deny" : permit_prompt_result(choice);
 }
@@ -1762,7 +1801,9 @@ const char *tui_choice_prompt(const char *title, const char *message,
   if (visible < 1)
     visible = 1;
 
+  g_decision_depth++;
   while (!g_tui_exit_signal) {
+    report_agent_state();
     for (int i = 0; i < visible; i++) {
       int y = list_y + i;
       if (i == choice)
@@ -1816,10 +1857,8 @@ const char *tui_choice_prompt(const char *title, const char *message,
     case '\r':
       goto done;
     case 27:
-      werase(win);
-      wnoutrefresh(win);
-      delwin(win);
-      return NULL;
+      choice = -1;
+      goto done;
     default:
       if (ch >= '1' && ch <= '9') {
         int n = ch - '1';
@@ -1836,6 +1875,8 @@ done:
   werase(win);
   wnoutrefresh(win);
   delwin(win);
+  g_decision_depth--;
+  if (!g_tui_exit_signal) report_agent_state();
 
   if (g_tui_exit_signal || choice < 0 || choice >= count)
     return NULL;

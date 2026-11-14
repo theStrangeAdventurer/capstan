@@ -1685,6 +1685,7 @@ int main(int argc, char *argv[]) {
   if (app_config_path(global_plugins, sizeof(global_plugins), "plugins") == 0)
     plugins_watch_start(global_plugins);
 
+  tui_set_resume_options(&cli);
   input_init();
   input_history_load(app_workspace_root());
   if (!session_manager_init_selected(app_workspace_root(), cli.session_id)) {
