@@ -505,8 +505,11 @@ assert "mcp__http_session__gamma" not in tool_names(provider_requests[1])
 assert "mcp__http_session__gamma" in tool_names(provider_requests[2])
 assert "mcp__session_server__alpha" not in tool_names(provider_requests[2])
 assert "mcp__session_server__beta" not in tool_names(provider_requests[2])
-assert [request[0]["method"] for request in http_mcp_requests] == [
-    "initialize", "notifications/initialized", "tools/list"]
+http_methods = [request[0]["method"] for request in http_mcp_requests]
+# The initialized notification and tools/list are two independent async HTTP
+# transfers; their arrival order depends on transfer and server scheduling.
+assert http_methods[0] == "initialize"
+assert sorted(http_methods[1:]) == ["notifications/initialized", "tools/list"]
 assert all(request[1] == "gamma-header" for request in http_mcp_requests)
 
 send({"jsonrpc": "2.0", "id": 8, "method": "session/prompt", "params": {

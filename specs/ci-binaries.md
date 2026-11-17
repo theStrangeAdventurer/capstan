@@ -9,7 +9,7 @@ The `Build binaries` workflow builds three native binaries:
 
 | Artifact | Runner | Purpose |
 |----------|--------|---------|
-| `capstan-macos-arm64.tar.gz` | `macos-14` | Apple Silicon macOS |
+| `capstan-macos-arm64.tar.gz` | `macos-15` | Apple Silicon macOS |
 | `capstan-linux-x86_64.tar.gz` | `ubuntu-24.04` | Intel/AMD Linux |
 | `capstan-linux-arm64.tar.gz` | `ubuntu-24.04-arm` | ARM Linux, including Raspberry Pi-class machines |
 
