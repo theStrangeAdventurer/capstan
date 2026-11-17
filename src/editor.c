@@ -1,6 +1,7 @@
 #include "app_config.h"
 #include "editor.h"
 #include "input.h"
+#include "tui.h"
 #include <errno.h>
 #include <ncursesw/curses.h>
 #include <stdio.h>
@@ -101,6 +102,8 @@ int editor_open_prompt(const char *initial_text) {
   int launch_errno = errno;
   reset_prog_mode();
   refresh();
+  /* ncurses re-enabled only terminfo XM (1000); drag tracking must return. */
+  tui_enable_mouse_drag();
 
   free(command);
 

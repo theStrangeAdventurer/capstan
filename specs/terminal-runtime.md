@@ -44,6 +44,23 @@ in a PTY and checks reverse-video output **before release**, repeated movement,
 range contraction and copy on release. Physical terminal forwarding still needs
 manual verification.
 
+### Drag mode after curses wrap cycles
+
+ncurses owns the wrap/unwrap sequence: `endwin()` disables all mouse reporting
+via XM-rm, and the next `doupdate()` re-enables only terminfo XM — mode 1000 —
+while also clearing its internal button state. Without a re-assert, every
+SIGTSTP resume (Ctrl+Z, then `fg`) and every `/editor` shell-out leaves the
+terminal without drag tracking for the rest of the session: live highlighting
+and copy-on-release silently degrade, and terminals that suppress native
+selection under any reporting mode lose dragging entirely.
+
+`tui_enable_mouse_drag()` (`src/tui.c`) is the single owner of the enable rule.
+It is called at startup, after `reset_prog_mode()` in the `/editor` path, and
+from the main loop when a SIGCONT handler flag reports a resume. The sequence
+is idempotent, so the extra send is harmless on terminals that kept the mode.
+The PTY test asserts the re-send after SIGTSTP/SIGCONT and after `/editor`,
+then verifies a drag still copies.
+
 ## Session titles
 
 The interactive TUI publishes the active session name using standard OSC 0

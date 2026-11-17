@@ -73,6 +73,13 @@ static void request_tui_exit(int sig) {
   g_tui_exit_signal = sig;
 }
 
+/* SIGTSTP resume: ncurses re-enabled only terminfo XM inside its own handler. */
+static volatile sig_atomic_t g_tui_mouse_resumed = 0;
+static void note_tui_mouse_resume(int sig) {
+  (void)sig;
+  g_tui_mouse_resumed = 1;
+}
+
 #define ACTIVE_RENDER_INTERVAL_MS 16
 #define IDLE_RENDER_INTERVAL_MS 50
 #define KEY_CTRL_D 0x04
@@ -1644,8 +1651,12 @@ int main(int argc, char *argv[]) {
   struct sigaction exit_action = {0};
   exit_action.sa_handler = request_tui_exit;
   sigemptyset(&exit_action.sa_mask);
+  struct sigaction resume_action = {0};
+  resume_action.sa_handler = note_tui_mouse_resume;
+  sigemptyset(&resume_action.sa_mask);
   if (sigaction(SIGINT, &exit_action, NULL) != 0 ||
-      sigaction(SIGTERM, &exit_action, NULL) != 0) {
+      sigaction(SIGTERM, &exit_action, NULL) != 0 ||
+      sigaction(SIGCONT, &resume_action, NULL) != 0) {
     endwin();
     terminal_guard_stop();
     perror("capstan: install exit handlers");
@@ -1666,8 +1677,7 @@ int main(int argc, char *argv[]) {
   terminal_reset_mouse_modes();
   mouseinterval(0); /* Deliver presses immediately, without click synthesis. */
   mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
-  /* terminfo's XM typically enables only press/release reporting (1000). */
-  fputs("\033[?1002h", stdout);
+  tui_enable_mouse_drag();
   terminal_enable_bracketed_paste();
   init_tui();
   popup_init();
@@ -1717,6 +1727,10 @@ int main(int argc, char *argv[]) {
   long long last_mcp_tick_ms = 0;
 
   while (!g_tui_exit_signal) {
+    if (g_tui_mouse_resumed) {
+      g_tui_mouse_resumed = 0;
+      tui_enable_mouse_drag();
+    }
     process_manager_poll();
     telemetry_poll();
     int ch = getch();

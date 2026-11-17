@@ -1900,6 +1900,14 @@ done:
   return choices[choice];
 }
 
+/* Terminal mode 1002 reports button-held motion; ncurses re-enables only
+   terminfo XM (mode 1000) after endwin cycles, so drag selection silently
+   dies after SIGTSTP resume or an editor shell-out unless we re-assert it. */
+void tui_enable_mouse_drag(void) {
+  fputs("\033[?1002h", stdout);
+  fflush(stdout);
+}
+
 /* Deliberately no ordinary input, clipboard, Lua callbacks, or logging here. */
 char *tui_secret_prompt(const char *title, const char *message) {
   if (!stdscr || isendwin() || !isatty(STDIN_FILENO) || g_tui_exit_signal)

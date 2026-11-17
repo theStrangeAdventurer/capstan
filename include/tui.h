@@ -62,6 +62,10 @@ void buffer_plugin_result(const char *label, char *ui_result, char *raw_result,
                           size_t image_count);
 void buffered_results_clear(void);
 
+/* ncurses re-enables only terminfo XM (mode 1000) after any endwin cycle;
+   drag tracking (1002) must be re-asserted by the application. */
+void tui_enable_mouse_drag(void);
+
 /* Caller owns returned key and must wipe it before freeing. NULL on cancel/failure. */
 char *tui_secret_prompt(const char *title, const char *message);
 
