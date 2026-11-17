@@ -26,6 +26,7 @@ function M.build()
         env_provider_override = env_provider ~= nil and env_provider ~= "",
         env_model_overrides = {},
         providers = {
+            openai_siwc = {endpoint = "https://api.openai.com/v1/responses", context_limit = 0},
             deepseek = {
                 api_key = os.getenv("DEEPSEEK_API_KEY"),
                 endpoint = "https://api.deepseek.com/v1/chat/completions",
@@ -36,6 +37,16 @@ function M.build()
                     ["deepseek-v4-flash"] = {"minimal", "low", "medium", "high", "max"},
                     ["deepseek-v4-pro"] = {"minimal", "low", "medium", "high", "max"},
                 },
+                context_limit = 0,
+            },
+            opencode_go = {
+                api_key = os.getenv("OPENCODE_GO_API_KEY"),
+                endpoint = "https://opencode.ai/inference/go/openai/v1/chat/completions",
+                model = "deepseek-v4-pro",
+                models_endpoint = "https://opencode.ai/inference/go/v1/models",
+                catalog_format = "opencode_go",
+                reasoning_effort_field = "reasoning_effort",
+                reasoning_history_field = "reasoning_content",
                 context_limit = 0,
             },
             openrouter = {
@@ -91,6 +102,7 @@ function M.build()
     end
 
     for name, provider in pairs(runtime.providers) do
+        if require("agent.credentials").definition(name) then provider.credential_provider = name end
         local saved_model = state.model_for(name)
         if saved_model then
             provider.model = saved_model
@@ -105,6 +117,9 @@ function M.build()
     end
     if os.getenv("OPENROUTER_API_KEY") and runtime.providers.openrouter then
         runtime.providers.openrouter.api_key = os.getenv("OPENROUTER_API_KEY")
+    end
+    if os.getenv("OPENCODE_GO_API_KEY") and runtime.providers.opencode_go then
+        runtime.providers.opencode_go.api_key = os.getenv("OPENCODE_GO_API_KEY")
     end
     local active_provider = runtime.providers[runtime.provider]
     if active_provider and env_model and env_model ~= "" then
@@ -135,6 +150,22 @@ function M.apply_request_options(request, provider)
         end
         request.provider = copy(provider.routing)
     end
+end
+
+-- Credentials never enter provider snapshots or hook contexts.
+function M.siwc_access(account_id)
+    local ok, auth = pcall(require, "agent.openai_siwc_auth")
+    if not ok or type(auth.access) ~= "function" then
+        return nil, "SIWC authentication unavailable; use /connect openai_siwc"
+    end
+    local called, credential = pcall(auth.access, account_id)
+    if not called or type(credential) ~= "table" or
+        type(credential.access) ~= "string" or credential.access == "" or
+        type(credential.account_id) ~= "string" or
+        (account_id and credential.account_id ~= account_id) then
+        return nil, "SIWC account unavailable; use /connect openai_siwc"
+    end
+    return credential
 end
 
 return M

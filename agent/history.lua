@@ -8,7 +8,7 @@ local function copy(message)
     end
     local out = {}
     for _, key in ipairs({'role','content','tool_calls','tool_call_id','reasoning',
-        'reasoning_content','reasoning_details','name'}) do out[key] = message[key] end
+        'reasoning_content','reasoning_details','name','responses'}) do out[key] = message[key] end
     return out
 end
 function M.expand(messages)
@@ -34,7 +34,8 @@ function M.encode(messages, initial, excluded, text)
     for _, message in ipairs(messages or {}) do
         if not initial[message] and not excluded[message] then result[#result+1] = copy(message) end
     end
-    if type(text) == 'string' and text ~= '' then
+    local last = result[#result]
+    if type(text) == 'string' and text ~= '' and not (last and last.responses and last.content == text) then
         result[#result+1] = {role='assistant', content=text}
     end
     return #result > 0 and json.encode(result) or nil

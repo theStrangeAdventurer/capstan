@@ -62,6 +62,9 @@ void buffer_plugin_result(const char *label, char *ui_result, char *raw_result,
                           size_t image_count);
 void buffered_results_clear(void);
 
+/* Caller owns returned key and must wipe it before freeing. NULL on cancel/failure. */
+char *tui_secret_prompt(const char *title, const char *message);
+
 const char *tui_permit_prompt(const char *tool, const char *target);
 const char *tui_choice_prompt(const char *title, const char *message,
                               const char *const *choices, int count);

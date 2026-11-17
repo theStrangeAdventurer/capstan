@@ -1,4 +1,6 @@
 #include "tui.h"
+#include "secret_input.h"
+#include <unistd.h>
 #include "terminal_title.h"
 #include "herdr.h"
 #include "process_panel.h"
@@ -1896,4 +1898,64 @@ done:
   if (g_tui_exit_signal || choice < 0 || choice >= count)
     return NULL;
   return choices[choice];
+}
+
+/* Deliberately no ordinary input, clipboard, Lua callbacks, or logging here. */
+char *tui_secret_prompt(const char *title, const char *message) {
+  if (!stdscr || isendwin() || !isatty(STDIN_FILENO) || g_tui_exit_signal)
+    return NULL;
+  SecretInput secret = {0};
+  char *result = NULL;
+  WINDOW *win = NULL;
+  int old_cursor = curs_set(1);
+  int old_rows = -1, old_cols = -1;
+  noecho();
+  g_decision_depth++;
+  while (!g_tui_exit_signal) {
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
+    if (rows != old_rows || cols != old_cols) {
+      if (win) { werase(win); wrefresh(win); delwin(win); win = NULL; }
+      old_rows = rows; old_cols = cols;
+      /* Keep consuming privately even while the terminal is too small. */
+      int height = rows < 7 ? rows : 7;
+      int width = cols < 64 ? cols : 64;
+      if (height < 1 || width < 1) break;
+      win = newwin(height, width, (rows - height) / 2, (cols - width) / 2);
+      if (!win) break;
+      keypad(win, FALSE); /* Parse paste framing before interpreting Enter. */
+      wtimeout(win, 100);
+    }
+    int height = getmaxy(win), width = getmaxx(win);
+    werase(win);
+    if (height >= 7 && width >= 12) {
+      box(win, 0, 0);
+      mvwaddnstr(win, 0, 2, title ? title : "Secret", width - 4);
+      mvwaddnstr(win, 2, 2, message ? message : "API key", width - 4);
+      int visible = secret.length < (size_t)(width - 4) ? (int)secret.length : width - 4;
+      mvwhline(win, 3, 2, '*', visible);
+      mvwaddnstr(win, 5, 2, secret.invalid ?
+          "Invalid key: Enter to clear; Esc cancel" : "Enter submit | Esc cancel", width - 4);
+      wmove(win, 3, 2 + (visible < width - 4 ? visible : visible - 1));
+    }
+    wrefresh(win);
+    int ch = wgetch(win);
+    if (g_tui_exit_signal) break;
+    if (ch == KEY_RESIZE) continue;
+    int action = secret_input_feed(&secret, ch == ERR ? -1 : ch);
+    if (action == SECRET_CANCEL) break;
+    if (action == SECRET_SUBMIT) {
+      result = malloc(secret.length + 1);
+      if (result) memcpy(result, secret.text, secret.length + 1);
+      break;
+    }
+  }
+  secret_input_clear(&secret);
+  /* Never let queued secret bytes escape into the normal draft. */
+  flushinp();
+  if (win) { werase(win); wrefresh(win); delwin(win); }
+  if (old_cursor != ERR) curs_set(old_cursor);
+  touchwin(stdscr);
+  g_decision_depth--;
+  return result;
 }

@@ -968,7 +968,8 @@ function M.handle_tool_calls(current_msgs, combined_tools, tool_calls, assistant
     local assistant_message = {
         role = "assistant",
         content = (assistant_text ~= "" and assistant_text or nil),
-        tool_calls = openai_tool_calls
+        tool_calls = openai_tool_calls,
+        responses = run_ctx and run_ctx.assistant_native_output or nil,
     }
     if run_ctx and type(run_ctx.assistant_reasoning_details) == "table" and
        #run_ctx.assistant_reasoning_details > 0 then

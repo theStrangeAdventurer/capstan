@@ -483,6 +483,7 @@ local function start_one(g, s)
     local called, ok, err, cancel = pcall(g.run, {
         messages = {{role = "user", content = subagent_prompt(g.args, s.task)}},
         provider = g.ctx.provider_name, provider_snapshot = g.ctx.provider,
+        account_id = g.ctx.provider and g.ctx.provider.account_id,
         model = model, profile = g.ctx.profile_snapshot or g.ctx.profile,
         max_turns = s.max_turns, depth = g.depth + 1,
         telemetry_parent = g.telemetry_parent, subagent_index = s.index,

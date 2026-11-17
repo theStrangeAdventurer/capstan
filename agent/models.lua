@@ -34,11 +34,10 @@ local function normalized_model_id(value)
     return tostring(value):lower():gsub("[^a-z0-9]+", "")
 end
 
-local function provider_headers(provider)
+local function provider_headers(provider, url)
     local headers = {}
-    if provider and provider.api_key and provider.api_key ~= "" then
-        headers["Authorization"] = "Bearer " .. provider.api_key
-    end
+    local key = require("agent.credentials").resolve(nil, provider, url)
+    if key then headers["Authorization"] = "Bearer " .. key end
     return headers
 end
 
@@ -55,17 +54,77 @@ local function provider_models_url(provider)
     return nil
 end
 
+-- Go has a public, plan-specific catalog. Never send stored credentials to it,
+-- and never use catalog API URLs to change the selected inference endpoint.
+local go_catalog_time = {}
+local function go_catalog(provider)
+    local url = provider_models_url(provider)
+    if not url then return nil, 'OpenCode Go models endpoint is missing' end
+    local now = os.time()
+    if models_cache_by_url[url] and now - (go_catalog_time[url] or 0) < 300 then
+        return models_cache_by_url[url]
+    end
+    local ok, status, body = pcall(http.get, url,
+        {['User-Agent'] = 'capstan/' .. tostring((_G.capstan and capstan.version) or 'local')},
+        {https_only = true, follow_redirects = false})
+    local function unavailable(reason)
+        local message = 'OpenCode Go catalog: ' .. reason
+        if models_cache_by_url[url] then return models_cache_by_url[url], message .. '; showing cached list' end
+        return nil, message
+    end
+    if not ok or status ~= 200 then
+        return unavailable(type(status) == 'number' and ('HTTP ' .. tostring(status)) or 'request failed')
+    end
+    local decoded_ok, decoded = pcall(json.decode, body or '')
+    if not decoded_ok or type(decoded) ~= 'table' or type(decoded.data) ~= 'table' then
+        return unavailable('invalid response')
+    end
+    local result, seen = {}, {}
+    for _, item in ipairs(decoded.data) do
+        if type(item) == 'table' and type(item.go) == 'table' and item.type == 'chat' and
+            type(item.id) == 'string' and item.id ~= '' and not item.id:find('%c') and not seen[item.id] then
+            local text_output = false
+            local output = type(item.modalities) == 'table' and item.modalities.output
+            for _, modality in ipairs(type(output) == 'table' and output or {}) do
+                if modality == 'text' then text_output = true end
+            end
+            if text_output then
+                local limit = type(item.limit) == 'table' and item.limit.context
+                if type(limit) ~= 'number' or limit ~= limit or limit <= 0 or limit >= math.huge or limit % 1 ~= 0 then limit = 0 end
+                local reasoning = type(item.capabilities) == 'table' and item.capabilities.reasoning
+                local efforts = {}
+                if type(reasoning) == 'table' and reasoning.supported == true and type(reasoning.effort) == 'table' then
+                    local unique = {}
+                    for _, effort in ipairs(reasoning.effort) do
+                        if type(effort) == 'string' and valid_reasoning_efforts[effort] and not unique[effort] then
+                            efforts[#efforts + 1] = effort; unique[effort] = true
+                        end
+                    end
+                end
+                result[#result + 1] = {id = item.id,
+                    name = type(item.name) == 'string' and item.name:gsub('%c', ' ') or item.id,
+                    context_limit = limit, reasoning_efforts = efforts}
+                seen[item.id] = true
+            end
+        end
+    end
+    if #result == 0 then return unavailable('no text models in response') end
+    models_cache_by_url[url], go_catalog_time[url] = result, now
+    return result
+end
+
 local function load_provider_models(provider)
     if provider and type(provider.models) == "table" then
         return provider.models
     end
+    if provider and provider.catalog_format == 'opencode_go' then return go_catalog(provider) end
     local url = provider_models_url(provider)
     if not url then return nil end
     if models_cache_by_url[url] ~= nil then
         return models_cache_by_url[url]
     end
 
-    local status, body = http.get(url, provider_headers(provider))
+    local status, body = http.get(url, provider_headers(provider, url))
     if status == 200 and body and body ~= "" then
         local ok, decoded = pcall(json.decode, body)
         if ok and decoded and type(decoded.data) == "table" then
@@ -150,7 +209,11 @@ local function model_reasoning_efforts(provider, item)
         if per_model then return per_model end
     end
     if item_supports_reasoning_effort(item) == false then return nil end
-    return copy_reasoning_efforts(provider and provider.default_reasoning_efforts)
+    local fallback = copy_reasoning_efforts(provider and provider.default_reasoning_efforts)
+    if fallback then return fallback end
+    if provider and provider.catalog_format == 'opencode_go' then
+        return copy_reasoning_efforts(item.reasoning_efforts)
+    end
 end
 
 local function normalize_models_response(decoded, provider)
@@ -172,8 +235,47 @@ local function normalize_models_response(decoded, provider)
     return models
 end
 
+local siwc_cache = {}
+function M.siwc_list(account_id)
+    local credential, err = require('agent.provider_config').siwc_access(account_id)
+    if not credential then return nil, err end
+    local key = credential.account_id .. ':' .. tostring(credential.generation)
+    if siwc_cache[key] then return siwc_cache[key], nil, credential.account_id end
+    local ok, status, body = pcall(http.get, 'https://api.openai.com/v1/models',
+        {Authorization = 'Bearer ' .. credential.access}, {https_only = true, follow_redirects = false})
+    if not ok or status ~= 200 then return nil, 'SIWC model catalog request failed' end
+    local decoded_ok, decoded = pcall(json.decode, body or '')
+    if not decoded_ok or type(decoded) ~= 'table' or type(decoded.models) ~= 'table' then
+        return nil, 'SIWC model catalog must contain models[]'
+    end
+    local result = {}
+    for _, item in ipairs(decoded.models) do
+        if type(item) == 'table' and item.visibility == 'list' and
+            type(item.slug) == 'string' and item.slug ~= '' then
+            result[#result + 1] = {id = item.slug,
+                text = type(item.display_name) == 'string' and item.display_name or item.slug,
+                context_limit = 0}
+        end
+    end
+    if #result == 0 then return nil, 'SIWC account has no visible models' end
+    siwc_cache[key] = result
+    return result, nil, credential.account_id
+end
+
 function M.list(runtime, provider_name)
     provider_name = provider_name or runtime.provider
+    if provider_name == "openai_siwc" then
+        local catalog, err, account = M.siwc_list()
+        if not catalog then return nil, err end
+        local provider = runtime.providers[provider_name]
+        local result = {}
+        for _, item in ipairs(catalog) do
+            result[#result + 1] = {id = item.id, text = item.text,
+                context_limit = provider_model_limit({model = item.id}, provider.models or {}),
+                reasoning_efforts = model_reasoning_efforts(provider, item)}
+        end
+        return result, nil, account
+    end
     local provider = runtime.providers[provider_name]
     if not provider then
         return nil, "Unknown provider: " .. tostring(provider_name)
@@ -182,13 +284,18 @@ function M.list(runtime, provider_name)
     if type(provider.models) == "table" then
         return normalize_models_response({data = provider.models}, provider), nil
     end
+    if provider.catalog_format == 'opencode_go' then
+        local data, err = go_catalog(provider)
+        if not data then return nil, err end
+        return normalize_models_response({data = data}, provider), err
+    end
 
     local url = provider_models_url(provider)
     if not url then
         return nil, "Provider does not expose a models endpoint: " .. tostring(provider_name)
     end
 
-    local status, body = http.get(url, provider_headers(provider))
+    local status, body = http.get(url, provider_headers(provider, url))
     if status < 200 or status >= 300 then
         return nil, string.format("Models request failed: HTTP %d", status)
     end
@@ -246,7 +353,7 @@ function M.step_reasoning_effort(efforts, current, direction)
 end
 
 function M.list_all(runtime)
-    local items = {}
+    local items, warnings = {}, {}
     local provider_names = {}
     for provider_name, _ in pairs(runtime.providers or {}) do
         table.insert(provider_names, provider_name)
@@ -255,7 +362,9 @@ function M.list_all(runtime)
 
     for _, provider_name in ipairs(provider_names) do
         local provider = runtime.providers[provider_name]
-        local list = M.list(runtime, provider_name) or {}
+        local list, err = M.list(runtime, provider_name)
+        if err and provider.catalog_format == 'opencode_go' then warnings[#warnings + 1] = err end
+        list = list or {}
         local seen = {}
         for _, model in ipairs(list) do
             seen[model.id] = true
@@ -269,7 +378,8 @@ function M.list_all(runtime)
         end
 
         local configured_model = provider and provider.model
-        if type(configured_model) == "string" and configured_model ~= "" and not seen[configured_model] then
+        if provider_name ~= "openai_siwc" and provider.catalog_format ~= 'opencode_go' and
+            type(configured_model) == "string" and configured_model ~= "" and not seen[configured_model] then
             table.insert(items, {
                 provider = provider_name,
                 id = configured_model,
@@ -279,7 +389,7 @@ function M.list_all(runtime)
             })
         end
     end
-    return items
+    return items, #warnings > 0 and table.concat(warnings, '; ') or nil
 end
 
 function M.reasoning_efforts(runtime, provider_name, model)
@@ -291,6 +401,15 @@ function M.reasoning_efforts(runtime, provider_name, model)
     return {}, nil
 end
 
+-- SIWC documents identity/visibility only; capabilities come from existing manual config.
+function M.validate_siwc_effort(provider, model, effort)
+    if effort == nil or effort == "default" then return true end
+    for _, supported in ipairs(model_reasoning_efforts(provider, {id = model}) or {}) do
+        if effort == supported then return true end
+    end
+    return false, "Unsupported SIWC reasoning effort for selected model; configure reasoning_efforts or select default"
+end
+
 function M.set(runtime, provider_name, model, reasoning_effort)
     provider_name = provider_name or runtime.provider
     if type(model) ~= "string" or model == "" then
@@ -299,6 +418,15 @@ function M.set(runtime, provider_name, model, reasoning_effort)
     local provider = runtime.providers[provider_name]
     if not provider then
         return false, "Unknown provider: " .. tostring(provider_name)
+    end
+    if provider_name == "openai_siwc" then
+        local valid, effort_error = M.validate_siwc_effort(runtime.providers[provider_name], model, reasoning_effort)
+        if not valid then return false, effort_error end
+        local catalog, err = M.siwc_list()
+        if not catalog then return false, err end
+        local visible = false
+        for _, item in ipairs(catalog) do if item.id == model then visible = true end end
+        if not visible then return false, "SIWC model is not visible; select a model with /models" end
     end
     local normalized_effort, effort_err = normalize_selected_reasoning_effort(reasoning_effort)
     if effort_err then return false, effort_err end
@@ -360,6 +488,15 @@ function M.set_profile(runtime, profile_name, provider_name, model, reasoning_ef
     end
     if not runtime.providers[provider_name] then
         return false, "Unknown provider: " .. tostring(provider_name)
+    end
+    if provider_name == "openai_siwc" then
+        local valid, effort_error = M.validate_siwc_effort(runtime.providers[provider_name], model, reasoning_effort)
+        if not valid then return false, effort_error end
+        local catalog, err = M.siwc_list()
+        if not catalog then return false, err end
+        local visible = false
+        for _, item in ipairs(catalog) do if item.id == model then visible = true end end
+        if not visible then return false, "SIWC model is not visible; select a model with /models" end
     end
     local normalized_effort, effort_err = normalize_selected_reasoning_effort(reasoning_effort)
     if effort_err then return false, effort_err end

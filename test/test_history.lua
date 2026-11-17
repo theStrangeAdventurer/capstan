@@ -23,4 +23,17 @@ end
 assert(history.expand({{role='assistant',content='legacy'}})[1].content=='legacy')
 assert(history.encode({initial},{[initial]=true},{},'')==nil)
 assert(#json.decode(encoded)==4)
+local binding=require('agent.siwc_history')
+local native=assert(binding.stamp({format='openai_siwc.responses.v1',
+    items={{type='reasoning',encrypted_content='fixture-opaque'}},tool_names={}}, 'fixture-account-a'))
+local native_encoded=history.encode({{role='assistant',content='native final',responses=native}}, {}, {}, 'native final')
+local native_restored=history.expand({{role='assistant',model_history_json=native_encoded}})
+assert(#native_restored==1)
+assert(native_restored[1].responses.account_id=='fixture-account-a')
+assert(native_restored[1].responses.items[1].encrypted_content=='fixture-opaque')
+assert(binding.validate(native_restored, 'fixture-account-a')==true)
+assert(binding.validate(native_restored, 'fixture-account-b')==nil)
+local legacy_native=history.expand({{role='assistant',model_history_json=json.encode({
+    {role='assistant',responses={format='openai_siwc.responses.v1',items={},tool_names={}}}})}})
+assert(binding.validate(legacy_native, 'fixture-account-a')==nil)
 print('Structured history adapter tests passed')

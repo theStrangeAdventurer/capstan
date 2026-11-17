@@ -54,6 +54,8 @@ static int stream_count = 0;
 static int stream_cap = 0;
 static int g_next_async_id = 1;
 static int g_sync_active = 0;
+static CURL *g_sync_easy = NULL;
+static CURLcode g_sync_result = CURLE_FAILED_INIT;
 static int g_curl_performing = 0;
 
 static void perform_transfers(int *running) {
@@ -250,9 +252,12 @@ static CURL *http_easy_init(lua_State *L, struct curl_slist *headers,
   return easy;
 }
 
-static void http_sync_wait(lua_State *L, CURL *easy) {
+static CURLcode http_sync_wait(lua_State *L, CURL *easy) {
+  if (curl_multi_add_handle(multi_handle, easy) != CURLM_OK)
+    return CURLE_FAILED_INIT;
   g_sync_active = 1;
-  curl_multi_add_handle(multi_handle, easy);
+  g_sync_easy = easy;
+  g_sync_result = CURLE_FAILED_INIT;
   int still_running = 1;
   while (still_running) {
     perform_transfers(&still_running);
@@ -262,6 +267,64 @@ static void http_sync_wait(lua_State *L, CURL *easy) {
   http_poll(L);
   curl_multi_remove_handle(multi_handle, easy);
   g_sync_active = 0;
+  g_sync_easy = NULL;
+  return g_sync_result;
+}
+
+/* get(url, headers, options); post_response(url, body, headers, timeout, options).
+   OAuth callers must set both https_only=true and follow_redirects=false. */
+typedef struct {
+  int https_only;
+  int follow_redirects;
+  int supplied;
+} HttpOptions;
+
+static HttpOptions parse_http_options(lua_State *L, int index, const char *url,
+                                      int *background) {
+  HttpOptions options = {0, 1, 0};
+  if (lua_isnoneornil(L, index))
+    return options;
+  luaL_checktype(L, index, LUA_TTABLE);
+  options.supplied = 1;
+  lua_pushnil(L);
+  while (lua_next(L, index)) {
+    size_t len = 0;
+    const char *key = lua_type(L, -2) == LUA_TSTRING ?
+                      lua_tolstring(L, -2, &len) : NULL;
+    int *value = NULL;
+    if (key && len == 10 && memcmp(key, "https_only", 10) == 0)
+      value = &options.https_only;
+    else if (key && len == 16 && memcmp(key, "follow_redirects", 16) == 0)
+      value = &options.follow_redirects;
+    else if (background && key && len == 10 && memcmp(key, "background", 10) == 0)
+      value = background;
+    else
+      luaL_argerror(L, index, "unknown HTTP option");
+    if (!lua_isboolean(L, -1))
+      luaL_argerror(L, index, "HTTP options must be boolean");
+    *value = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+  }
+  if (options.https_only && !curl_strnequal(url, "https://", 8))
+    luaL_argerror(L, 1, "https_only requires an HTTPS URL");
+  return options;
+}
+
+static CURLcode apply_http_options(CURL *easy, HttpOptions options) {
+  CURLcode rc = curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION,
+                                 (long)options.follow_redirects);
+  if (rc != CURLE_OK || !options.https_only)
+    return rc;
+#if LIBCURL_VERSION_NUM >= 0x075500
+  rc = curl_easy_setopt(easy, CURLOPT_PROTOCOLS_STR, "https");
+  if (rc == CURLE_OK)
+    rc = curl_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+#else
+  rc = curl_easy_setopt(easy, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+  if (rc == CURLE_OK)
+    rc = curl_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+  return rc;
 }
 
 static void configure_http_handle(CURL *easy, const char *url) {
@@ -422,13 +485,20 @@ static int http_post_async(lua_State *L, int response_mode) {
     body = luaL_checklstring(L, 2, &body_len);
   }
 
-  struct curl_slist *headers = parse_headers(L, 3);
   lua_Integer timeout_ms = luaL_optinteger(L, response_mode ? 4 : 5,
                                           response_mode ? 30000 : 0);
-  int background = lua_opt_background(L, 6);
+  luaL_argcheck(L, timeout_ms <= LONG_MAX, response_mode ? 4 : 5,
+                "timeout out of range");
+  int background = 0;
+  HttpOptions options = {0, 1, 0};
+  if (response_mode)
+    background = lua_opt_background(L, 6);
+  else
+    options = parse_http_options(L, 6, url, &background);
   int callback_index = response_mode ? 5 : 4;
 
   luaL_checktype(L, callback_index, LUA_TFUNCTION);
+  struct curl_slist *headers = parse_headers(L, 3);
   lua_pushvalue(L, callback_index);
   int callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
@@ -479,6 +549,12 @@ static int http_post_async(lua_State *L, int response_mode) {
   curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_HEADERDATA, &ctx->response_headers);
 
+  CURLcode rc = apply_http_options(easy, options);
+  if (rc != CURLE_OK) {
+    stream_dispose(ctx);
+    return luaL_error(L, "failed to configure HTTP options: %s",
+                      curl_easy_strerror(rc));
+  }
   return stream_register(L, ctx);
 }
 
@@ -538,8 +614,10 @@ static int l_http_post_response(lua_State *L) {
     body = luaL_checklstring(L, 2, &body_len);
   }
 
-  struct curl_slist *headers = parse_headers(L, 3);
+  HttpOptions options = parse_http_options(L, 5, url, NULL);
   lua_Integer timeout_ms = luaL_optinteger(L, 4, 30000);
+  luaL_argcheck(L, timeout_ms <= LONG_MAX, 4, "timeout out of range");
+  struct curl_slist *headers = parse_headers(L, 3);
 
   CURL *easy = http_easy_init(L, headers, LUA_NOREF);
   configure_http_handle(easy, url);
@@ -565,21 +643,29 @@ static int l_http_post_response(lua_State *L) {
   curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_HEADERDATA, &response_headers);
 
-  http_sync_wait(L, easy);
+  CURLcode rc = apply_http_options(easy, options);
+  if (rc == CURLE_OK)
+    rc = http_sync_wait(L, easy);
+  const char *error = response.overflow ? "Response too large" :
+      response_headers.overflow ? "Response headers too large" :
+      rc != CURLE_OK ? curl_easy_strerror(rc) : NULL;
 
   long status = 0;
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
 
   lua_newtable(L);
+  if (error) {
+    lua_pushstring(L, error);
+    lua_setfield(L, -2, "error");
+  }
 
-  lua_pushinteger(L, response.overflow ? 0 : status);
+  lua_pushinteger(L, error ? 0 : status);
   lua_setfield(L, -2, "status");
 
-  lua_pushstring(L, response.overflow ? "Response too large" :
-                                      (response.data ? response.data : ""));
+  lua_pushstring(L, error ? error : (response.data ? response.data : ""));
   lua_setfield(L, -2, "body");
 
-  push_headers_table(L, response_headers.data);
+  push_headers_table(L, error ? NULL : response_headers.data);
   lua_setfield(L, -2, "headers");
 
   free(response.data);
@@ -641,6 +727,7 @@ static int l_http_post_stream(lua_State *L) {
 
 static int l_http_get(lua_State *L) {
   const char *url = luaL_checkstring(L, 1);
+  HttpOptions options = parse_http_options(L, 3, url, NULL);
   struct curl_slist *headers = parse_headers(L, 2);
 
   CURL *easy = http_easy_init(L, headers, LUA_NOREF);
@@ -654,18 +741,26 @@ static int l_http_get(lua_State *L) {
   curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response);
 
-  http_sync_wait(L, easy);
+  RespBuf response_headers = {0};
+  response_headers.max_size = HTTP_MAX_HEADER_BYTES;
+  if (options.supplied) {
+    curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, HTTP_DEFAULT_TIMEOUT_MS);
+    curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, write_cb);
+    curl_easy_setopt(easy, CURLOPT_HEADERDATA, &response_headers);
+  }
+  CURLcode rc = apply_http_options(easy, options);
+  if (rc == CURLE_OK)
+    rc = http_sync_wait(L, easy);
+  const char *error = response.overflow ? "Response too large" :
+      response_headers.overflow ? "Response headers too large" :
+      rc != CURLE_OK ? curl_easy_strerror(rc) : NULL;
 
   long status = 0;
   curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
-  if (response.overflow) {
-    lua_pushinteger(L, 0);
-    lua_pushliteral(L, "Response too large");
-  } else {
-    lua_pushinteger(L, status);
-    lua_pushstring(L, response.data ? response.data : "");
-  }
+  lua_pushinteger(L, error ? 0 : status);
+  lua_pushstring(L, error ? error : (response.data ? response.data : ""));
 
+  free(response_headers.data);
   free(response.data);
   curl_slist_free_all(headers);
   curl_easy_cleanup(easy);
@@ -784,8 +879,11 @@ static int http_poll_impl(lua_State *L, int max_callbacks) {
       }
     }
 
-    if (!found)
+    if (!found) {
+      if (msg->easy_handle == g_sync_easy)
+        g_sync_result = msg->data.result;
       continue;
+    }
 
     int cb_ref = found->callback_ref;
     struct curl_slist *h = found->headers;

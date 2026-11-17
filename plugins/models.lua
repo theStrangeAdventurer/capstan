@@ -115,6 +115,7 @@ plugin.autocomplete = {
 			}
 		end
 		local items = {}
+		if err then items[#items + 1] = {text = err, value = ""} end
 		for _, model in ipairs(list) do
 			local provider = model.provider
 			if not provider and models.current_provider then

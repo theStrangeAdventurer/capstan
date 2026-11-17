@@ -5,6 +5,7 @@
 #include <lua.h>
 #include <lualib.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -67,7 +68,7 @@ static int accept_one(int server_fd) {
   return accept(server_fd, (struct sockaddr *)&addr, &addr_len);
 }
 
-static pid_t start_redirect_server(int *port_out) {
+static pid_t start_redirect_server_mode(int *port_out, int no_follow) {
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd < 0)
     return -1;
@@ -118,6 +119,12 @@ static pid_t start_redirect_server(int *port_out) {
       close(first);
     }
 
+    if (no_follow) {
+      struct pollfd pending = {server_fd, POLLIN, 0};
+      int ready = poll(&pending, 1, 200);
+      close(server_fd);
+      _exit(ready == 0 ? 0 : 1);
+    }
     int second = accept_one(server_fd);
     if (second >= 0) {
       read_request(second);
@@ -136,6 +143,10 @@ static pid_t start_redirect_server(int *port_out) {
 
   close(server_fd);
   return pid;
+}
+
+static pid_t start_redirect_server(int *port_out) {
+  return start_redirect_server_mode(port_out, 0);
 }
 
 static pid_t start_stream_server(int *port_out, int error_response) {
@@ -795,7 +806,102 @@ static MunitResult test_wait_frame_services_input_only_in_tui(
   return MUNIT_OK;
 }
 
+static MunitResult test_http_options(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  http_init(L);
+  munit_assert_int(luaL_dostring(L,
+      "local calls = {function(u,o) return http.get(u,nil,o) end,"
+      " function(u,o) return http.post_response(u,'',nil,100,o) end,"
+      " function(u,o) return http.post_stream(u,'',nil,function() end,100,o) end} "
+      "for _,call in ipairs(calls) do "
+      " local ok,err=pcall(call,'http://127.0.0.1:1',{https_only=true});"
+      " assert(not ok and err:find('requires an HTTPS URL',1,true));"
+      " for _,o in ipairs({false,1,'bad',{unknown=true},{https_only=1},"
+      " {follow_redirects='false'},{[1]=true},{['https_only\\0']=true}}) do"
+      "  assert(not pcall(call,'https://127.0.0.1:1',o)) end "
+      "end "
+      "local s,e=http.get('https://127.0.0.1:1',nil,"
+      " {https_only=true,follow_redirects=false}); assert(s==0 and #e>0);"
+      "local r=http.post_response('https://127.0.0.1:1','',nil,100,"
+      " {https_only=true,follow_redirects=false});"
+      "assert(r.status==0 and #r.error>0 and r.body==r.error)"), ==, LUA_OK);
+  http_cleanup();
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_http_no_follow(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  for (int post = 0; post < 2; post++) {
+    int port;
+    pid_t pid = start_redirect_server_mode(&port, 1);
+    if (pid < 0)
+      return MUNIT_SKIP;
+    lua_State *L = luaL_newstate();
+    luaL_openlibs(L);
+    http_init(L);
+    char script[512];
+    snprintf(script, sizeof(script), post ?
+        "local r=http.post_response('http://127.0.0.1:%d/start','',nil,1000,"
+        "{follow_redirects=false}); assert(r.status==302 and not r.error);"
+        "assert(r.headers.location and r.body=='')" :
+        "local s,b=http.get('http://127.0.0.1:%d/start',nil,"
+        "{follow_redirects=false}); assert(s==302 and b=='')", port);
+    int rc = luaL_dostring(L, script);
+    http_cleanup();
+    lua_close(L);
+    int status;
+    waitpid(pid, &status, 0);
+    munit_assert_int(rc, ==, LUA_OK);
+    munit_assert_true(WIFEXITED(status));
+    munit_assert_int(WEXITSTATUS(status), ==, 0);
+  }
+  return MUNIT_OK;
+}
+
+static MunitResult test_stream_no_follow(const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  int port;
+  pid_t pid = start_redirect_server_mode(&port, 1);
+  if (pid < 0) return MUNIT_SKIP;
+  lua_State *L = luaL_newstate();
+  luaL_openlibs(L);
+  http_init(L);
+  char script[1024];
+  snprintf(script, sizeof(script),
+      "done=false; http.post_stream('http://127.0.0.1:%d/start','',nil,"
+      "function(chunk,finish,err,body,headers,meta) "
+      "assert(chunk==nil); if finish then "
+      "assert(err=='HTTP 302' and headers.location and meta.http_status==302 "
+      "and meta.redirect_count==0); done=true end end,1000,"
+      "{follow_redirects=false,background=true})", port);
+  munit_assert_int(luaL_dostring(L, script), ==, LUA_OK);
+  munit_assert_false(http_is_loading());
+  munit_assert_true(http_has_background_work());
+  for (int i = 0; i < 100 && http_has_background_work(); i++) {
+    http_poll(L);
+    usleep(10000);
+  }
+  munit_assert_int(luaL_dostring(L, "assert(done)"), ==, LUA_OK);
+  munit_assert_false(http_has_background_work());
+  http_cleanup();
+  lua_close(L);
+  int status;
+  waitpid(pid, &status, 0);
+  munit_assert_true(WIFEXITED(status));
+  munit_assert_int(WEXITSTATUS(status), ==, 0);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/stream_no_follow", test_stream_no_follow, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/options", test_http_options, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/no_follow", test_http_no_follow, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/wait_frame_services_input_only_in_tui",
      test_wait_frame_services_input_only_in_tui, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

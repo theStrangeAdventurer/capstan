@@ -3,6 +3,22 @@ VERSION ?= local
 NCURSES_DIR = vendor/ncurses-install
 LUA_DIR = vendor/lua-5.5.0
 MUNIT_DIR = vendor/munit
+HOST_OS := $(shell uname -s)
+HOST_ARCH := $(shell uname -m)
+ifeq ($(HOST_OS),Darwin)
+# OAuth uses system cryptography, never vendored OpenSSL on macOS.
+CRYPTO_LDFLAGS = -framework Security -framework CoreFoundation
+else
+OPENSSL_VERSION = 3.5.9
+OPENSSL_TARGET_Linux_x86_64 = linux-x86_64
+OPENSSL_TARGET_Linux_aarch64 = linux-aarch64
+OPENSSL_TARGET_Linux_arm64 = linux-aarch64
+OPENSSL_TARGET = $(OPENSSL_TARGET_$(HOST_OS)_$(HOST_ARCH))
+CRYPTO_DIR = vendor/openssl-build-$(OPENSSL_TARGET)
+CRYPTO_LIB = $(CRYPTO_DIR)/libcrypto.a
+CRYPTO_CFLAGS = -I$(CRYPTO_DIR)/include -Ivendor/openssl-$(OPENSSL_VERSION)/include
+CRYPTO_LDFLAGS = $(CRYPTO_LIB) -pthread -Wl,--exclude-libs,libcrypto.a
+endif
 
 CFLAGS = -Iinclude -I$(LUA_DIR)/src -I$(NCURSES_DIR)/include -I$(NCURSES_DIR)/include/ncursesw -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -DPOPUP_NCURSES -DAPP_VERSION_VALUE=\"$(VERSION)\"
 # Link vendored ncurses and Lua statically via direct archive paths.
@@ -13,9 +29,9 @@ LDFLAGS = $(LUA_DIR)/src/liblua.a $(NCURSES_DIR)/lib/libncursesw.a  $(NCURSES_DI
 TEST_CFLAGS = -Iinclude -I$(MUNIT_DIR) -std=gnu99 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE
 TEST_SRCS = src/terminal_title.c test/test_terminal_title.c src/otlp_wire.c test/test_otlp_wire.c src/app_config.c src/cli_args.c src/clipboard.c src/diff_highlight.c src/dispatch_logic.c src/editor_prompt.c src/finder.c src/input.c src/input_history.c src/jsonl.c src/linemap.c src/markdown.c src/text_layout.c vendor/md4c/md4c.c src/mode.c src/permit_logic.c src/permit_prompt.c src/popup_logic.c src/project_instructions.c src/redact.c src/scroll.c src/session.c src/shell_process.c src/process_manager.c src/background_work.c src/process_observe.c test/test_process_manager.c test/test_background_work.c test/test_process_observe.c src/shell_output.c src/skills.c src/start_screen.c src/submission_queue.c src/tool_status.c src/trace.c src/tui_layout.c src/usage.c src/utils.c src/visual.c src/wiki.c src/workspace_status.c test/test_workspace_status.c test/test_main.c test/test_app_config.c test/test_cli_args.c test/test_clipboard.c test/test_diff_highlight.c test/test_dispatch.c test/test_editor.c test/test_finder.c test/test_input.c test/test_input_history.c test/test_jsonl.c test/test_linemap.c test/test_markdown.c test/test_mode.c test/test_permit_logic.c test/test_permit_prompt.c test/test_popup.c test/test_project_instructions.c test/test_redact.c test/test_scroll.c test/test_session.c test/test_shell_process.c test/test_shell_output.c test/test_start_screen.c test/test_skills.c test/test_submission_queue.c test/test_tool_status.c test/test_trace.c test/test_tui_layout.c test/test_usage.c test/test_utils.c test/test_visual.c test/test_wiki.c vendor/munit/munit.c
 
-CORE_PLUGIN_ASSETS = plugins/file.lua plugins/file_write.lua plugins/file_edit.lua plugins/shell.lua plugins/fetch.lua plugins/logs.lua plugins/skills.lua plugins/wiki.lua plugins/models.lua plugins/info.lua plugins/mcp.lua plugins/plan.lua plugins/implement.lua plugins/auth.lua plugins/logout.lua plugins/connect.lua plugins/vcs.lua plugins/tasks.lua plugins/issues.lua plugins/completion_review.lua plugins/show.lua plugins/processes.lua plugins/process_stop.lua
+CORE_PLUGIN_ASSETS = plugins/openai_siwc.lua plugins/file.lua plugins/file_write.lua plugins/file_edit.lua plugins/shell.lua plugins/fetch.lua plugins/logs.lua plugins/skills.lua plugins/wiki.lua plugins/models.lua plugins/info.lua plugins/mcp.lua plugins/plan.lua plugins/implement.lua plugins/auth.lua plugins/logout.lua plugins/connect.lua plugins/vcs.lua plugins/tasks.lua plugins/issues.lua plugins/completion_review.lua plugins/show.lua plugins/processes.lua plugins/process_stop.lua
 PROFILE_ASSETS = profiles/implement.lua profiles/plan.lua
-AGENT_RUNTIME_ASSETS = agent/history.lua agent/process_watch.lua agent/telemetry.lua agent/runtime.lua agent/tasks.lua agent/issues.lua agent/review_verdict.lua agent/review_config.lua agent/review_snapshot.lua agent/completion_review.lua agent/acp.lua agent/provider_config.lua agent/models.lua agent/stream.lua agent/subagents.lua agent/tools.lua agent/tool_output.lua agent/workspace.lua agent/tokens.lua agent/images.lua agent/logging.lua agent/ui.lua agent/utf8.lua agent/hooks.lua agent/state.lua agent/auth.lua agent/lua_serialize.lua agent/shell_safe.lua agent/mcp.lua agent/profiles.lua agent/redact.lua agent/vcs.lua $(PROFILE_ASSETS)
+AGENT_RUNTIME_ASSETS = agent/credentials.lua agent/siwc_history.lua agent/oidc.lua agent/openai_siwc_auth.lua agent/openai_siwc_responses.lua agent/history.lua agent/process_watch.lua agent/telemetry.lua agent/runtime.lua agent/tasks.lua agent/issues.lua agent/review_verdict.lua agent/review_config.lua agent/review_snapshot.lua agent/completion_review.lua agent/acp.lua agent/provider_config.lua agent/models.lua agent/stream.lua agent/subagents.lua agent/tools.lua agent/tool_output.lua agent/workspace.lua agent/tokens.lua agent/images.lua agent/logging.lua agent/ui.lua agent/utf8.lua agent/hooks.lua agent/state.lua agent/auth.lua agent/lua_serialize.lua agent/shell_safe.lua agent/mcp.lua agent/profiles.lua agent/redact.lua agent/vcs.lua $(PROFILE_ASSETS)
 EMBEDDED_ASSETS = $(AGENT_RUNTIME_ASSETS) agent/vcs_git_stats.sh ai/system_prompt.txt vendor/rxi/json.lua skills/self-improvement/SKILL.md skills/wiki-onboarding/SKILL.md $(CORE_PLUGIN_ASSETS)
 EMBEDDED_SRCS = build/embedded_assets.c
 SRCS = $(wildcard src/*.c) vendor/md4c/md4c.c $(EMBEDDED_SRCS)
@@ -27,9 +43,52 @@ TEST_TARGET = build/test_runner
 
 all: $(TARGET)
 
-$(TARGET): $(SRCS)
+$(TARGET): $(SRCS) $(CRYPTO_LIB)
 	mkdir -p build
-	$(CC) $(CFLAGS) $(SRCS) $(LDFLAGS) -o $(TARGET) 
+	$(CC) $(CFLAGS) $(CRYPTO_CFLAGS) $(SRCS) $(LDFLAGS) $(CRYPTO_LDFLAGS) -o $(TARGET)
+
+ifneq ($(CRYPTO_LIB),)
+$(CRYPTO_LIB): tools/build_crypto.sh
+	bash tools/build_crypto.sh
+endif
+
+.PHONY: test-connect
+test-connect: $(TARGET)
+	python3 test/test_connect_pty.py $(TARGET)
+
+.PHONY: test-secret-input
+
+test-secret-input: build/test_secret_input
+	./build/test_secret_input
+	python3 test/test_secret_input.py
+
+build/test_secret_input: src/secret_input.c include/secret_input.h test/test_secret_input.c
+	mkdir -p build
+	$(CC) $(TEST_CFLAGS) src/secret_input.c test/test_secret_input.c -o $@
+
+.PHONY: test-oauth-store
+test-oauth-store: build/test_oauth_store
+	./build/test_oauth_store
+
+build/test_oauth_store: Makefile src/oauth_store.c include/oauth_store.h test/test_oauth_store.c
+	mkdir -p build
+	$(CC) $(TEST_CFLAGS) -I$(LUA_DIR)/src -DOAUTH_STORE_TEST_MAIN src/oauth_store.c test/test_oauth_store.c $(MUNIT_DIR)/munit.c $(LUA_DIR)/src/liblua.a -lm -o $@
+
+.PHONY: test-oauth-native
+test-oauth-native: build/test_oauth_native
+	./build/test_oauth_native
+
+build/test_oauth_native: Makefile src/oauth_native.c include/oauth_native.h src/oauth_crypto.c include/oauth_crypto.h test/test_oauth_native.c $(CRYPTO_LIB)
+	mkdir -p build
+	$(CC) $(TEST_CFLAGS) $(CRYPTO_CFLAGS) -I$(LUA_DIR)/src -DOAUTH_NATIVE_TEST_MAIN src/oauth_native.c src/oauth_crypto.c test/test_oauth_native.c $(MUNIT_DIR)/munit.c $(LUA_DIR)/src/liblua.a $(CRYPTO_LDFLAGS) -lm -o $@
+
+.PHONY: test-oauth-crypto
+test-oauth-crypto: build/test_oauth_crypto
+	./build/test_oauth_crypto
+
+build/test_oauth_crypto: src/oauth_crypto.c include/oauth_crypto.h test/test_oauth_crypto.c $(CRYPTO_LIB)
+	mkdir -p build
+	$(CC) $(TEST_CFLAGS) $(CRYPTO_CFLAGS) -DOAUTH_CRYPTO_TEST_MAIN src/oauth_crypto.c test/test_oauth_crypto.c $(MUNIT_DIR)/munit.c $(CRYPTO_LDFLAGS) -o $@
 
 $(EMBEDDED_SRCS): $(EMBEDDED_ASSETS) tools/embed_assets.sh
 	sh tools/embed_assets.sh $(EMBEDDED_SRCS) $(EMBEDDED_ASSETS)
@@ -83,6 +142,15 @@ test-http-lua: $(HTTP_LUA_TARGET)
 	$(LUA_DIR)/src/lua test/test_history.lua
 	$(LUA_DIR)/src/lua test/test_acp_history.lua
 	$(LUA_DIR)/src/lua test/test_context_limits.lua
+	$(LUA_DIR)/src/lua test/test_opencode_go.lua
+	$(LUA_DIR)/src/lua test/test_opencode_catalog.lua
+	$(LUA_DIR)/src/lua test/test_connect_credentials.lua
+	$(LUA_DIR)/src/lua test/test_openai_siwc_responses.lua
+	$(LUA_DIR)/src/lua test/test_openai_siwc_runtime.lua
+	$(LUA_DIR)/src/lua test/test_openai_siwc_auth.lua
+	$(LUA_DIR)/src/lua test/test_oidc.lua
+	$(LUA_DIR)/src/lua test/test_siwc_commands.lua
+	$(LUA_DIR)/src/lua test/test_siwc_history.lua
 	$(LUA_DIR)/src/lua test/test_background_subagents.lua
 	$(LUA_DIR)/src/lua test/test_internal_subagents.lua
 	$(LUA_DIR)/src/lua test/test_issues.lua

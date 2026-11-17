@@ -2,6 +2,10 @@ build
 /tmp/
 vendor/ncurses-build
 vendor/ncurses-install
+vendor/openssl-3.5.9/
+vendor/openssl-3.5.9.tar.gz
+vendor/openssl-3.5.9.tar.gz.part
+vendor/openssl-build-*/
 
 # Benchmark corpus, generated reports, logs, and private local configs
 benchmarks/work/

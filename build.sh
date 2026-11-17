@@ -35,7 +35,7 @@ printf "║  %-8s %-29s║\n" "jobs:" "${JOBS}"
 echo -e "╚══════════════════════════════════════════╝${NC}"
 
 # ── 1. Check system dependencies ────────────────────────────────
-banner "[1/4] Checking system dependencies"
+banner "[1/5] Checking system dependencies"
 
 # Compiler
 CC=$(which gcc 2>/dev/null || which cc 2>/dev/null || echo "")
@@ -84,7 +84,7 @@ if [ "$OS" = "Darwin" ]; then
 fi
 
 # ── 2. Build ncurses from source ─────────────────────────────────
-banner "[2/4] Building ncurses"
+banner "[2/5] Building ncurses"
 
 NCURSES_SRC="vendor/ncurses-src"
 NCURSES_BUILD="vendor/ncurses-build"
@@ -181,7 +181,7 @@ done
 ok "ncurses libraries verified"
 
 # ── 3. Build Lua ─────────────────────────────────────────────────
-banner "[3/4] Building Lua"
+banner "[3/5] Building Lua"
 
 LUA_DIR="vendor/lua-5.5.0"
 if [ ! -d "$LUA_DIR" ]; then
@@ -202,8 +202,16 @@ make -C "$LUA_DIR" test CC="$CC" 2>/dev/null || true
 [ -f "$LUA_DIR/src/liblua.a" ] || die "Lua library not built"
 ok "Lua build complete"
 
-# ── 4. Build capstan ─────────────────────────────────────────────
-banner "[4/4] Building capstan"
+# ── 4. Build static OAuth crypto ─────────────────────────────────
+banner "[4/5] Preparing OAuth cryptography"
+if [ "$OS" = "Darwin" ]; then
+    ok "Using system Security.framework and CommonCrypto (no OpenSSL build)"
+else
+    JOBS="$JOBS" CC="$CC" bash tools/build_crypto.sh
+fi
+
+# ── 5. Build capstan ─────────────────────────────────────────────
+banner "[5/5] Building capstan"
 
 rm -rf build
 make -j"$JOBS"

@@ -666,7 +666,40 @@ local function run_impl(opts, callbacks, run_span)
     end
 
     active = deep_copy(active)
-    local effort = effective_reasoning_effort(active, opts, profile)
+    if provider_name == "openai_siwc" then
+        if runtime_options.isolated then
+            local message = "SIWC is unavailable in isolated runtime"
+            if callbacks.on_error then callbacks.on_error(message) end
+            if callbacks.on_done then callbacks.on_done({ok=false, error=message, error_category="configuration", text=""}) end
+            return false, message
+        end
+        local catalog, err, account = models.siwc_list(opts.account_id or active.account_id)
+        local valid = false
+        for _, item in ipairs(catalog or {}) do
+            if not active.model or active.model == "" then active.model = item.id end
+            if item.id == active.model then valid = true end
+        end
+        if not valid then
+            local message = err or "SIWC model is not visible; select a model with /models"
+            if callbacks.on_error then callbacks.on_error(message) end
+            if callbacks.on_done then callbacks.on_done({ok=false, error=message, text=""}) end
+            return false, message
+        end
+        local explicit_effort = opts.reasoning_effort or
+            (not opts.reasoning_effort_default and active.selected_reasoning_effort) or nil
+        local valid_effort, effort_error = models.validate_siwc_effort(active, active.model, explicit_effort)
+        if not valid_effort then
+            if callbacks.on_error then callbacks.on_error(effort_error) end
+            if callbacks.on_done then callbacks.on_done({ok=false, error=effort_error, error_category="configuration", text=""}) end
+            return false, effort_error
+        end
+        active.account_id = account
+        opts.account_id = account
+        opts.provider_snapshot = deep_copy(active)
+        hook_opts.account_id = account
+        hook_opts.provider_snapshot = deep_copy(active)
+    end
+    local effort = effective_reasoning_effort(active, opts, provider_name ~= "openai_siwc" and profile or nil)
     if opts.update_status ~= false then
         agent.set_info(provider_name, active.model, effort or "default")
         if type(agent.set_profile_info) == "function" then
@@ -695,6 +728,14 @@ local function run_impl(opts, callbacks, run_span)
         run = hook_opts,
     })
     msgs = messages_ctx.messages or msgs
+    if provider_name == "openai_siwc" then
+        local valid, message = require('agent.siwc_history').validate(msgs, active.account_id)
+        if not valid then
+            if callbacks.on_error then callbacks.on_error(message) end
+            if callbacks.on_done then callbacks.on_done({ok=false, error=message, error_category="configuration", text=""}) end
+            return false, message
+        end
+    end
 
     local review_settings, review_error = completion_review_settings(opts,profile,tonumber(opts.depth) or 0)
     local caps=config_table('capabilities')
@@ -1015,6 +1056,36 @@ the blocker through request_completion.]]})
                 return
             end
 
+            if provider_name == "openai_siwc" and result.ok == false and result.error ~= "cancelled" then
+                -- Never echo server/transport text: it may contain credentials.
+                local safe_codes = {subscription_sharing_usage_limit_exceeded="subscription_limit",
+                    subscription_sharing_usage_unavailable="usage_unavailable",
+                    insufficient_quota="quota", quota_exceeded="quota",
+                    rate_limit_exceeded="quota", max_output_tokens="incomplete",
+                    content_filter="incomplete"}
+                local raw = tostring(result.error or ""):lower()
+                local category = safe_codes[result.error_code]
+                if not category then
+                    if raw:find("response.incomplete", 1, true) or raw:find("without response.completed", 1, true) then
+                        category = "incomplete"
+                    elseif result.error_category == "transport" or retryable_stream_error(raw) or
+                        raw:find("http stream setup failed", 1, true) then
+                        category = "transport"
+                    else category = "protocol" end
+                end
+                local messages = {
+                    subscription_limit="SIWC ChatGPT plan usage limit reached; pause plan requests and check https://chatgpt.com/settings/usage (an app-specific limit may apply)",
+                    usage_unavailable="SIWC cannot check ChatGPT plan usage right now; credentials are preserved, retry later with bounded backoff",
+                    quota="SIWC quota/rate limit exceeded; check account limits before retrying",
+                    incomplete="SIWC response incomplete; reduce the request or retry",
+                    transport="SIWC connection error; check network access and retry",
+                    protocol="SIWC protocol error; retry or report an incompatible response",
+                }
+                result.error_category = category
+                result.error_code = safe_codes[result.error_code] and result.error_code or nil
+                result.error = messages[category] .. (result.error_code and (" (" .. result.error_code .. ")") or "")
+                result.text = ""
+            end
             if result.cancelled == true or result.error == "cancelled" then
                 result.ok = false
                 result.error = "cancelled"
@@ -1069,10 +1140,15 @@ the blocker through request_completion.]]})
                 logging.runtime_log("agent", "stream failed error=" .. logging.compact(message, 500))
                 if callbacks.on_error then callbacks.on_error(message) end
                 finished = true
-                finish({ok = false, error = message, error_category = result.error_category, text = result.text or ""})
+                finish({ok = false, error = message, error_category = result.error_category, error_code = result.error_code, text = result.text or ""})
                 return
             end
 
+            if provider_name == "openai_siwc" then
+                local native, message = require('agent.siwc_history').stamp(result.native_output, active.account_id)
+                if not native then stop_run(message, current_msgs, "protocol"); return end
+                result.native_output = native
+            end
             if result.tool_calls and #result.tool_calls > 0 then
                 opts.checkpoint_model_history = nil
                 if not preserve_reasoning and
@@ -1119,6 +1195,7 @@ the blocker through request_completion.]]})
                     review_controller = review,
                     reviewer_verdict = reviewer and (function(text) finalize_text(text, 'ready') end) or nil,
                     request_completion = review and attempt_completion or nil,
+                    assistant_native_output = result.native_output,
                     assistant_reasoning = preserve_reasoning and result.reasoning or nil,
                     assistant_reasoning_details = preserve_reasoning and result.reasoning_details or nil,
                     assistant_reasoning_field = active.reasoning_history_field,
@@ -1126,6 +1203,18 @@ the blocker through request_completion.]]})
                 })
             else
                 local final_text = result.text or ''
+                if final_text == '' and result.native_output then
+                    for _, item in ipairs(result.native_output.items or {}) do
+                        if item.type == 'message' then
+                            for _, part in ipairs(item.content or {}) do
+                                final_text = final_text .. (part.text or part.refusal or '')
+                            end
+                        end
+                    end
+                end
+                if result.native_output then
+                    current_msgs[#current_msgs + 1] = {role='assistant', content=final_text, responses=result.native_output}
+                end
                 if final_text == "" then
                     logging.runtime_log("agent", "stream completed with no text and no tool calls", "warn")
                     if run_state.empty_terminal_retries < 1 then
@@ -1205,8 +1294,16 @@ the blocker through request_completion.]]})
         local headers = {
             ["Content-Type"] = "application/json",
         }
-        if active.api_key and active.api_key ~= "" then
-            headers["Authorization"] = "Bearer " .. active.api_key
+        local managed_credential = false
+        if provider_name ~= "openai_siwc" then
+            local key, source = require("agent.credentials").resolve(provider_name, active)
+            managed_credential = key ~= nil and source ~= "environment" and source ~= "configuration"
+            if key and not managed_credential then headers["Authorization"] = "Bearer " .. key end
+        end
+
+        if provider_name == "opencode_go" then
+            headers["User-Agent"] = "capstan/" .. tostring((_G.capstan and _G.capstan.version) or "local")
+            headers["x-opencode-session"] = tostring(opts.process_owner)
         end
 
         local request_ctx = hooks.run("before_request", {
@@ -1251,6 +1348,48 @@ the blocker through request_completion.]]})
             finished = true
             finish({ok = false, error = message, error_category = "request", text = ""})
             return false, message
+        end
+        if provider_name ~= "openai_siwc" then
+            for _, message in ipairs(current_msgs) do
+                if message.responses ~= nil then
+                    stop_run("Incompatible native Responses history; start a new conversation before switching providers", current_msgs, "configuration")
+                    return
+                end
+            end
+            for _, message in ipairs(request.messages or {}) do
+                if message.responses ~= nil then
+                    stop_run("Incompatible native Responses history in request", current_msgs, "configuration")
+                    return
+                end
+            end
+        end
+        local siwc_registry
+        if provider_name == "openai_siwc" then
+            if endpoint ~= "https://api.openai.com/v1/responses" or
+                active.endpoint ~= "https://api.openai.com/v1/responses" then
+                stop_run("SIWC endpoint override is not allowed", current_msgs, "configuration")
+                return
+            end
+            if request.reasoning_effort ~= nil then
+                stop_run("Unsupported SIWC request field: reasoning_effort; use reasoning.effort", current_msgs, "configuration")
+                return
+            end
+            -- Validate the final (possibly hook-modified) effort against this model's capabilities.
+            local requested_effort = type(request.reasoning) == 'table' and request.reasoning.effort or nil
+            local valid_effort, effort_error = models.validate_siwc_effort(active, request.model, requested_effort)
+            if not valid_effort then
+                stop_run(effort_error, current_msgs, "configuration")
+                return
+            end
+            local ok, body_or_error, registry = pcall(require('agent.openai_siwc_responses').build_request,
+                {model=request.model, messages=request.messages, tools=request.tools, reasoning=request.reasoning})
+            if not ok then
+                stop_run("SIWC request unsupported: " .. tostring(body_or_error), current_msgs, "configuration")
+                return
+            end
+            request, siwc_registry = body_or_error, registry
+            -- Discard hook headers; only the canonical transport receives credentials.
+            headers = {["Content-Type"]="application/json"}
         end
         local _, invalid_utf8_bytes = utf8_sanitize.sanitize_values(request)
         if invalid_utf8_bytes > 0 then
@@ -1310,7 +1449,13 @@ the blocker through request_completion.]]})
             if finished or run_span.ended then return end
             local attempt_span = model_span
             local attempt_done = false
-            local parse_response = stream.stream(active, function(result, is_done)
+            local stream_factory = stream.stream
+            if provider_name == "openai_siwc" then
+                stream_factory = function(provider, callback, estimate, options)
+                    return require('agent.openai_siwc_responses').stream(provider, siwc_registry, callback, estimate, options)
+                end
+            end
+            local parse_response = stream_factory(active, function(result, is_done)
                 if attempt_done or run_span.ended or attempt_span.ended then return end
                 if is_done then attempt_done = true end
                 return on_result(result, is_done)
@@ -1346,11 +1491,29 @@ the blocker through request_completion.]]})
                 end
                 return dispatch_context(opts, deliver_response, table.unpack(args, 1, args.n))
             end
+            if managed_credential then
+                local key = require("agent.credentials").resolve(provider_name, active, endpoint)
+                if not key then
+                    stop_run("Managed key unavailable for this endpoint; reconnect the provider", current_msgs, "authentication")
+                    return
+                end
+                headers.Authorization = "Bearer " .. key
+            end
+            if provider_name == "openai_siwc" then
+                local credential, err = provider_config.siwc_access(active.account_id)
+                if not credential then stop_run(err, current_msgs, "authentication"); return end
+                headers.Authorization = "Bearer " .. credential.access
+            end
+            local http_options = {background = opts.background == true}
+            if provider_name == "openai_siwc" then
+                http_options.https_only = true
+                http_options.follow_redirects = false
+            end
             local transport_ok, transport_error = pcall(
                 http.post_stream,
                 endpoint, body, headers, response_callback,
                 stream_timeout_sec * 1000,
-                {background = opts.background == true})
+                http_options)
             if transport_ok then opts.transport_id = transport_error end
             if not transport_ok then
                 -- A synchronous transport may invoke our callback inline.
@@ -1358,7 +1521,8 @@ the blocker through request_completion.]]})
                 if run_span.ended then error(transport_error, 0) end
                 response_callback(
                     nil, true,
-                    "HTTP stream setup failed: " .. tostring(transport_error))
+                    provider_name == "openai_siwc" and "SIWC HTTP stream setup failed" or
+                    ("HTTP stream setup failed: " .. tostring(transport_error)))
             end
         end
         start_stream()
@@ -1810,6 +1974,7 @@ local function generate_session_title(parent_context, owner_session_id)
         tools = {},
         background = true,
         purpose = "title",
+        process_owner = session_id,
         telemetry_parent = parent_context,
         silent_tools = true,
         update_status = false,

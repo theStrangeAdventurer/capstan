@@ -5,6 +5,8 @@
 #include "plugins_internal.h"
 #include "agent.h"
 #include "app_config.h"
+#include "oauth_native.h"
+#include "oauth_store.h"
 #include "embedded_assets.h"
 #include "http.h"
 #include "telemetry.h"
@@ -117,6 +119,11 @@ static void register_embedded_modules(void) {
   preload_embedded_asset(L, "agent.state", "agent/state.lua");
   preload_embedded_asset(L, "agent.vcs", "agent/vcs.lua");
   preload_embedded_asset(L, "agent.auth", "agent/auth.lua");
+  preload_embedded_asset(L, "agent.credentials", "agent/credentials.lua");
+  preload_embedded_asset(L, "agent.oidc", "agent/oidc.lua");
+  preload_embedded_asset(L, "agent.siwc_history", "agent/siwc_history.lua");
+  preload_embedded_asset(L, "agent.openai_siwc_auth", "agent/openai_siwc_auth.lua");
+  preload_embedded_asset(L, "agent.openai_siwc_responses", "agent/openai_siwc_responses.lua");
   preload_embedded_asset(L, "agent.lua_serialize", "agent/lua_serialize.lua");
   preload_embedded_asset(L, "agent.shell_safe", "agent/shell_safe.lua");
   preload_embedded_asset(L, "agent.mcp", "agent/mcp.lua");
@@ -372,6 +379,19 @@ static int l_popup_error(lua_State *l) {
   return 0;
 }
 
+static int l_popup_secret(lua_State *l) {
+  const char *title = luaL_checkstring(l, 1);
+  const char *message = luaL_checkstring(l, 2);
+  char *value = tui_secret_prompt(title, message);
+  if (!value) { lua_pushnil(l); return 1; }
+  size_t length = strlen(value);
+  lua_pushlstring(l, value, length);
+  volatile char *wipe = value;
+  for (size_t i = 0; i < length; i++) wipe[i] = 0;
+  free(value);
+  return 1;
+}
+
 static int l_popup_choice(lua_State *l) {
   const char *title = luaL_checkstring(l, 1);
   const char *message = luaL_checkstring(l, 2);
@@ -622,6 +642,9 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_pushstring(L, app_workspace_root());
   lua_setfield(L, -2, "workspace_root");
 
+  lua_pushstring(L, APP_VERSION);
+  lua_setfield(L, -2, "version");
+
   lua_pushcfunction(L, l_capstan_state_path);
   lua_setfield(L, -2, "state_path");
 
@@ -662,6 +685,8 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_setfield(L, -2, "runtime_options");
 
   lua_setglobal(L, "capstan");
+  oauth_native_init(L);
+  oauth_store_init(L);
 }
 
 static void load_capstan_config(void) {
@@ -819,6 +844,8 @@ void plugins_init_with_options(const PluginsInitOptions *options) {
   lua_setfield(L, -2, "error");
   lua_pushcfunction(L, l_popup_choice);
   lua_setfield(L, -2, "choice");
+  lua_pushcfunction(L, l_popup_secret);
+  lua_setfield(L, -2, "secret");
   lua_setglobal(L, "popup");
 
   load_system_prompt(options);
