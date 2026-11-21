@@ -4,6 +4,9 @@
 #include <wchar.h>
 #include "popup_internal.h"
 #include "finder.h"
+#include "text_layout.h"
+#include "clipboard.h"
+#include <ctype.h>
 #include "utils.h"
 #include <limits.h>
 #include <stdlib.h>
@@ -29,6 +32,38 @@ long long popup_now_ms(void) {
 }
 
 int popup_row_prefix_width(int multi) { return multi ? 4 : 0; }
+
+size_t popup_message_offset(const char *text, int width, int row, int cell) {
+  size_t pos = 0;
+  while (row-- > 0 && text[pos]) {
+    pos += text_line_length(text + pos, width);
+    if (text[pos] == '\n') pos++;
+  }
+  size_t length = text_line_length(text + pos, width);
+  int chars = text_cell_to_char(text + pos, length, cell < 0 ? 0 : cell);
+  while (chars-- > 0 && length) {
+    int columns;
+    size_t n = text_character(text + pos, length, &columns);
+    pos += n;
+    length -= n;
+  }
+  return pos;
+}
+
+int popup_message_url(const char *text, size_t offset, size_t *start, size_t *end) {
+  size_t length = strlen(text);
+  if (offset >= length || isspace((unsigned char)text[offset])) return 0;
+  size_t a = offset, b = offset;
+  while (a && !isspace((unsigned char)text[a - 1])) a--;
+  while (b < length && !isspace((unsigned char)text[b])) b++;
+  /* Plain HTTP(S) tokens only; never execute arbitrary URI schemes. */
+  if (strncmp(text + a, "https://", 8) && strncmp(text + a, "http://", 7)) return 0;
+  for (size_t i = a; i < b; i++)
+    if ((unsigned char)text[i] < 32 || text[i] == 127) return 0;
+  *start = a;
+  *end = b;
+  return 1;
+}
 
 static int popup_char_width(const char *text, size_t bytes) {
   mbstate_t state = {0};
@@ -537,22 +572,15 @@ void popup_close_message(void) {
   g_msgpopup.created_at_ms = 0;
   g_msgpopup.auto_close_after_ms = 0;
   g_msgpopup.compact = 0;
+  g_msgpopup.text_width = g_msgpopup.content_rows = 0;
+  g_msgpopup.selection_start = g_msgpopup.selection_end = 0;
+  g_msgpopup.dragging = g_msgpopup.selection_moved = 0;
 }
 
 static void popup_copy_to_clipboard(const char *text) {
   if (getenv("CAPSTAN_DISABLE_CLIPBOARD"))
     return;
-#ifdef __APPLE__
-  FILE *p = popen("pbcopy", "w");
-#else
-  FILE *p = popen("xclip -selection clipboard 2>/dev/null", "w");
-  if (!p)
-    p = popen("xsel --clipboard 2>/dev/null", "w");
-#endif
-  if (p) {
-    fputs(text ? text : "", p);
-    pclose(p);
-  }
+  clipboard_write_text(text ? text : "");
 }
 
 static void popup_copy_message_and_ack(void) {
@@ -575,21 +603,24 @@ static void popup_copy_message_and_ack(void) {
 }
 
 int popup_message_handle_key(int ch) {
+  if (!g_msgpopup.is_error && (ch == 'c' || ch == 'y')) {
+    size_t a = g_msgpopup.selection_start, b = g_msgpopup.selection_end;
+    if (a > b) { size_t tmp = a; a = b; b = tmp; }
+    char *copy = my_strdup(g_msgpopup.text);
+    if (copy) {
+      if (a != b) { memmove(copy, copy + a, b - a); copy[b - a] = '\0'; }
+      popup_copy_to_clipboard(copy);
+      free(copy);
+    }
+    return 1;
+  }
   if (g_msgpopup.is_error && (ch == 'c' || ch == 'C' || ch == 'y' || ch == 'Y')) {
     popup_copy_message_and_ack();
     return 0;
   }
 #ifdef POPUP_NCURSES
-  if (g_msgpopup.is_error && ch == KEY_MOUSE) {
-    MEVENT event;
-    if (getmouse(&event) == OK &&
-        (event.bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED |
-                         BUTTON1_RELEASED))) {
-      popup_copy_message_and_ack();
-      return 0;
-    }
-    return 1;
-  }
+  if (ch == KEY_MOUSE)
+    return popup_message_mouse();
 #endif
   if (ch == '\n' || ch == '\r' || ch == 27) {
     popup_close_message();

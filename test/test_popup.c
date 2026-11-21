@@ -681,6 +681,9 @@ static MunitResult test_text_cells(const MunitParameter p[], void *d) {
   if (!locale) locale = setlocale(LC_CTYPE, "en_US.UTF-8");
   munit_assert_not_null(locale);
   int width;
+  munit_assert_size(popup_message_offset("a界e\xcc\x81z\nпривет", 4, 0, 3), ==, 4);
+  munit_assert_size(popup_message_offset("a界e\xcc\x81z\nпривет", 4, 1, 0), ==, 7);
+  munit_assert_size(popup_message_offset("a界e\xcc\x81z\nпривет", 4, 2, 2), ==, 13);
   munit_assert_int(popup_text_clip("привет", 3, 0, &width), ==, 6);
   munit_assert_int(width, ==, 3);
   munit_assert_int(popup_text_clip("a界b", 2, 0, &width), ==, 1);
@@ -698,7 +701,39 @@ static MunitResult test_text_cells(const MunitParameter p[], void *d) {
   return MUNIT_OK;
 }
 
+static MunitResult test_message_source_offsets(const MunitParameter p[], void *d) {
+  (void)p; (void)d;
+  const char *text = "Go:\nhttps://example.test/auth?state=abc%20def&nonce=xyz\nDone";
+  size_t a, b;
+  for (int width = 1; width <= 80; width++) {
+    size_t pos = 0;
+    for (int row = 0; text[pos]; row++) {
+      munit_assert_size(popup_message_offset(text, width, row, 0), ==, pos);
+      size_t end = popup_message_offset(text, width, row, width);
+      munit_assert_size(end, >=, pos);
+      /* Every displayed URL fragment resolves to the original full token. */
+      for (size_t i = pos; i < end; i++) {
+        if (i >= 4 && i < strlen(text) - 5) {
+          munit_assert_true(popup_message_url(text, i, &a, &b));
+          munit_assert_size(a, ==, 4);
+          munit_assert_size(b, ==, strlen(text) - 5);
+        }
+      }
+      pos = end;
+      if (text[pos] == '\n') pos++;
+    }
+  }
+  munit_assert_false(popup_message_url(text, 3, &a, &b));
+  munit_assert_false(popup_message_url(text, strlen(text), &a, &b));
+  munit_assert_false(popup_message_url("file:///tmp/test", 4, &a, &b));
+  munit_assert_false(popup_message_url("https://bad\033link", 8, &a, &b));
+  munit_assert_size(popup_message_offset("abc\ndef", 3, 1, 99), ==, 7);
+  munit_assert_size(popup_message_offset("abc", 3, 99, 99), ==, 3);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+  {"/message_source_offsets", test_message_source_offsets, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/text_cells", test_text_cells, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/filterable_utf8", test_filterable_utf8, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
   {"/open_active", test_open_active, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},

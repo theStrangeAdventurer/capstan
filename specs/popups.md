@@ -62,6 +62,23 @@ an explicit user decision (for example fix now versus ask later).
 ## Message popups
 
 Message popups close with `Enter` or `Esc` and scroll with arrows, `j`/`k`,
-`Ctrl-D`, and `Ctrl-U`. Error message popups can be copied to the system
-clipboard by clicking them or pressing `c`/`y`; after copying, Capstan shows a
-short non-modal acknowledgement.
+`Ctrl-D`, `Ctrl-U`, or the mouse wheel. Dragging over message text highlights
+and copies the selected source text on release, in either direction. Soft wraps
+never insert newlines into copied text; real newlines are preserved. Selection
+and wrapping use the same UTF-8/cell-aware layout as rendering, including after
+scrolling or resizing. Starting selection disables an error popup's expiry.
+`c`/`y` copies an informational popup's selection (or its full body if none).
+Error message popups retain whole-message `c`/`y` copying and a short non-modal
+acknowledgement; a plain click on non-link error text also copies the error.
+
+A plain click on any visible fragment of a whitespace-delimited HTTP(S) URL
+opens the complete source URL using the desktop browser opener, including all
+query parameters, even across multiple wrapped rows. Dragging a URL selects
+text instead of opening it. No arbitrary URI schemes or shell interpolation
+are used. This applies during blocking `/connect` authorization as well as the
+normal input loop; authorization URLs remain UI-only, not chat/history/log data.
+
+Regression tests cover source offsets and full URL resolution across widths,
+UTF-8 boundaries, real versus soft newlines, and non-HTTP/control rejection.
+PTY mouse tests cover rendered wrapped URLs and clipboard/browser arguments
+using isolated fake openers and clipboard commands, never real credentials.

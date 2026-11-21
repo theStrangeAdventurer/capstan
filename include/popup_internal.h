@@ -53,7 +53,17 @@ typedef struct {
   long long created_at_ms;
   int auto_close_after_ms;
   int compact;
+  int text_width, content_rows;
+  size_t selection_start, selection_end;
+  int dragging, selection_moved;
 } MsgPopup;
+
+/* Source byte offsets: soft wraps never become copied newlines. */
+size_t popup_message_offset(const char *text, int width, int row, int cell);
+int popup_message_url(const char *text, size_t offset, size_t *start, size_t *end);
+#ifdef POPUP_NCURSES
+int popup_message_mouse(void);
+#endif
 
 extern MsgPopup g_msgpopup;
 

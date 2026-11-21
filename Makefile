@@ -112,6 +112,7 @@ test-tui-input: $(TARGET)
 .PHONY: test-mouse-selection
 test-mouse-selection: $(TARGET)
 	python3 test/test_mouse_selection.py $(TARGET)
+	python3 test/test_popup_mouse.py $(TARGET)
 
 .PHONY: test-terminal-guard
 test-terminal-guard: $(TARGET)

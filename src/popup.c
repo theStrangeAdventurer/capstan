@@ -1,6 +1,13 @@
 #include "popup_internal.h"
 #include "tui.h"
 #include "utils.h"
+#include "text_layout.h"
+#include "clipboard.h"
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <errno.h>
 #include <ncursesw/curses.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,18 +31,10 @@ void popup_init(void) { popup_set_win_cleanup(popup_win_destroy); }
 
 static int msg_wrapped_line_count(const char *text, int max_text_w) {
   int line_count = 1;
-  int line_col = 0;
-  for (const char *p = text; *p; p++) {
-    if (*p == '\n') {
-      line_count++;
-      line_col = 0;
-    } else if ((*p & 0xC0) != 0x80) {
-      line_col++;
-      if (line_col > max_text_w) {
-        line_count++;
-        line_col = 1;
-      }
-    }
+  while (*text) {
+    text += text_line_length(text, max_text_w);
+    if (*text == '\n') text++;
+    if (*text) line_count++;
   }
   return line_count;
 }
@@ -280,6 +279,8 @@ void popup_render_message(void) {
   int content_rows = popup_h - 4;
   if (content_rows < 1)
     content_rows = 1;
+  g_msgpopup.text_width = max_text_w;
+  g_msgpopup.content_rows = content_rows;
   int max_scroll = line_count > content_rows ? line_count - content_rows : 0;
   if (g_msgpopup.scroll < 0)
     g_msgpopup.scroll = 0;
@@ -326,19 +327,22 @@ void popup_render_message(void) {
   int logical_y = 0;
   int ty = 2;
   while (*p && ty < popup_h - 2) {
-    const char *le = p;
-    int lc = 0;
-    while (*le && *le != '\n') {
-      int is_char = (*le & 0xC0) != 0x80;
-      if (is_char && lc >= max_text_w) break;
-      le++;
-      if (is_char) lc++;
-    }
+    const char *le = p + text_line_length(p, max_text_w);
     if (logical_y >= g_msgpopup.scroll) {
-      int text_w = max_text_w;
-      if (max_scroll > 0)
-        text_w--;
-      mvwaddnstr(win, ty, 2, p, le - p > text_w ? text_w : (int)(le - p));
+      size_t a = g_msgpopup.selection_start, b = g_msgpopup.selection_end;
+      if (a > b) { size_t tmp = a; a = b; b = tmp; }
+      mvwaddnstr(win, ty, 2, p, (int)(le - p));
+      size_t start = (size_t)(p - g_msgpopup.text);
+      size_t end = (size_t)(le - g_msgpopup.text);
+      if (a < end && b > start) {
+        size_t left = a > start ? a : start;
+        size_t right = b < end ? b : end;
+        int x = text_columns(p, left - start);
+        int cells = text_columns(g_msgpopup.text + left, right - left);
+        if (cells > 0)
+          mvwchgat(win, ty, 2 + x, cells, A_REVERSE,
+                   g_msgpopup.is_error ? 6 : 5, NULL);
+      }
       ty++;
     }
     logical_y++;
@@ -362,11 +366,11 @@ void popup_render_message(void) {
   if (footer_w > 0) {
     const char *footer = NULL;
     if (g_msgpopup.is_error)
-      footer = max_scroll > 0 ? "click/c copy, arrows/j/k scroll, Enter close"
-                              : "click/c copy, Enter close";
+      footer = max_scroll > 0 ? "drag/c copy, arrows/j/k scroll, Enter close"
+                              : "drag/c copy, Enter close";
     else
-      footer = max_scroll > 0 ? "arrows/j/k scroll, Enter close"
-                              : "Enter close";
+      footer = max_scroll > 0 ? "click URL, drag/c copy, arrows scroll, Enter close"
+                              : "click URL, drag/c copy, Enter close";
     if (max_scroll > 0)
       mvwprintw(win, popup_h - 2, 2, "%.*s", footer_w, footer);
     else
@@ -382,4 +386,82 @@ void popup_render_message(void) {
   }
 
   wnoutrefresh(win);
+}
+
+/* The desktop opener receives one literal argv value, never shell syntax.
+ * Reparent it so a browser waiting for exit cannot stall the OAuth listener. */
+static void popup_open_url(const char *url) {
+  pid_t child = fork();
+  if (child == 0) {
+    pid_t opener = fork();
+    if (opener < 0) _exit(1);
+    if (opener > 0) _exit(0);
+    setsid();
+    int fd = open("/dev/null", O_RDWR);
+    if (fd >= 0) {
+      dup2(fd, STDIN_FILENO);
+      dup2(fd, STDOUT_FILENO);
+      dup2(fd, STDERR_FILENO);
+      if (fd > STDERR_FILENO) close(fd);
+    }
+#ifdef __APPLE__
+    execlp("open", "open", url, (char *)NULL);
+#else
+    execlp("xdg-open", "xdg-open", url, (char *)NULL);
+#endif
+    _exit(127);
+  }
+  if (child > 0)
+    while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+}
+
+int popup_message_mouse(void) {
+  MEVENT event;
+  if (getmouse(&event) != OK || !g_msgpopup.win) return 1;
+  int y, x;
+  getbegyx((WINDOW *)g_msgpopup.win, y, x);
+  int row = event.y - y - 2, cell = event.x - x - 2;
+  int inside = row >= 0 && row < g_msgpopup.content_rows &&
+               cell >= 0 && cell < g_msgpopup.text_width;
+  if (inside && (event.bstate & (BUTTON4_PRESSED | BUTTON5_PRESSED)))
+    return popup_message_handle_key(event.bstate & BUTTON4_PRESSED ? 'k' : 'j');
+  if (!inside && !g_msgpopup.dragging) return 1;
+  if (row < 0) row = 0;
+  if (row >= g_msgpopup.content_rows) row = g_msgpopup.content_rows - 1;
+  if (cell < 0) cell = 0;
+  if (cell > g_msgpopup.text_width) cell = g_msgpopup.text_width;
+  size_t offset = popup_message_offset(g_msgpopup.text, g_msgpopup.text_width,
+                                       g_msgpopup.scroll + row, cell);
+  if ((event.bstate & BUTTON1_PRESSED) && !g_msgpopup.dragging) {
+    g_msgpopup.dragging = 1;
+    g_msgpopup.selection_moved = 0;
+    g_msgpopup.selection_start = g_msgpopup.selection_end = offset;
+    /* Do not expire an error popup while the user is selecting it. */
+    g_msgpopup.auto_close_after_ms = 0;
+  }
+  if (g_msgpopup.dragging) {
+    g_msgpopup.selection_end = offset;
+    if (offset != g_msgpopup.selection_start) g_msgpopup.selection_moved = 1;
+  }
+  if (!(event.bstate & (BUTTON1_RELEASED | BUTTON1_CLICKED))) return 1;
+  int moved = g_msgpopup.dragging && g_msgpopup.selection_moved;
+  g_msgpopup.dragging = 0;
+  size_t a = g_msgpopup.selection_start, b = g_msgpopup.selection_end;
+  if (moved) {
+    if (a > b) { size_t tmp = a; a = b; b = tmp; }
+  } else if (!inside || !popup_message_url(g_msgpopup.text, offset, &a, &b)) {
+    if (inside && g_msgpopup.is_error) return popup_message_handle_key('c');
+    return 1;
+  }
+  char *text = malloc(b - a + 1);
+  if (!text) return 1;
+  memcpy(text, g_msgpopup.text + a, b - a);
+  text[b - a] = '\0';
+  if (moved) {
+    if (!getenv("CAPSTAN_DISABLE_CLIPBOARD")) clipboard_write_text(text);
+  } else {
+    popup_open_url(text);
+  }
+  free(text);
+  return 1;
 }
