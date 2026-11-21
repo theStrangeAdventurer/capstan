@@ -4,9 +4,21 @@
 
 The start screen explicitly points users to `/models` as the interactive way to
 choose a model. Typing `/models` and pressing Tab opens a fuzzy-search popup
-listing models returned by every configured provider's models API.
+listing the configured providers plus an `All providers` row. Choosing a
+provider loads only that provider's models — one catalog request — and shows
+the existing model popup; choosing `All providers` keeps the legacy combined
+fetch. Listing providers never touches a catalog API, so the first popup is
+instant.
 
-- Popup entries include the provider name and model label. Full catalogs come
+- The selected provider is carried in a drill value (`provider\t<profile>\t<name>/`)
+  that replaces the argument tail, together with the target profile, exactly
+  like the reasoning-effort drill. Fuzzy typing can also match a provider name
+  before any catalog is fetched.
+- Pressing Enter on a provider drill value, or invoking `/models <provider>`
+  without a model, is a no-op selection that suggests pressing Tab (or the
+  direct `/models <provider> <model-id>` form) instead of mis-setting the
+  provider name as a model id.
+- Model popup entries include the provider name and model label. Full catalogs come
   from provider API responses or an explicit provider `models` list. If neither
   source is available, the provider's configured `model` is still shown so
   every configured provider remains selectable.
@@ -82,6 +94,11 @@ listing models returned by every configured provider's models API.
 
 - `list()` fetches and normalizes the current provider's models.
 - `list_all()` fetches and normalizes models for all configured providers.
+- `providers()` returns the sorted configured provider names without any
+  catalog fetch.
+- `list_for(provider)` is the single-provider slice of `list_all`: the same
+  shaping, warnings and configured-model fallback, so the provider popup can
+  scope one catalog at a time.
 - `reasoning_efforts(provider, model_id)` reports the normalized effort list.
   A provider's explicit `default_reasoning_efforts` declaration applies when
   its models endpoint omits OpenAI-style `supported_parameters` metadata. When
@@ -110,7 +127,11 @@ may define `models_endpoint` in `config.lua` when that convention is wrong.
 
 `make test-http-lua` covers provider API response normalization, the mandatory
 reasoning-effort drill-down, direct-command enforcement, handler-driven runtime
-model selection, and selected-model state persistence. `test_reasoning_shortcuts.lua`
+model selection, and selected-model state persistence. The models plugin suite
+also covers the provider-first popup: providers listed before any catalog
+fetch, scoping to one provider, `All providers` fallback, profile riding in
+the drill value, and Enter on a provider (with or without a drill value) being
+a guarded no-op. `test_reasoning_shortcuts.lua`
 adds ladder, cache, profile isolation, launch override, request snapshot, and save
 failure coverage. `test_reasoning_memory.lua` covers A/B/A restoration, provider
 and profile isolation, restart, legacy migration, explicit reset, command/popup

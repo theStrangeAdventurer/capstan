@@ -62,6 +62,19 @@ local function unpack_packed(value)
 	return nil
 end
 
+-- Provider drill: the first popup stage. The selected value replaces the
+-- argument tail, so the profile rides along inside the value.
+local function provider_drill_value(profile, provider)
+	return table.concat({"provider", profile or "", provider}, "\t") .. "/"
+end
+
+local function unpack_provider_drill(value)
+	if type(value) ~= "string" or value:sub(-1) ~= "/" then return nil end
+	local profile, provider = value:sub(1, -2):match("^provider\t([^\t]*)\t([^\t]+)$")
+	if not provider then return nil end
+	return profile ~= "" and profile or nil, provider
+end
+
 local function selected_kind(args)
 	if args and args[1] == "--profile" then
 		return "profile", args[2]
@@ -103,8 +116,34 @@ plugin.autocomplete = {
 			end
 			return items
 		end
+		-- Provider first: before any catalog is fetched, the popup offers the
+		-- configured providers; a drill value scopes the model list to one
+		-- provider's catalog instead of loading every provider at once.
+		local stage_profile, stage_provider = unpack_provider_drill(args and args[1])
+		if stage_provider then
+			profile = stage_profile or profile
+		end
 		local list, err
-		if models.list_all then
+		if stage_provider then
+			if stage_provider ~= "all" and models.list_for then
+				list, err = models.list_for(stage_provider)
+			else
+				list, err = models.list_all()
+			end
+		elseif models.providers then
+			local items = {}
+			for _, name in ipairs(models.providers()) do
+				items[#items + 1] = {
+					text = name,
+					value = provider_drill_value(profile, name),
+				}
+			end
+			items[#items + 1] = {
+				text = "All providers",
+				value = provider_drill_value(profile, "all"),
+			}
+			return items
+		elseif models.list_all then
 			list, err = models.list_all()
 		else
 			list, err = models.list()
@@ -144,6 +183,19 @@ function plugin.handler(ctx)
 	local models = runtime()
 	if args[1] and args[1]:match("^%-%-") and args[1] ~= "--profile" then
 		return ctx:replace("Unknown option: " .. args[1])
+	end
+	local _, drill_provider = unpack_provider_drill(args[1])
+	if drill_provider then
+		return ctx:replace("Press Tab to list models for " ..
+			(drill_provider == "all" and "all providers" or drill_provider) .. ".")
+	end
+	if args[1] and not args[2] and models and models.providers then
+		for _, name in ipairs(models.providers()) do
+			if args[1] == name then
+				return ctx:replace("Model is required: /models " .. name ..
+					" <model-id>, or press Tab to list its models.")
+			end
+		end
 	end
 	local kind, profile, provider, model, reasoning_effort = unpack_packed(args[1])
 	if not kind then

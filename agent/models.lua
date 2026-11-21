@@ -352,46 +352,61 @@ function M.step_reasoning_effort(efforts, current, direction)
     return current
 end
 
+local function list_provider_models(runtime, provider_name, items, warnings)
+    local provider = runtime.providers[provider_name]
+    local list, err = M.list(runtime, provider_name)
+    if err and (provider_name == 'openai_siwc' or provider.catalog_format == 'opencode_go') then
+        warnings[#warnings + 1] = err
+    end
+    list = list or {}
+    local seen = {}
+    for _, model in ipairs(list) do
+        seen[model.id] = true
+        table.insert(items, {
+            provider = provider_name,
+            id = model.id,
+            text = string.format("%s/%s", provider_name, model.text or model.id),
+            context_limit = model.context_limit,
+            reasoning_efforts = model.reasoning_efforts,
+        })
+    end
+
+    local configured_model = provider and provider.model
+    if provider_name ~= "openai_siwc" and provider.catalog_format ~= 'opencode_go' and
+        type(configured_model) == "string" and configured_model ~= "" and not seen[configured_model] then
+        table.insert(items, {
+            provider = provider_name,
+            id = configured_model,
+            text = string.format("%s/%s", provider_name, configured_model),
+            context_limit = provider.context_limit or 0,
+            reasoning_efforts = model_reasoning_efforts(provider, {id = configured_model}),
+        })
+    end
+end
+
 function M.list_all(runtime)
     local items, warnings = {}, {}
-    local provider_names = {}
-    for provider_name, _ in pairs(runtime.providers or {}) do
-        table.insert(provider_names, provider_name)
-    end
-    table.sort(provider_names)
-
-    for _, provider_name in ipairs(provider_names) do
-        local provider = runtime.providers[provider_name]
-        local list, err = M.list(runtime, provider_name)
-        if err and (provider_name == 'openai_siwc' or provider.catalog_format == 'opencode_go') then
-            warnings[#warnings + 1] = err
-        end
-        list = list or {}
-        local seen = {}
-        for _, model in ipairs(list) do
-            seen[model.id] = true
-            table.insert(items, {
-                provider = provider_name,
-                id = model.id,
-                text = string.format("%s/%s", provider_name, model.text or model.id),
-                context_limit = model.context_limit,
-                reasoning_efforts = model.reasoning_efforts,
-            })
-        end
-
-        local configured_model = provider and provider.model
-        if provider_name ~= "openai_siwc" and provider.catalog_format ~= 'opencode_go' and
-            type(configured_model) == "string" and configured_model ~= "" and not seen[configured_model] then
-            table.insert(items, {
-                provider = provider_name,
-                id = configured_model,
-                text = string.format("%s/%s", provider_name, configured_model),
-                context_limit = provider.context_limit or 0,
-                reasoning_efforts = model_reasoning_efforts(provider, {id = configured_model}),
-            })
-        end
+    for _, provider_name in ipairs(M.provider_names(runtime)) do
+        list_provider_models(runtime, provider_name, items, warnings)
     end
     return items, #warnings > 0 and table.concat(warnings, '; ') or nil
+end
+
+-- Single-provider slice of list_all: same shaping, warnings and configured
+-- model fallback, so the /models popup can scope one catalog at a time.
+function M.list_all_for(runtime, provider_name)
+    local items, warnings = {}, {}
+    list_provider_models(runtime, provider_name, items, warnings)
+    return items, #warnings > 0 and table.concat(warnings, '; ') or nil
+end
+
+function M.provider_names(runtime)
+    local names = {}
+    for provider_name, _ in pairs(runtime.providers or {}) do
+        table.insert(names, provider_name)
+    end
+    table.sort(names)
+    return names
 end
 
 function M.reasoning_efforts(runtime, provider_name, model)
@@ -529,6 +544,12 @@ function M.install_runtime_api(runtime)
         end,
         list_all = function()
             return M.list_all(runtime)
+        end,
+        providers = function()
+            return M.provider_names(runtime)
+        end,
+        list_for = function(provider_name)
+            return M.list_all_for(runtime, provider_name)
         end,
         configured = function()
             local items = {}

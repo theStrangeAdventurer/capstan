@@ -260,10 +260,18 @@ local picker_runtime = {providers = {openai_siwc = siwc,
     fixture = {models = {{id = 'other-model'}}}}}
 local picker = dofile('plugins/models.lua')
 models.install_runtime_api(picker_runtime)
+-- Provider-first: the popup lists providers before fetching any catalog.
+local provider_rows = picker.autocomplete.fetch({})
+assert(#provider_rows == 3 and provider_rows[1].text == 'fixture' and
+    provider_rows[2].text == 'openai_siwc' and provider_rows[3].text == 'All providers')
 local function check_picker_warning(expected)
     local items, warning = models.list_all(picker_runtime)
     assert(warning == expected and #items == 1 and items[1].provider == 'fixture')
-    local rows = picker.autocomplete.fetch({})
+    -- Drilling the failing provider shows only the warning, no fallback rows.
+    local scoped = picker.autocomplete.fetch({provider_rows[2].value})
+    assert(#scoped == 1 and scoped[1].text == expected and scoped[1].value == '')
+    -- All providers keeps the combined warning row plus other providers' models.
+    local rows = picker.autocomplete.fetch({provider_rows[3].value})
     assert(#rows == 2 and rows[1].text == expected and rows[1].value == '')
     assert(rows[2].text:find('fixture/other-model', 1, true))
 end

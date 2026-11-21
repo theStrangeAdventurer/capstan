@@ -45,7 +45,12 @@ assert(effort() == 'high')
 
 -- The model popup bypasses the effort drill only for remembered tuples.
 local plugin = dofile('plugins/models.lua')
-local entries = plugin.autocomplete.fetch({})
+local all_value
+for _, row in ipairs(plugin.autocomplete.fetch({})) do
+    if row.text == 'All providers' then all_value = row.value end
+end
+assert(all_value, 'provider-first popup must offer All providers')
+local entries = plugin.autocomplete.fetch({all_value})
 local seen = {}
 for _, entry in ipairs(entries) do
     if entry.value == 'profile\timplement\topenrouter\ta' then seen.saved = true end

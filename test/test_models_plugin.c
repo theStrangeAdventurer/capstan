@@ -81,6 +81,36 @@ static int l_models_list_all(lua_State *L) {
   return 1;
 }
 
+static int l_models_providers(lua_State *L) {
+  lua_newtable(L);
+  lua_pushstring(L, "deepseek");
+  lua_rawseti(L, -2, 1);
+  lua_pushstring(L, "openrouter");
+  lua_rawseti(L, -2, 2);
+  return 1;
+}
+
+static int l_models_list_for(lua_State *L) {
+  const char *provider = luaL_checkstring(L, 1);
+  l_models_list_all(L);
+  lua_newtable(L);
+  int out = 0;
+  int n = (int)lua_rawlen(L, 2);
+  for (int i = 1; i <= n; i++) {
+    lua_rawgeti(L, 2, i);
+    lua_getfield(L, -1, "provider");
+    const char *item_provider = lua_tostring(L, -1);
+    if (item_provider && strcmp(item_provider, provider) == 0) {
+      lua_pop(L, 1);
+      lua_rawseti(L, -2, ++out);
+    } else {
+      lua_pop(L, 2);
+    }
+  }
+  lua_remove(L, -2);
+  return 1;
+}
+
 static int l_models_reasoning_efforts(lua_State *L) {
   const char *provider = luaL_checkstring(L, 1);
   const char *model = luaL_checkstring(L, 2);
@@ -166,6 +196,10 @@ static lua_State *new_state(void) {
   lua_setfield(L, -2, "list");
   lua_pushcfunction(L, l_models_list_all);
   lua_setfield(L, -2, "list_all");
+  lua_pushcfunction(L, l_models_providers);
+  lua_setfield(L, -2, "providers");
+  lua_pushcfunction(L, l_models_list_for);
+  lua_setfield(L, -2, "list_for");
   lua_pushcfunction(L, l_models_reasoning_efforts);
   lua_setfield(L, -2, "reasoning_efforts");
   lua_pushcfunction(L, l_models_set);
@@ -194,6 +228,37 @@ static void load_models_plugin(lua_State *L) {
   munit_assert_true(lua_istable(L, -1));
 }
 
+static MunitResult test_autocomplete_lists_providers_first(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_state();
+  load_models_plugin(L);
+
+  /* /models with no arguments offers providers before any catalog fetch. */
+  lua_getfield(L, -1, "autocomplete");
+  lua_getfield(L, -1, "fetch");
+  lua_newtable(L);
+  int rc = lua_pcall(L, 1, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_true(lua_istable(L, -1));
+  munit_assert_int((int)lua_rawlen(L, -1), ==, 3);
+  lua_rawgeti(L, -1, 1);
+  lua_getfield(L, -1, "text");
+  lua_getfield(L, -2, "value");
+  munit_assert_string_equal(lua_tostring(L, -2), "deepseek");
+  munit_assert_string_equal(lua_tostring(L, -1), "provider\tplan\tdeepseek/");
+  lua_pop(L, 3);
+  lua_rawgeti(L, -1, 3);
+  lua_getfield(L, -1, "text");
+  lua_getfield(L, -2, "value");
+  munit_assert_string_equal(lua_tostring(L, -2), "All providers");
+  munit_assert_string_equal(lua_tostring(L, -1), "provider\tplan\tall/");
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
 static MunitResult test_autocomplete_lists_runtime_models(
     const MunitParameter params[], void *data) {
   (void)params;
@@ -204,11 +269,13 @@ static MunitResult test_autocomplete_lists_runtime_models(
   lua_getfield(L, -1, "autocomplete");
   lua_getfield(L, -1, "fetch");
   lua_newtable(L);
+  lua_pushstring(L, "provider\tplan\tdeepseek/");
+  lua_rawseti(L, -2, 1);
   int rc = lua_pcall(L, 1, 1, 0);
   munit_assert_int(rc, ==, LUA_OK);
   munit_assert_true(lua_istable(L, -1));
-  munit_assert_int((int)lua_rawlen(L, -1), ==, 3);
-  lua_rawgeti(L, -1, 2);
+  munit_assert_int((int)lua_rawlen(L, -1), ==, 2);
+  lua_rawgeti(L, -1, 1);
   lua_getfield(L, -1, "text");
   lua_getfield(L, -2, "value");
   munit_assert_string_equal(lua_tostring(L, -2),
@@ -230,6 +297,8 @@ static MunitResult test_autocomplete_requires_reasoning_effort_step(
   lua_getfield(L, -1, "autocomplete");
   lua_getfield(L, -1, "fetch");
   lua_newtable(L);
+  lua_pushstring(L, "provider\tplan\tall/");
+  lua_rawseti(L, -2, 1);
   int rc = lua_pcall(L, 1, 1, 0);
   munit_assert_int(rc, ==, LUA_OK);
   lua_rawgeti(L, -1, 3);
@@ -278,7 +347,8 @@ static MunitResult test_autocomplete_has_no_weak_mode(
   lua_getfield(L, -1, "text");
   lua_getfield(L, -2, "value");
   munit_assert_null(strstr(lua_tostring(L, -2), "weak  "));
-  munit_assert_true(strstr(lua_tostring(L, -1), "profile\tplan\t") == lua_tostring(L, -1));
+  munit_assert_true(strstr(lua_tostring(L, -1), "provider\tplan\t") ==
+                    lua_tostring(L, -1));
 
   lua_close(L);
   return MUNIT_OK;
@@ -293,6 +363,8 @@ static MunitResult test_autocomplete_marks_profile_mode(
 
   lua_getfield(L, -1, "autocomplete");
   lua_getfield(L, -1, "fetch");
+
+  /* --profile rides inside the provider drill value. */
   lua_newtable(L);
   lua_pushstring(L, "--profile");
   lua_rawseti(L, -2, 1);
@@ -301,11 +373,65 @@ static MunitResult test_autocomplete_marks_profile_mode(
   int rc = lua_pcall(L, 1, 1, 0);
   munit_assert_int(rc, ==, LUA_OK);
   lua_rawgeti(L, -1, 1);
+  lua_getfield(L, -1, "value");
+  munit_assert_string_equal(lua_tostring(L, -1), "provider\tplan\tdeepseek/");
+  lua_pop(L, 3);
+
+  /* Scoping to that provider keeps profile-labeled model items. */
+  lua_getfield(L, -1, "fetch");
+  lua_newtable(L);
+  lua_pushstring(L, "provider\tplan\tdeepseek/");
+  lua_rawseti(L, -2, 1);
+  rc = lua_pcall(L, 1, 1, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  lua_rawgeti(L, -1, 1);
   lua_getfield(L, -1, "text");
   lua_getfield(L, -2, "value");
-  munit_assert_true(strstr(lua_tostring(L, -2), "plan  ") != NULL);
-  munit_assert_true(strstr(lua_tostring(L, -1), "profile\tplan\t") ==
-                    lua_tostring(L, -1));
+  munit_assert_string_equal(lua_tostring(L, -2), "plan  deepseek/deepseek-chat");
+  munit_assert_string_equal(lua_tostring(L, -1),
+                            "profile\tplan\tdeepseek\tdeepseek-chat");
+
+  lua_close(L);
+  return MUNIT_OK;
+}
+
+static MunitResult test_handler_requires_model_for_provider(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+  lua_State *L = new_state();
+  load_models_plugin(L);
+
+  /* A provider name alone is not a model; suggest the popup instead. */
+  lua_getfield(L, -1, "handler");
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "deepseek");
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "args");
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+  int rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_true(strstr(lua_tostring(L, -2),
+                           "Model is required: /models deepseek") != NULL);
+  munit_assert_string_equal(selected_profile_model, "");
+  lua_pop(L, 2);
+
+  /* Enter on a provider drill value keeps the selection a no-op. */
+  lua_getfield(L, -1, "handler");
+  lua_newtable(L);
+  lua_newtable(L);
+  lua_pushstring(L, "provider\tplan\tdeepseek/");
+  lua_rawseti(L, -2, 1);
+  lua_setfield(L, -2, "args");
+  lua_pushcfunction(L, l_ctx_replace);
+  lua_setfield(L, -2, "replace");
+  rc = lua_pcall(L, 1, 2, 0);
+  munit_assert_int(rc, ==, LUA_OK);
+  munit_assert_true(strstr(lua_tostring(L, -2),
+                           "Press Tab to list models for deepseek") != NULL);
+  munit_assert_string_equal(selected_profile_model, "");
 
   lua_close(L);
   return MUNIT_OK;
@@ -506,6 +632,9 @@ static MunitResult test_models_plugin_is_no_history_command(
 }
 
 static MunitTest tests[] = {
+    {"/autocomplete_lists_providers_first",
+     test_autocomplete_lists_providers_first, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/autocomplete_lists_runtime_models", test_autocomplete_lists_runtime_models,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/autocomplete_requires_reasoning_effort_step",
@@ -515,6 +644,9 @@ static MunitTest tests[] = {
      NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/autocomplete_marks_profile_mode", test_autocomplete_marks_profile_mode,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
+    {"/handler_requires_model_for_provider",
+     test_handler_requires_model_for_provider, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/handler_sets_current_profile_model",
      test_handler_sets_current_profile_model, NULL, NULL,
      MUNIT_TEST_OPTION_NONE, NULL},

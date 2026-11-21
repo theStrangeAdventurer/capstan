@@ -49,7 +49,13 @@ assert(models.ensure_context_limit(provider) == 1000000 and requests == 1)
 assert(table.concat(models.cached_reasoning_efforts(runtime,'opencode_go','claude-fixture'), ',') == 'low,medium,high')
 models.install_runtime_api(runtime)
 local plugin = dofile('plugins/models.lua')
-local picker = plugin.autocomplete.fetch({})
+-- Provider-first: listing providers touches no catalog until one is chosen.
+local provider_rows = plugin.autocomplete.fetch({})
+assert(#provider_rows == 2 and provider_rows[1].text == 'opencode_go' and
+    provider_rows[2].text == 'All providers')
+assert(requests == 1)
+local all_value = provider_rows[2].value
+local picker = plugin.autocomplete.fetch({all_value})
 assert(#picker == 3 and picker[1].text:find('opencode_go/claude-fixture',1,true))
 assert(picker[1].value:find('efforts',1,true))
 assert(requests == 1)
@@ -66,7 +72,7 @@ assert(models.ensure_context_limit(provider) == 4321 and requests == 1)
 clock = clock + 301; status = 503
 list, err = models.list(runtime,'opencode_go')
 assert(#list == 3 and err:find('cached',1,true))
-picker = plugin.autocomplete.fetch({})
+picker = plugin.autocomplete.fetch({all_value})
 assert(#picker == 4 and picker[1].value == '' and picker[1].text:find('HTTP 503',1,true))
 status, body = 200, '{broken'
 list, err = models.list(runtime,'opencode_go')
@@ -80,7 +86,7 @@ provider.models_endpoint = 'https://fixture.invalid/models'
 status, body = 403, 'fixture-must-not-be-sent'
 list, err = models.list(runtime,'opencode_go')
 assert(list == nil and err:find('HTTP 403',1,true) and not err:find(body,1,true))
-picker = plugin.autocomplete.fetch({})
+picker = plugin.autocomplete.fetch({all_value})
 assert(#picker == 1 and picker[1].value == '')
 status, body = 200, '{"data":[]}'
 list, err = models.list(runtime,'opencode_go')
