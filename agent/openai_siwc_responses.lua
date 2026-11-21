@@ -7,7 +7,7 @@ local function check(ok, message) if not ok then error(message, 0) end end
 local function string_value(v) return type(v) == 'string' and v ~= '' end
 local function copy(v)
     if type(v) ~= 'table' then return v end
-    local out = {}; for k, x in pairs(v) do out[k] = copy(x) end; return out
+    local out = {}; for k, x in pairs(v) do out[k] = copy(x) end; return setmetatable(out, getmetatable(v))
 end
 local function array(v)
     if type(v) ~= 'table' then return false end
@@ -32,7 +32,7 @@ local function equal(a, b)
 end
 local function reasoning(item)
     check(string_value(item.id) and array(item.summary), 'Invalid native reasoning item')
-    local out = {type = 'reasoning', id = item.id, summary = {}}
+    local out = {type = 'reasoning', id = item.id, summary = json.array({})}
     for _, part in ipairs(item.summary) do
         check(part.type == 'summary_text' and type(part.text) == 'string', 'Invalid reasoning summary')
         out.summary[#out.summary + 1] = {type = 'summary_text', text = part.text}
@@ -43,7 +43,7 @@ local function reasoning(item)
     end
     if item.content ~= nil then
         check(array(item.content), 'Invalid reasoning content')
-        out.content = {}
+        out.content = json.array({})
         for _, part in ipairs(item.content) do
             check(part.type == 'reasoning_text' and type(part.text) == 'string', 'Invalid reasoning content')
             out.content[#out.content + 1] = {type = 'reasoning_text', text = part.text}
@@ -70,11 +70,16 @@ local function native_item(item)
     check(item.phase == nil or item.phase == 'commentary' or item.phase == 'final_answer',
         'Invalid assistant phase')
     local out = {type = 'message', role = 'assistant', id = item.id, status = item.status,
-        phase = item.phase, content = {}}
+        phase = item.phase, content = json.array({})}
     for _, part in ipairs(item.content) do
         if part.type == 'output_text' then
             check(type(part.text) == 'string', 'Invalid output text')
-            out.content[#out.content + 1] = {type = 'output_text', text = part.text, annotations = copy(part.annotations or {})}
+            check(part.annotations == nil or array(part.annotations), 'Invalid output annotations')
+            local annotations = json.array(copy(part.annotations or {}))
+            for _, annotation in ipairs(annotations) do
+                check(type(annotation) == 'table' and not array(annotation), 'Invalid output annotation')
+            end
+            out.content[#out.content + 1] = {type = 'output_text', text = part.text, annotations = annotations}
         else
             check(part.type == 'refusal' and type(part.refusal) == 'string', 'Unsupported output content')
             out.content[#out.content + 1] = {type = 'refusal', refusal = part.refusal}
@@ -95,7 +100,7 @@ function M.build_request(opts)
             'Unsupported SIWC request option: ' .. tostring(k))
     end
     check(string_value(opts.model) and array(opts.messages), 'Model and full messages array required')
-    local body = {model = opts.model, store = false, stream = true, input = {},
+    local body = {model = opts.model, store = false, stream = true, input = json.array({}),
         include = {'reasoning.encrypted_content'}}
     if opts.reasoning ~= nil then
         check(type(opts.reasoning) == 'table', 'Unsupported SIWC reasoning: expected object')
@@ -207,8 +212,19 @@ end
 
 -- Same callback signature as agent.stream.stream; only final ok=true results may
 -- dispatch tools or persist native_output. Text deltas before that are provisional.
-function M.stream(provider, registry, on_result, initial_prompt_tokens, run_opts)
-    local terminal, failure, code, native, final_calls
+function M.stream(provider, registry, on_result, initial_prompt_tokens, run_opts, sensitive_values)
+    local diagnostic, transport_code
+    local function safe(value, limit)
+        local text = tostring(value or '')
+        for _, secret in ipairs(sensitive_values or {}) do
+            if type(secret) == 'string' and secret ~= '' then
+                text = text:gsub(secret:gsub('(%W)', '%%%1'), '[REDACTED]')
+            end
+        end
+        text = require('agent.redact').text(text):gsub('%c', ' ')
+        return text:sub(1, limit or 500)
+    end
+    local terminal, failure, code, native, final_calls, failure_detail
     local done_items, seen_calls, added_items, deltas, final_arguments = {}, {}, {}, {}, {}
     local call_ids = {}
     local function observe(item)
@@ -254,6 +270,11 @@ function M.stream(provider, registry, on_result, initial_prompt_tokens, run_opts
         if kind == 'error' or kind == 'response.failed' or kind == 'response.incomplete' then
             local detail = event.response and (event.response.error or event.response.incomplete_details) or event
             detail = type(detail) == 'table' and detail or {}
+            local fields = {}
+            for _, field in ipairs({'code', 'param', 'reason', 'message'}) do
+                if type(detail[field]) == 'string' then fields[#fields + 1] = field .. ': ' .. safe(detail[field]) end
+            end
+            failure_detail = failure_detail or table.concat(fields, '; ')
             fail(kind .. ': ' .. tostring(detail.code or detail.reason or detail.message or 'unknown'), detail.code)
             terminal = kind
             return nil
@@ -345,7 +366,11 @@ function M.stream(provider, registry, on_result, initial_prompt_tokens, run_opts
             result.ok = false
             result.error = result.error or failure or 'Stream ended without response.completed'
             result.error_category = result.error_category or 'protocol'
-            result.error_code = code
+            result.error_code = transport_code or code
+            result.siwc_error_detail = failure_detail
+            result.siwc_diagnostic = diagnostic ~= nil
+            result.error = diagnostic or result.error
+            result.text = ''
             result.tool_calls, result.native_output = nil, nil
             if result.metrics then result.metrics.request_outcome = 'incomplete' end
         else
@@ -359,8 +384,40 @@ function M.stream(provider, registry, on_result, initial_prompt_tokens, run_opts
     return function(raw, done, err, body, headers, transport)
         -- Shared framing ignores raw on EOF; this adapter accepts a final packet.
         if done and not err and type(raw) == 'string' and raw ~= '' then callback(raw, false) end
-        if err then
-            err = err == 'cancelled' and 'cancelled' or 'SIWC connection error'
+        if err and err ~= 'cancelled' then
+            local status = type(transport) == 'table' and transport.http_status
+            local curl_code = type(transport) == 'table' and transport.curl_code
+            -- Project only diagnostic fields, never echo arbitrary bodies or headers.
+            local ok, decoded = pcall(json.decode, type(body) == 'string' and body or '')
+            local detail = ok and type(decoded) == 'table' and decoded
+            local error_object = detail and type(detail.error) == 'table' and detail.error
+            local projected = {}
+            for _, field in ipairs({'code', 'param', 'message'}) do
+                if error_object and type(error_object[field]) == 'string' then
+                    projected[#projected + 1] = field .. ': ' .. safe(error_object[field])
+                    if field == 'code' then transport_code = safe(error_object[field], 128) end
+                end
+            end
+            if detail and type(detail.detail) == 'string' then
+                projected[#projected + 1] = safe(detail.detail)
+            end
+            if type(status) == 'number' and status >= 300 then
+                err = 'SIWC HTTP ' .. tostring(status)
+                if #projected == 0 then projected[1] = 'No structured error details returned' end
+            else
+                err = 'SIWC ' .. safe(err)
+                if type(curl_code) == 'number' and curl_code ~= 0 then
+                    err = err .. ' (cURL ' .. tostring(curl_code) .. ')'
+                end
+            end
+            if #projected > 0 then err = err .. '; ' .. table.concat(projected, '; ') end
+            if type(headers) == 'table' then
+                local request_id = headers['x-request-id'] or headers['request-id'] or headers['openai-request-id']
+                if type(request_id) == 'string' then err = err .. '; request id: ' .. safe(request_id, 160) end
+            end
+            diagnostic = err
+            body, headers = nil, nil
+        elseif err then
             body, headers = nil, nil
         end
         callback(done and '' or raw, done, err, body, headers, transport)

@@ -143,6 +143,38 @@ r = collect(wire({{type = 'response.output_text.delta', delta = 'ok'},
         {type = 'message', role = 'assistant', id = 'msg_fixture', status = 'completed',
             content = {{type = 'output_text', text = 'ok', annotations = {}}}}}}}}, '\n\n'))
 assert(r.ok and r.text == 'ok' and r.tool_calls == nil and r.metrics.usage == nil)
+-- Second-turn wire JSON must retain array types, including restored legacy {} fields.
+for _, annotations in ipairs({false, {}, json.array({}), {{type='url_citation',
+    start_index=0, end_index=2, title='Fixture', url='https://example.invalid'}}}) do
+    local text = {type='output_text', text='ok'}
+    if annotations then text.annotations = annotations end
+    local item = {type='message', id='second-turn', role='assistant', status='completed', content={text}}
+    local result = collect(wire({{type='response.completed', response={status='completed', output={
+        {type='reasoning', id='second-reason', summary={}, content={}, encrypted_content='fixture'}, item}}}}, '\n\n'))
+    assert(result.ok)
+    for _, native in ipairs({result.native_output, json.decode(json.encode(result.native_output))}) do
+        local replay = adapter.build_request({model='fixture', messages={
+            {role='user', content='Hello'}, {role='assistant', responses=native},
+            {role='user', content='Again'}}})
+        local encoded = json.encode(replay)
+        assert(encoded:find('"summary":[]', 1, true) and encoded:find('"content":[]', 1, true))
+        local actual = json.decode(encoded).input[3].content[1].annotations
+        assert(#actual == (annotations and #annotations or 0))
+        if #actual == 0 then
+            assert(json.encode(actual) == '[]')
+        else
+            for key, value in pairs(annotations[1]) do assert(actual[1][key] == value) end
+            replay.input[3].content[1].annotations[1].title = 'changed'
+            assert(native.items[2].content[1].annotations[1].title == 'Fixture')
+        end
+    end
+end
+for _, annotations in ipairs({true, 'invalid', {type='url_citation'}, {'invalid'}}) do
+    rejects(function() adapter.build_request({model='fixture', messages={{role='assistant', responses={
+        format=adapter.history_format, tool_names={}, items={{type='message', role='assistant',
+            content={{type='output_text', text='ok', annotations=annotations}}}}}}}}) end, 'Invalid output annotation')
+end
+assert(json.encode(adapter.build_request({model='fixture', messages={}})):find('"input":[]', 1, true))
 -- Native message phases survive done/completed snapshots, JSON persistence and replay.
 for _, phase in ipairs({'commentary', 'final_answer', false}) do
     local item = {type='message', id='phase-message', role='assistant', status='completed',

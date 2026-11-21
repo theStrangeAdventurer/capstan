@@ -1056,7 +1056,8 @@ the blocker through request_completion.]]})
                 return
             end
 
-            if provider_name == "openai_siwc" and result.ok == false and result.error ~= "cancelled" then
+            if provider_name == "openai_siwc" and result.ok == false and result.error ~= "cancelled"
+                and not result.siwc_diagnostic then
                 -- Never echo server/transport text: it may contain credentials.
                 local safe_codes = {subscription_sharing_usage_limit_exceeded="subscription_limit",
                     subscription_sharing_usage_unavailable="usage_unavailable",
@@ -1084,6 +1085,9 @@ the blocker through request_completion.]]})
                 result.error_category = category
                 result.error_code = safe_codes[result.error_code] and result.error_code or nil
                 result.error = messages[category] .. (result.error_code and (" (" .. result.error_code .. ")") or "")
+                if result.siwc_error_detail and result.siwc_error_detail ~= '' then
+                    result.error = result.error .. '; ' .. result.siwc_error_detail
+                end
                 result.text = ""
             end
             if result.cancelled == true or result.error == "cancelled" then
@@ -1122,7 +1126,8 @@ the blocker through request_completion.]]})
             if result.ok == false then
                 local message = result.error or "agent stream failed"
                 if not stream_emitted_text and stream_attempt <= max_stream_retries and
-                    retryable_stream_error(message) then
+                    (provider_name ~= 'openai_siwc' or result.error_category ~= 'http' or
+                        message:match('^SIWC HTTP 5%d%d')) and retryable_stream_error(message) then
                     retry_started_at = now_ms()
                     retry_span = telemetry.start("operation", run_span, {
                         operation = "retry", purpose = "stream_transient_error",
@@ -1450,9 +1455,11 @@ the blocker through request_completion.]]})
             local attempt_span = model_span
             local attempt_done = false
             local stream_factory = stream.stream
+            local siwc_sensitive_values = {}
             if provider_name == "openai_siwc" then
                 stream_factory = function(provider, callback, estimate, options)
-                    return require('agent.openai_siwc_responses').stream(provider, siwc_registry, callback, estimate, options)
+                    return require('agent.openai_siwc_responses').stream(provider, siwc_registry, callback, estimate, options,
+                        siwc_sensitive_values)
                 end
             end
             local parse_response = stream_factory(active, function(result, is_done)
@@ -1503,6 +1510,7 @@ the blocker through request_completion.]]})
                 local credential, err = provider_config.siwc_access(active.account_id)
                 if not credential then stop_run(err, current_msgs, "authentication"); return end
                 headers.Authorization = "Bearer " .. credential.access
+                siwc_sensitive_values[1] = credential.access
             end
             local http_options = {background = opts.background == true}
             if provider_name == "openai_siwc" then

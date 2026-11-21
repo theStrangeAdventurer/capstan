@@ -366,6 +366,14 @@ native output normalizer, persisted history and request replay. Absent phases
 remain absent; invalid phases fail closed rather than being silently discarded.
 Offline tests cover stream snapshots, JSON history restoration and replay.
 
+The SIWC adapter preserves JSON array types while copying native output and
+explicitly marks schema arrays (`annotations`, reasoning `summary`/`content`,
+message `content`, request `input`). Empty arrays must serialize as `[]`, not
+`{}`, on subsequent turns and after history restoration. Legacy empty tables
+in these fields are normalized on replay; non-array annotations fail closed.
+Offline regression tests assert the encoded second-turn request, empty and
+nonempty annotations, copy isolation, and restored history.
+
 Late failures `subscription_sharing_usage_limit_exceeded` and
 `subscription_sharing_usage_unavailable` have distinct `subscription_limit` and
 `usage_unavailable` categories, not protocol errors. The former pauses the run
@@ -378,6 +386,20 @@ retry indefinitely to bypass quota. Maintain existing retry constraints: no
 silent replay after visible output or tool side effects. Partial visible text
 is marked incomplete, not silently promoted to successful persisted history.
 Transport diagnostics and telemetry must reflect the semantic terminal result.
+
+SIWC admission failures preserve the HTTP status and bounded diagnostic fields
+from JSON `error.code`, `error.param`, `error.message`, or top-level `detail`,
+plus a request ID when supplied. Network failures show the native cURL reason
+and numeric code when available, rather than labeling all HTTP failures as
+network errors. Empty, malformed and non-JSON bodies are reported without
+printing raw HTML or arbitrary response fields. Structured streaming failures
+also retain bounded code/parameter/reason/message details alongside recovery
+advice. Before any shared UI/logging path, diagnostics redact the exact access
+token used for that request and apply the existing redaction policy; response
+headers other than the request ID are not exposed. HTTP authentication/policy
+failures are not retried just because diagnostic text contains “timeout” or
+“temporary”. Offline runtime fixtures cover HTTP 400/401/403/503, DNS/TLS/timeout
+causes, request IDs, malformed bodies, token reflection and retry suppression.
 
 ## Concrete implementation sequence (future source changes)
 

@@ -6,7 +6,7 @@ local function log(_, value) logs[#logs+1]=tostring(value) end
 local env = {}
 os.getenv = function(name) return env[name] end -- Never read real credentials.
 package.loaded['agent.state'] = {provider = noop, profile_models = function() return {} end,
-    model_for = noop, model_reasoning_effort = noop}
+    model_for = noop, model_reasoning_effort = noop, profile_reasoning_effort = noop}
 capstan = {version = 'test-version', config = {}, workdir = '.', workspace_root = '.'}
 package.loaded['agent.logging'] = {runtime_log = log, compact = tostring, safe_error = tostring,
     debug = noop, raw_logging_enabled = function() return false end}
@@ -168,6 +168,55 @@ assert(run())
 requests[#requests].callback(nil,true,'connection error fixture-secret')
 assert(not done.ok and done.error_category=='transport')
 assert(not done.error:find('fixture-secret',1,true))
+-- Native transport causes and admission errors survive the full runtime path.
+for _, case in ipairs({
+    {6, 'Could not resolve host'}, {28, 'Timeout was reached'},
+    {60, 'SSL peer certificate cannot be authenticated'},
+}) do
+    assert(run())
+    requests[#requests].callback(nil, true, 'Connection error: ' .. case[2], nil, nil,
+        {curl_code=case[1]})
+    assert(not done.ok and done.error_category == 'transport')
+    assert(done.error:find(case[2], 1, true) and done.error:find('cURL ' .. case[1], 1, true))
+end
+for _, case in ipairs({
+    {401, {detail='Signed identity was not accepted'}, 'Signed identity was not accepted'},
+    {403, {error={code='subscription_sharing_user_not_eligible', param='model',
+        message='Serving region is not permitted; fixture-secret'}}, 'Serving region is not permitted'},
+    {503, {detail='Direct routing is unavailable'}, 'Direct routing is unavailable'},
+    {400, {error={code='subscription_sharing_unsupported_capability', param='tools',
+        message='Unsupported tool'}}, 'param: tools'},
+}) do
+    assert(run())
+    local count = #requests
+    requests[count].callback(nil, true, 'HTTP ' .. case[1], json.encode(case[2]),
+        {['x-request-id']='req_fixture', ['set-cookie']='fixture-secret'},
+        {http_status=case[1], curl_code=0})
+    assert(not done.ok and done.error_category == 'http' and #requests == count)
+    assert(done.error:find('SIWC HTTP ' .. case[1], 1, true) and done.error:find(case[3], 1, true))
+    assert(done.error:find('req_fixture', 1, true) and not done.error:find('fixture-secret', 1, true))
+    if case[2].error then assert(done.error_code == case[2].error.code) end
+end
+for _, body in ipairs({'', '<html>fixture-secret</html>', '{broken'}) do
+    assert(run())
+    requests[#requests].callback(nil, true, 'HTTP 503', body, nil, {http_status=503, curl_code=0})
+    assert(done.error_category == 'http' and done.error:find('No structured error details', 1, true))
+    assert(not done.error:find('fixture-secret', 1, true))
+end
+-- New server diagnostic text must not cause a retry of auth/policy failures.
+capstan.config.agent.max_stream_retries=1
+assert(run())
+local auth_request_count = #requests
+requests[auth_request_count].callback(nil, true, 'HTTP 401', '{"detail":"temporary timeout in permission check"}',
+    nil, {http_status=401, curl_code=0})
+assert(done and not done.ok and #requests == auth_request_count)
+capstan.config.agent.max_stream_retries=0
+assert(run())
+requests[#requests].callback('data: '..json.encode({type='response.failed',response={error={
+    code='subscription_sharing_unsupported_capability',param='tools',message='Tool not supported; fixture-secret'}}})..'\n\n',false)
+requests[#requests].callback(nil,true)
+assert(done and not done.ok and done.error:find('Tool not supported',1,true) and done.error:find('param: tools',1,true))
+assert(not done.error:find('fixture-secret',1,true))
 -- Explicit per-model capability config is the fallback, never catalog guesswork.
 local function effort_run(model, effort, default)
     done=nil
@@ -206,6 +255,28 @@ local before_foreign = #requests
 assert(not runtime.run({provider='openai_siwc', messages=foreign, tools={}, completion_review=false},
     {on_done=function(v) done=v end}))
 assert(not done.ok and done.error:find('not bound', 1, true) and #requests == before_foreign)
+-- The combined picker must expose SIWC failures without inventing fallback rows.
+local picker_runtime = {providers = {openai_siwc = siwc,
+    fixture = {models = {{id = 'other-model'}}}}}
+local picker = dofile('plugins/models.lua')
+models.install_runtime_api(picker_runtime)
+local function check_picker_warning(expected)
+    local items, warning = models.list_all(picker_runtime)
+    assert(warning == expected and #items == 1 and items[1].provider == 'fixture')
+    local rows = picker.autocomplete.fetch({})
+    assert(#rows == 2 and rows[1].text == expected and rows[1].value == '')
+    assert(rows[2].text:find('fixture/other-model', 1, true))
+end
+available = false
+check_picker_warning('SIWC account unavailable; use /connect openai_siwc')
+available = true
+generation = generation + 1 -- Force an uncached authenticated catalog request.
+local original_get = http.get
+http.get = function() return 503, '' end
+check_picker_warning('SIWC model catalog request failed')
+http.get = original_get
+local picker_items, picker_warning = models.list_all(picker_runtime)
+assert(#picker_items == 3 and picker_warning == nil)
 local access_count, request_count=#accesses,#requests
 capstan.runtime_options={isolated=true}
 package.loaded['agent.runtime']=nil

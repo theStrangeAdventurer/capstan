@@ -363,7 +363,9 @@ function M.list_all(runtime)
     for _, provider_name in ipairs(provider_names) do
         local provider = runtime.providers[provider_name]
         local list, err = M.list(runtime, provider_name)
-        if err and provider.catalog_format == 'opencode_go' then warnings[#warnings + 1] = err end
+        if err and (provider_name == 'openai_siwc' or provider.catalog_format == 'opencode_go') then
+            warnings[#warnings + 1] = err
+        end
         list = list or {}
         local seen = {}
         for _, model in ipairs(list) do
