@@ -86,8 +86,9 @@ that value.
 
 ## Constraints
 
-- Skills are loaded once at process startup. Editing a skill requires restarting
-  Capstan before the updated instructions are sent to the model.
+- Skills are rescanned from disk before every top-level agent request and via
+  the `/refresh` command; see [Context refresh](context-refresh.md). A run
+  keeps one consistent skills block for its tool continuations.
 - Built-in gated skill files are exposed from embedded assets at startup.
   User or project skills can still override them by defining the same skill
   directory name.

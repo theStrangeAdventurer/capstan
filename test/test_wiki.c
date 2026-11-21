@@ -244,7 +244,129 @@ static MunitResult test_rejects_invalid_index_arrays(
   return MUNIT_OK;
 }
 
+static MunitResult test_cached_renders_rebuild_only_on_change(
+    const MunitParameter params[], void *data) {
+  (void)params;
+  (void)data;
+
+  char root[256];
+  snprintf(root, sizeof(root), "/tmp/capstan-wiki-cache-%ld", (long)getpid());
+  rmdir(root);
+  make_dir(root);
+  char profile[256];
+  snprintf(profile, sizeof(profile), "%s/profile", root);
+  make_dir(profile);
+  char core[256];
+  snprintf(core, sizeof(core), "%s/core.md", profile);
+  write_file(core, "Owner prefers concise answers.\n");
+  char doc[256];
+  snprintf(doc, sizeof(doc), "%s/plan.md", root);
+  write_file(doc,
+             "---\n"
+             "id: plan\n"
+             "kind: page\n"
+             "title: Plan v1\n"
+             "description: First revision.\n"
+             "---\n"
+             "Body one.\n");
+
+  WikiCache *cache = wiki_cache_create();
+  char *first = wiki_build_prompt_cached(root, cache);
+  munit_assert_not_null(first);
+  munit_assert_true(strstr(first, "Owner prefers concise answers.") != NULL);
+  munit_assert_true(strstr(first, "Title: Plan v1") != NULL);
+  char *first_summary = wiki_build_summary_cached(root, cache);
+  munit_assert_not_null(first_summary);
+  munit_assert_true(strstr(first_summary, "Indexed documents: 1") != NULL);
+
+  /* Unchanged tree: the cached render is returned byte-identical. */
+  char *second = wiki_build_prompt_cached(root, cache);
+  munit_assert_string_equal(second, first);
+  free(second);
+  char *second_summary = wiki_build_summary_cached(root, cache);
+  munit_assert_string_equal(second_summary, first_summary);
+  free(second_summary);
+  free(first);
+  free(first_summary);
+
+  /* A content edit with a new size invalidates both cached renders. */
+  write_file(doc,
+             "---\n"
+             "id: plan\n"
+             "kind: page\n"
+             "title: Plan v2 with a longer description\n"
+             "description: Second revision, longer than the first one.\n"
+             "---\n"
+             "Body two, also longer.\n");
+  char *edited = wiki_build_prompt_cached(root, cache);
+  munit_assert_not_null(edited);
+  munit_assert_true(
+      strstr(edited, "Title: Plan v2 with a longer description") != NULL);
+  munit_assert_true(strstr(edited, "Title: Plan v1") == NULL);
+  free(edited);
+  char *edited_summary = wiki_build_summary_cached(root, cache);
+  munit_assert_true(strstr(edited_summary, "Plan v2 with a longer description") !=
+                    NULL);
+  free(edited_summary);
+
+  /* Newly added and removed files are detected without a restart. */
+  char extra[256];
+  snprintf(extra, sizeof(extra), "%s/extra.md", root);
+  write_file(extra, "---\nid: extra\nkind: page\ntitle: Extra\n---\n");
+  char *grown = wiki_build_prompt_cached(root, cache);
+  munit_assert_true(strstr(grown, "Title: Extra") != NULL);
+  free(grown);
+  unlink(extra);
+  char *shrunk = wiki_build_prompt_cached(root, cache);
+  munit_assert_true(strstr(shrunk, "Title: Extra") == NULL);
+  free(shrunk);
+
+  /* Index files participate in the signature. */
+  char index_dir[256];
+  snprintf(index_dir, sizeof(index_dir), "%s/index", root);
+  make_dir(index_dir);
+  char index_file[256];
+  snprintf(index_file, sizeof(index_file), "%s/docs-cachetest.json", index_dir);
+  write_file(index_file,
+             "{"
+             "\"schema_version\":1,"
+             "\"source_id\":\"docs-cachetest\","
+             "\"source_root\":\"/tmp/source-docs\","
+             "\"entries\":[{"
+             "\"path\":\"guide.md\","
+             "\"id\":\"guide\","
+             "\"kind\":\"source\","
+             "\"title\":\"Guide\","
+             "\"description\":\"External guide metadata.\""
+             "}]"
+             "}");
+  char *with_source = wiki_build_prompt_cached(root, cache);
+  munit_assert_true(strstr(with_source, "Source: docs-cachetest") != NULL);
+  free(with_source);
+  unlink(index_file);
+  char *without_source = wiki_build_prompt_cached(root, cache);
+  munit_assert_true(strstr(without_source, "Source: docs-cachetest") == NULL);
+  free(without_source);
+
+  /* A NULL cache degrades to the uncached builders. */
+  char *uncached = wiki_build_prompt_cached(root, NULL);
+  munit_assert_not_null(uncached);
+  munit_assert_true(strstr(uncached, "# Wiki") != NULL);
+  free(uncached);
+
+  wiki_cache_free(cache);
+  unlink(doc);
+  unlink(core);
+  rmdir(index_dir);
+  rmdir(profile);
+  rmdir(root);
+  return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
+    {"/cached_renders_rebuild_only_on_change",
+     test_cached_renders_rebuild_only_on_change, NULL, NULL,
+     MUNIT_TEST_OPTION_NONE, NULL},
     {"/rejects_invalid_index_arrays", test_rejects_invalid_index_arrays,
      NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL},
     {"/builds_prompt_with_core_and_metadata_only",

@@ -1554,6 +1554,16 @@ function M.run(opts, callbacks)
         ("unowned:" .. tostring(opts))
     opts.workdir = opts.workdir or workspace.configured_workdir()
     opts.workspace_root = opts.workspace_root or workspace.configured_workspace_root()
+    -- Shared roots stay live: rescan skills, wiki and instruction metadata
+    -- before capturing the prompt, so concurrent instances converge without
+    -- restarts. Runs with an explicit prompt (subagents, review) skip it.
+    if opts.system_prompt == nil and _G.capstan and
+        type(_G.capstan.refresh_context) == "function" then
+        local ok, err = pcall(_G.capstan.refresh_context)
+        if not ok then
+            logging.runtime_log("context_refresh", "refresh failed: " .. tostring(err))
+        end
+    end
     opts.system_prompt = opts.system_prompt or _G.system_prompt or ""
     local captured_profile = effective_profile(opts)
     if opts.profile == nil or type(opts.profile) == "table" or profiles.normalize(opts.profile) then

@@ -280,6 +280,7 @@ Feature specs:
 - [Completion review — implementation status](specs/completion-review.md)
 - [Review issues and verdict protocol](specs/issues.md)
 - [Config](specs/config.md)
+- [Context refresh](specs/context-refresh.md)
 - [Embedded runtime assets](specs/embedded-runtime-assets.md)
 - [Focus modes](specs/focus-modes.md)
 - [Hooks](specs/hooks.md)

@@ -1342,7 +1342,8 @@ static int run_embedded_self_test(void) {
   const char *expected[] = {"/file", "/write", "/edit", "/shell", "/fetch",
                             "/logs", "/skills", "/models", "/info", "/mcp",
                             "/plan", "/implement", "/auth",
-                            "/logout", "/connect", "/vcs", "/issues"};
+                            "/logout", "/connect", "/vcs", "/issues",
+                            "/refresh"};
   int ok = 1;
 
   printf("binary: %s\n", APP_BINARY_NAME);

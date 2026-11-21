@@ -255,3 +255,12 @@ Markdown sources into wiki notes, the agent should:
 Skills remain procedures. Wiki documents are knowledge and context.
 
 The wiki reuses the skill discovery idea: the agent sees compact metadata and decides when to load the full document. Unlike skills, wiki metadata is advisory; matching a wiki document does not have priority-zero mandatory semantics.
+
+## Freshness
+
+The wiki index and `profile/core.md` are rescanned before every top-level
+agent request and by the `/refresh` command; another instance's `wiki_ingest`
+or a manual edit becomes visible to running instances without restart. The
+rescan is stat-gated: unchanged trees are not re-read, full rendering runs
+only when files were added, removed or changed. See
+[Context refresh](context-refresh.md).

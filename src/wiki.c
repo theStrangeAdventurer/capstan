@@ -617,12 +617,7 @@ static char *configured_path_or_status(const char *wiki_path, int *ok) {
   return expanded;
 }
 
-char *wiki_build_prompt(const char *wiki_path) {
-  int ok = 0;
-  char *root = configured_path_or_status(wiki_path, &ok);
-  if (!ok)
-    return my_strdup("");
-
+static char *wiki_render_prompt(const char *root) {
   char *core = NULL;
   size_t core_size = 0;
   char core_path[PATH_MAX];
@@ -689,15 +684,22 @@ char *wiki_build_prompt(const char *wiki_path) {
 
   free(core);
   wiki_list_free(&list);
-  free(root);
   return buf ? buf : my_strdup("");
 }
 
-char *wiki_build_summary(const char *wiki_path) {
+char *wiki_build_prompt(const char *wiki_path) {
   int ok = 0;
   char *root = configured_path_or_status(wiki_path, &ok);
-  if (!ok)
-    return root;
+  if (!ok) {
+    free(root);
+    return my_strdup("");
+  }
+  char *prompt = wiki_render_prompt(root);
+  free(root);
+  return prompt;
+}
+
+static char *wiki_render_summary(const char *root) {
   WikiList list = {0};
   collect_docs(&list, root, "");
   collect_index_docs(&list, root);
@@ -734,6 +736,242 @@ char *wiki_build_summary(const char *wiki_path) {
     append_text(&buf, &len, &capacity, item);
   }
   wiki_list_free(&list);
-  free(root);
   return buf ? buf : my_strdup("");
+}
+
+char *wiki_build_summary(const char *wiki_path) {
+  int ok = 0;
+  char *root = configured_path_or_status(wiki_path, &ok);
+  if (!ok)
+    return root;
+  char *summary = wiki_render_summary(root);
+  free(root);
+  return summary;
+}
+
+/* --- stat-based change detection ---------------------------------------
+ * Cached renders stay valid while the scanned file set and every (mtime,
+ * size) pair are unchanged. The probe walk mirrors the render walk with
+ * stat only; full reads, frontmatter/JSON parsing and rendering run only
+ * after a real change. Second-granularity edits that keep the same size
+ * can be missed until any other input changes. */
+
+typedef struct {
+  char *relative_path;
+  long long mtime;
+  long long size;
+} WikiStamp;
+
+typedef struct {
+  WikiStamp *items;
+  size_t count;
+  size_t capacity;
+  int failed;
+} WikiStampList;
+
+struct WikiCache {
+  char *root;
+  WikiStamp *stamps;
+  size_t count;
+  size_t capacity;
+  char *prompt;
+  char *summary;
+};
+
+WikiCache *wiki_cache_create(void) { return calloc(1, sizeof(WikiCache)); }
+
+static void wiki_cache_clear(WikiCache *cache) {
+  free(cache->root);
+  cache->root = NULL;
+  for (size_t i = 0; i < cache->count; i++)
+    free(cache->stamps[i].relative_path);
+  free(cache->stamps);
+  cache->stamps = NULL;
+  cache->count = 0;
+  cache->capacity = 0;
+  free(cache->prompt);
+  cache->prompt = NULL;
+  free(cache->summary);
+  cache->summary = NULL;
+}
+
+void wiki_cache_free(WikiCache *cache) {
+  if (!cache)
+    return;
+  wiki_cache_clear(cache);
+  free(cache);
+}
+
+static void stamp_add(WikiStampList *list, const char *relative_path,
+                      const struct stat *st) {
+  if (list->failed)
+    return;
+  if (list->count == list->capacity) {
+    size_t next = list->capacity ? list->capacity * 2 : 16;
+    WikiStamp *grown = realloc(list->items, next * sizeof(WikiStamp));
+    if (!grown) {
+      list->failed = 1;
+      return;
+    }
+    list->items = grown;
+    list->capacity = next;
+  }
+  char *path = my_strdup(relative_path);
+  if (!path) {
+    list->failed = 1;
+    return;
+  }
+  list->items[list->count].relative_path = path;
+  list->items[list->count].mtime = (long long)st->st_mtime;
+  list->items[list->count].size = (long long)st->st_size;
+  list->count++;
+}
+
+static void stamp_free(WikiStampList *list) {
+  for (size_t i = 0; i < list->count; i++)
+    free(list->items[i].relative_path);
+  free(list->items);
+}
+
+/* Mirrors collect_docs traversal: hidden entries skipped, directories
+ * recursed, regular markdown files stamped (profile/core.md separately). */
+static void collect_doc_stamps(WikiStampList *list, const char *root,
+                               const char *relative_dir) {
+  char current_dir[PATH_MAX];
+  if (relative_dir[0]) {
+    if (!path_join(current_dir, sizeof(current_dir), root, relative_dir))
+      return;
+  } else {
+    snprintf(current_dir, sizeof(current_dir), "%s", root);
+  }
+  DIR *dir = opendir(current_dir);
+  if (!dir)
+    return;
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (entry->d_name[0] == '.')
+      continue;
+    char relative_path[PATH_MAX];
+    if (relative_dir[0]) {
+      if (!path_join(relative_path, sizeof(relative_path), relative_dir,
+                     entry->d_name))
+        continue;
+    } else {
+      snprintf(relative_path, sizeof(relative_path), "%s", entry->d_name);
+    }
+    char full_path[PATH_MAX];
+    if (!path_join(full_path, sizeof(full_path), root, relative_path))
+      continue;
+    struct stat st;
+    if (stat(full_path, &st) != 0)
+      continue;
+    if (S_ISDIR(st.st_mode)) {
+      collect_doc_stamps(list, root, relative_path);
+    } else if (S_ISREG(st.st_mode) && is_markdown_file(entry->d_name) &&
+               strcmp(relative_path, "profile/core.md") != 0) {
+      stamp_add(list, relative_path, &st);
+    }
+  }
+  closedir(dir);
+}
+
+static void collect_wiki_stamps(WikiStampList *list, const char *root) {
+  char core_path[PATH_MAX];
+  if (path_join(core_path, sizeof(core_path), root, "profile/core.md")) {
+    struct stat st;
+    if (stat(core_path, &st) == 0)
+      stamp_add(list, "profile/core.md", &st);
+  }
+  collect_doc_stamps(list, root, "");
+  char index_dir[PATH_MAX];
+  if (path_join(index_dir, sizeof(index_dir), root, "index")) {
+    DIR *dir = opendir(index_dir);
+    if (dir) {
+      struct dirent *entry;
+      while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.' || !is_json_file(entry->d_name))
+          continue;
+        char full_path[PATH_MAX];
+        if (!path_join(full_path, sizeof(full_path), index_dir, entry->d_name))
+          continue;
+        struct stat st;
+        if (stat(full_path, &st) != 0)
+          continue;
+        if (S_ISREG(st.st_mode)) {
+          char relative[PATH_MAX];
+          if (path_join(relative, sizeof(relative), "index", entry->d_name))
+            stamp_add(list, relative, &st);
+        }
+      }
+      closedir(dir);
+    }
+  }
+}
+
+static int stamps_equal(const WikiStampList *probe, const WikiCache *cache) {
+  if (probe->count != cache->count)
+    return 0;
+  for (size_t i = 0; i < probe->count; i++) {
+    if (strcmp(probe->items[i].relative_path, cache->stamps[i].relative_path) !=
+            0 ||
+        probe->items[i].mtime != cache->stamps[i].mtime ||
+        probe->items[i].size != cache->stamps[i].size)
+      return 0;
+  }
+  return 1;
+}
+
+/* Probes the tree with stat only. Returns 1 when the cached renders are still
+ * valid; otherwise adopts the fresh stamps (freeing stale renders). A failed
+ * probe forces a rebuild rather than trusting a partial file set. */
+static int wiki_cache_current(WikiCache *cache, const char *root) {
+  WikiStampList probe = {0};
+  collect_wiki_stamps(&probe, root);
+  if (!probe.failed && cache->root && strcmp(cache->root, root) == 0 &&
+      stamps_equal(&probe, cache)) {
+    stamp_free(&probe);
+    return 1;
+  }
+  wiki_cache_clear(cache);
+  cache->root = my_strdup(root);
+  cache->stamps = probe.items;
+  cache->count = probe.count;
+  cache->capacity = probe.capacity;
+  return 0;
+}
+
+char *wiki_build_prompt_cached(const char *wiki_path, WikiCache *cache) {
+  if (!cache)
+    return wiki_build_prompt(wiki_path);
+  int ok = 0;
+  char *root = configured_path_or_status(wiki_path, &ok);
+  if (!ok) {
+    free(root);
+    return my_strdup("");
+  }
+  if (wiki_cache_current(cache, root) && cache->prompt) {
+    free(root);
+    return my_strdup(cache->prompt);
+  }
+  free(cache->prompt);
+  cache->prompt = wiki_render_prompt(root);
+  free(root);
+  return cache->prompt ? my_strdup(cache->prompt) : my_strdup("");
+}
+
+char *wiki_build_summary_cached(const char *wiki_path, WikiCache *cache) {
+  if (!cache)
+    return wiki_build_summary(wiki_path);
+  int ok = 0;
+  char *root = configured_path_or_status(wiki_path, &ok);
+  if (!ok)
+    return root;
+  if (wiki_cache_current(cache, root) && cache->summary) {
+    free(root);
+    return my_strdup(cache->summary);
+  }
+  free(cache->summary);
+  cache->summary = wiki_render_summary(root);
+  free(root);
+  return cache->summary ? my_strdup(cache->summary) : my_strdup("");
 }

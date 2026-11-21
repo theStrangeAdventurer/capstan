@@ -34,6 +34,14 @@
 
 lua_State *L = NULL;
 
+/* Saved at startup; context refreshes re-render the prompt with the same
+ * feature gating (isolation, disabled wiki) instead of duplicating policy. */
+static PluginsInitOptions g_plugins_init_options = {0};
+
+/* Stat-gated wiki render cache: per-run refreshes skip full re-reads while
+ * the wiki file set is unchanged. */
+static WikiCache *g_wiki_cache;
+
 static int lua_doasset_or_file(lua_State *l, const char *asset_path,
                                const char *override_path) {
   if (override_path && plugins_file_exists(override_path))
@@ -287,8 +295,12 @@ static void load_system_prompt(const PluginsInitOptions *options) {
       wiki_path = default_wiki_path;
     }
   }
-  char *wiki_prompt = disable_wiki ? NULL : wiki_build_prompt(wiki_path);
-  char *wiki_summary = disable_wiki ? NULL : wiki_build_summary(wiki_path);
+  if (!disable_wiki && !g_wiki_cache)
+    g_wiki_cache = wiki_cache_create();
+  char *wiki_prompt =
+      disable_wiki ? NULL : wiki_build_prompt_cached(wiki_path, g_wiki_cache);
+  char *wiki_summary =
+      disable_wiki ? NULL : wiki_build_summary_cached(wiki_path, g_wiki_cache);
 
   char config_dir[512];
   const char *instruction_config_dir =
@@ -629,6 +641,16 @@ static int l_capstan_secure_write_file(lua_State *l) {
   return 1;
 }
 
+/* One canonical re-render of live context metadata: skills, wiki index and
+ * project instructions are re-scanned and the Lua prompt globals replaced,
+ * so shared roots stay current for concurrent instances without restarts. */
+static int l_capstan_refresh_context(lua_State *l) {
+  (void)l;
+  load_system_prompt(&g_plugins_init_options);
+  lua_pushboolean(l, 1);
+  return 1;
+}
+
 static void register_capstan_runtime(const PluginsInitOptions *options) {
   lua_getglobal(L, "capstan");
   if (!lua_istable(L, -1)) {
@@ -674,6 +696,9 @@ static void register_capstan_runtime(const PluginsInitOptions *options) {
 
   lua_pushcfunction(L, l_capstan_secure_write_file);
   lua_setfield(L, -2, "secure_write_file");
+
+  lua_pushcfunction(L, l_capstan_refresh_context);
+  lua_setfield(L, -2, "refresh_context");
 
   lua_newtable(L);
   lua_pushboolean(L, options && options->disable_mcp);
@@ -803,6 +828,7 @@ static void load_capstan_state(void) {
 }
 
 void plugins_init_with_options(const PluginsInitOptions *options) {
+  g_plugins_init_options = options ? *options : (PluginsInitOptions){0};
   telemetry_startup();
   L = luaL_newstate();
   luaL_openlibs(L);
@@ -879,4 +905,6 @@ void plugins_cleanup(void) {
   mcp_cleanup();
   background_work_shutdown();
   http_cleanup();
+  wiki_cache_free(g_wiki_cache);
+  g_wiki_cache = NULL;
 }
