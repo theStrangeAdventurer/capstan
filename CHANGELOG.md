@@ -1,3 +1,16 @@
+# Unreleased
+
+## New Features
+
+### Interface
+- **Inline terminal images** — a transcript line that is only a path to an existing PNG, JPEG, GIF or WebP is rendered with the Kitty graphics protocol (kitty, Ghostty, WezTerm, iTerm2 3.6+), 320-640 px wide and never taller than the pane. The rows are reserved in the line map, so scrolling, selection, copy and mouse hit-testing stay consistent and text below an off-screen picture keeps its place. A band that cannot be placed shows its caption under the picture; unsupported terminals keep plain text. `CAPSTAN_TERMINAL_IMAGES=off|on` overrides detection.
+- **Image copy on click** — clicking a placed image puts its pixels on the system clipboard (osascript image classes on macOS, `wl-copy`/`xclip` on Linux) and the usual popup confirms it.
+- **Clickable transcript links** — web URLs and path-looking tokens are underlined; a click without a drag opens them, and Shift/Ctrl click opens on the press. Web links open in the browser, paths are revealed in the file manager. Words shown as code (inline, fenced, tool status, shell output, diffs) are inert except for http(s) links. Relative paths resolve against the working directory, then the workspace root, and an unopenable target reports a popup instead of failing silently.
+
+### Fixes
+- Reserved image rows advanced the screen row while scrolled out of view, which shrank the visible transcript by one picture height each time a picture left the viewport.
+- A transient popup swallowed the next mouse click; clicks outside it now dismiss it and keep their meaning.
+
 # Capstan v0.4.0
 
 > **Date:** 2026-10-01
