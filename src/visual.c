@@ -8,7 +8,8 @@
 
 static int is_padding_line(int idx) {
     const LineInfo *li = linemap_get(idx);
-    return li && li->role == LINE_PADDING;
+    /* Negative roles are reserved rows: padding and rendered image bands. */
+    return li && li->role < 0;
 }
 
 static const char **g_texts = NULL;
@@ -142,7 +143,7 @@ void visual_set_texts(const char **texts, int count) {
 
 static const char *get_current_line_text(int *out_len) {
     const LineInfo *li = linemap_get(g_visual.cursor_line);
-    if (!li || li->role == LINE_PADDING || !g_texts || li->msg_index >= (size_t)g_texts_count) {
+    if (!li || li->role < 0 || !g_texts || li->msg_index >= (size_t)g_texts_count) {
         *out_len = 0;
         return NULL;
     }
@@ -415,7 +416,7 @@ static int byte_offset_for_col(const char *str, int col) {
 
 int visual_column_at_cell(int line, int cell) {
     const LineInfo *li = linemap_get(line);
-    if (!li || li->role == LINE_PADDING || !g_texts || li->msg_index >= (size_t)g_texts_count)
+    if (!li || li->role < 0 || !g_texts || li->msg_index >= (size_t)g_texts_count)
         return 0;
     return text_cell_to_char(g_texts[li->msg_index] + li->byte_start,
                             (size_t)(li->byte_end - li->byte_start), cell);
@@ -435,7 +436,7 @@ void visual_yank(const char **msgs_texts, int msgs_count) {
 
     for (int line = sl; line <= el; line++) {
         const LineInfo *li = linemap_get(line);
-        if (!li || li->role == LINE_PADDING || li->msg_index >= (size_t)msgs_count)
+        if (!li || li->role < 0 || li->msg_index >= (size_t)msgs_count)
             continue;
 
         const char *text = msgs_texts[li->msg_index];

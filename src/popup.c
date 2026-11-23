@@ -1,4 +1,5 @@
 #include "popup_internal.h"
+#include "links.h"
 #include "tui.h"
 #include "utils.h"
 #include "text_layout.h"
@@ -390,29 +391,12 @@ void popup_render_message(void) {
 
 /* The desktop opener receives one literal argv value, never shell syntax.
  * Reparent it so a browser waiting for exit cannot stall the OAuth listener. */
-static void popup_open_url(const char *url) {
-  pid_t child = fork();
-  if (child == 0) {
-    pid_t opener = fork();
-    if (opener < 0) _exit(1);
-    if (opener > 0) _exit(0);
-    setsid();
-    int fd = open("/dev/null", O_RDWR);
-    if (fd >= 0) {
-      dup2(fd, STDIN_FILENO);
-      dup2(fd, STDOUT_FILENO);
-      dup2(fd, STDERR_FILENO);
-      if (fd > STDERR_FILENO) close(fd);
-    }
-#ifdef __APPLE__
-    execlp("open", "open", url, (char *)NULL);
-#else
-    execlp("xdg-open", "xdg-open", url, (char *)NULL);
-#endif
-    _exit(127);
-  }
-  if (child > 0)
-    while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+int popup_message_contains(int y, int x) {
+  if (!g_msgpopup.win) return 0;
+  int top, left, rows, cols;
+  getbegyx((WINDOW *)g_msgpopup.win, top, left);
+  getmaxyx((WINDOW *)g_msgpopup.win, rows, cols);
+  return y >= top && y < top + rows && x >= left && x < left + cols;
 }
 
 int popup_message_mouse(void) {
@@ -460,7 +444,7 @@ int popup_message_mouse(void) {
   if (moved) {
     if (!getenv("CAPSTAN_DISABLE_CLIPBOARD")) clipboard_write_text(text);
   } else {
-    popup_open_url(text);
+    links_open_text(text, NULL, NULL, 0);
   }
   free(text);
   return 1;

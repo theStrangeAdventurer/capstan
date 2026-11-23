@@ -301,6 +301,8 @@ static int stop_active_stream(void) {
   return 1;
 }
 
+static int g_mouse_press_y = -1, g_mouse_press_x = -1;
+
 static void handle_mouse_event(MEVENT *event) {
   if (event->bstate & REPORT_MOUSE_POSITION) {
     int line, col;
@@ -318,6 +320,30 @@ static void handle_mouse_event(MEVENT *event) {
     return;
   }
   if (tui_handle_tasks_mouse(event->y, event->x, event->bstate)) {
+    g_mouse_selecting_messages = 0;
+    return;
+  }
+  /* A click on a link opens it: with a modifier on the press, and without one on
+   * the release when the press did not turn into a text drag. */
+  if ((event->bstate & BUTTON1_RELEASED) && g_mouse_selecting_messages &&
+      event->y == g_mouse_press_y && event->x == g_mouse_press_x &&
+      tui_handle_link_mouse(event->y, event->x, 1)) {
+    g_mouse_selecting_messages = 0;
+    g_mouse_press_y = g_mouse_press_x = -1;
+    visual_exit_selection();
+    return;
+  }
+  if ((event->bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED)) &&
+      (event->bstate & (BUTTON_SHIFT | BUTTON_CTRL)) &&
+      tui_handle_link_mouse(event->y, event->x,
+          (event->bstate & (BUTTON_SHIFT | BUTTON_CTRL)) != 0)) {
+    g_mouse_selecting_messages = 0;
+    return;
+  }
+  /* Copying happens on the press, before it could start a selection drag. */
+  if ((event->bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED)) &&
+      tui_handle_image_mouse(event->y, event->x,
+          (event->bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED)) != 0)) {
     g_mouse_selecting_messages = 0;
     return;
   }
@@ -356,6 +382,8 @@ static void handle_mouse_event(MEVENT *event) {
   }
 
   if (event->bstate & BUTTON1_PRESSED) {
+    g_mouse_press_y = event->y;
+    g_mouse_press_x = event->x;
     if (mouse_to_visual_position(event, &line, &col)) {
       g_mouse_selecting_messages = 1;
       mode_set(FOCUS_MESSAGES);
@@ -1780,6 +1808,20 @@ int main(int argc, char *argv[]) {
     }
 
     if (popup_is_message_active()) {
+      /* A click outside the toast dismisses it and keeps its meaning. */
+      if (ch == KEY_MOUSE) {
+        MEVENT toast_event;
+        if (getmouse(&toast_event) == OK) {
+          if (popup_message_contains(toast_event.y, toast_event.x))
+            popup_message_handle_key(ch);
+          else {
+            popup_close_message();
+            handle_mouse_event(&toast_event);
+          }
+        }
+        render_all();
+        continue;
+      }
       popup_message_handle_key(ch);
       render_all();
       continue;

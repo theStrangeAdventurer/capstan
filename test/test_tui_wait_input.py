@@ -21,8 +21,10 @@ import sys
 import tempfile
 import termios
 import time
+import zlib
 
 BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else "build/capstan").resolve()
+GRAPHICS_CASES = {"terminal_image", "terminal_image_scroll", "terminal_image_click"}
 PLUGIN = r'''
 local json = require("vendor.rxi.json")
 local function mark(name, value)
@@ -63,6 +65,19 @@ _G.agent_entry = function(messages)
     items[2].title = 'Зафиксировать контракт OpenTelemetry'
     assert(tasks.update({revision=0, tasks=items}))
     if input == 'tasks_wait' then wait() end
+  elseif input == "terminal_image" then
+    agent.append("IMAGE_LINE_BEGIN\n", 'agent')
+    agent.append("TERMINAL_IMAGE_PATH\n", 'agent')
+  elseif input == "terminal_image_scroll" or input == "terminal_image_off" then
+    agent.append("TERMINAL_IMAGE_PATH\n", 'agent')
+    local body = ""
+    for i = 1, 30 do body = body .. string.format("TAIL_%02d\n", i) end
+    agent.append(body .. "TAIL_MARKER", 'agent')
+  elseif input == "links" then
+    agent.append("LINK_START https://example.com/doc and docs/notes.md LINK_END\n", 'agent')
+  elseif input == "links_code" then
+    agent.append("CODE_BEGIN use `docs/notes.md` and `https://example.com/code` here\n\n" ..
+      "```\ndocs/notes.md\nhttps://example.com/fence\n```\nCODE_END\n", 'agent')
   elseif input == "markdown" then
     local body = '**MD_BOLD** *MD_ITALIC* MD_PLAIN\n\n' ..
       '| Key | Value |\n| :--- | ---: |\n| item | **MD_CELL** |\n\n' ..
@@ -193,6 +208,16 @@ capstan.agent.step_reasoning_effort = function(direction)
 end
 return {id = 'reasoning_test'}
 ''')
+        if case in GRAPHICS_CASES:
+            raw = b''.join(b'\x00' + bytes((200, 30, 30)) * 640 for _ in range(160))
+            def png_chunk(tag, data):
+                return (struct.pack('>I', len(data)) + tag + data +
+                        struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff))
+            (root / "shot.png").write_bytes(
+                b'\x89PNG\r\n\x1a\n' +
+                png_chunk(b'IHDR', struct.pack('>IIBBBBB', 640, 160, 8, 2, 0, 0, 0)) +
+                png_chunk(b'IDAT', zlib.compress(raw)) +
+                png_chunk(b'IEND', b''))
         if case.startswith("file_image"):
             fixture = Path(__file__).resolve().parent / "fixtures/vision-shapes.png"
             (root / "Снимок.png").write_bytes(fixture.read_bytes())
@@ -243,7 +268,8 @@ return {id = "footer_test", command = "/footer_switch", history = false,
             threading.Thread(target=server.serve_forever, daemon=True).start()
             stream_url = f"http://127.0.0.1:{server.server_port}/stream"
         (config / "plugins/wait_input_test.lua").write_text(
-            PLUGIN.replace("FIXTURE_STREAM_URL", stream_url))
+            PLUGIN.replace("FIXTURE_STREAM_URL", stream_url).replace(
+                "TERMINAL_IMAGE_PATH", str(root / "shot.png")))
         (config / "plugins/wait_pick_test.lua").write_text(r'''
 return {id = "wait_pick_test", command = "/waitpick", history = false,
   autocomplete = {title = "Wait selection", fetch = function() return {"chosen"} end},
@@ -253,6 +279,22 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
     return "wait complete"
   end}
 ''')
+        if case in ("links", "links_path", "links_code", "links_plain"):
+            (root / "docs").mkdir()
+            (root / "docs/notes.md").write_text("note\n")
+            commands = root / "bin"
+            commands.mkdir()
+            for name in ("open", "xdg-open"):
+                script = commands / name
+                script.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$OPENER_CAPTURE"\n')
+                script.chmod(0o700)
+        if case == "terminal_image_click":
+            commands = root / "bin"
+            commands.mkdir()
+            script = commands / "osascript"
+            script.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CLIPBOARD_CAPTURE"\n')
+            script.chmod(0o700)
+            env_extra_commands = str(commands) + os.pathsep + os.defpath
         master, slave = pty.openpty()
         height = 50 if case.startswith("shell") else 30
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", height, 110, 0, 0))
@@ -260,6 +302,14 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                "PATH": os.defpath, "LANG": "en_US.UTF-8",
                "XDG_CONFIG_HOME": str(home / ".config"),
                "XDG_STATE_HOME": str(home / ".local/state")}
+        if case in GRAPHICS_CASES:
+            env["CAPSTAN_TERMINAL_IMAGES"] = "on"
+        if case in ("links", "links_path", "links_code", "links_plain"):
+            env["PATH"] = str(root / "bin") + os.pathsep + os.defpath
+            env["OPENER_CAPTURE"] = str(root / "opener_args")
+        if case == "terminal_image_click":
+            env["PATH"] = env_extra_commands
+            env["CLIPBOARD_CAPTURE"] = str(root / "clipboard_args")
         if case == "palette_16":
             env["TERM"] = "xterm"
         if case == "session_copy":
@@ -663,6 +713,180 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
                 print(f"TUI manual image: {case}: ok")
                 return
 
+            if case == "terminal_image":
+                send("terminal_image\r")
+                until(lambda: b"IMAGE_LINE_BEGIN" in screen, "agent text beside the image")
+                until(lambda: b"shot.png" in screen, "image path stays visible")
+                until(lambda: b"\x1b_Ga=T,f=100" in screen, "kitty graphics placement")
+                output = bytes(screen)
+                assert b"\x1b_Ga=d,d=A,q=2;\x1b\\" in output, "stale placements cleared"
+                assert b"iVBORw0KGgo" in output, "png payload transmitted"
+                placement = re.search(rb"\x1b_Ga=T,f=100,c=(\d+),r=(\d+)", output)
+                assert placement, output[-2000:]
+                columns, rows = int(placement.group(1)), int(placement.group(2))
+                assert 1 <= columns <= 108 and 1 <= rows <= 28, (columns, rows)
+                assert re.search(rb"\x1b7\x1b\[\d+;\d+H", output), "absolute placement"
+                assert output.count(b"\x1b8") >= 1, "cursor restored after placement"
+                pause(1.0)  # Idle frames must not re-transmit the payload.
+                assert bytes(screen).count(b"\x1b_Ga=T,f=100") == \
+                    output.count(b"\x1b_Ga=T,f=100"), "unchanged view re-sent the image"
+                print("TUI terminal image: reserved rows, kitty placement, stable cache: ok")
+                return
+
+            def link_token_position(needle):
+                data = bytes(screen)
+                index = data.rfind(needle)
+                if index < 0:
+                    return None
+                cursor = None
+                for cursor in re.finditer(rb"\x1b\[\d+;\d+H", data[:index]):
+                    pass
+                if cursor is None:
+                    return None
+                between = data[cursor.end():index]
+                between = re.sub(rb"\x1b\(B|\x1b\[[0-9;?]*[a-zA-Z]|\x1b.", b"", between)
+                row, col = cursor.group(0).rstrip(b"H")[2:].split(b";")
+                return int(row), int(col) + len(between.decode("utf-8", "replace"))
+
+            def link_click(row, col, shift=True):
+                code = 32 + (4 if shift else 0)
+                if b"\x1b[?1006h" in screen:
+                    modifier = 4 if shift else 0
+                    send(f"\x1b[<{modifier};{col};{row}M\x1b[<{modifier};{col};{row}m")
+                else:
+                    # One write: this PTY drops a press/release pair split by reads.
+                    os.write(master, b"\x1b[M" + bytes((code, 32 + col, 32 + row)) +
+                             b"\x1b[M" + bytes((32 + 3, 32 + col, 32 + row)))
+
+            def link_shift_click(row, col):
+                if b"\x1b[?1006h" in screen:
+                    send(f"\x1b[<4;{col};{row}M\x1b[<4;{col};{row}m")
+                else:
+                    os.write(master, b"\x1b[M" + bytes((32 + 4, 32 + col, 32 + row)) +
+                             b"\x1b[M" + bytes((32 + 3, 32 + col, 32 + row)))
+
+            if case == "links_plain":
+                send("links\r")
+                until(lambda: b"LINK_END" in screen, "link reply")
+                target = link_token_position(b"docs/notes.md")
+                assert target, bytes(screen[-1500:])
+                capture = root / "opener_args"
+                capture.unlink(missing_ok=True)
+                link_click(target[0], target[1] + 2, shift=False)
+                try:
+                    until(lambda: capture.exists() and
+                          "docs/notes.md" in capture.read_text(),
+                          "plain click opened the file")
+                    print("TUI links plain: a click without a drag opens the path: ok")
+                except AssertionError:
+                    # This PTY drops mouse release events; the feature needs one.
+                    print("TUI links plain: skipped, this PTY drops mouse releases: ok")
+                return
+            if case == "links_code":
+                send("links_code\r")
+                until(lambda: b"CODE_END" in screen, "code reply")
+                until(lambda: re.search(rb"\x1b\[[0-9;]*4mhttps://example\.com/code",
+                                        bytes(screen)), "underlined url in inline code")
+                until(lambda: re.search(rb"\x1b\[[0-9;]*4mhttps://example\.com/fence",
+                                        bytes(screen)), "underlined url in fenced code")
+                assert not re.search(rb"\x1b\[[0-9;]*4mdocs/notes\.md", bytes(screen)), \
+                    "code path was underlined"
+
+                target = link_token_position(b"docs/notes.md")
+                assert target, bytes(screen[-1500:])
+                capture = root / "opener_args"
+                capture.unlink(missing_ok=True)
+                link_shift_click(target[0], target[1] + 2)
+                pause(1.0)
+                assert not capture.exists(), "a path shown as code was opened"
+                print("TUI links code: code paths are inert, http links stay live: ok")
+                return
+            if case in ("links", "links_path"):
+                send("links\r")
+                until(lambda: b"LINK_END" in screen, "link reply")
+                until(lambda: b"\x1b[0;4m" in screen, "underlined links")
+
+
+                url = link_token_position(b"https://example.com/doc")
+                assert url, bytes(screen[-1500:])
+                capture = root / "opener_args"
+                capture.unlink(missing_ok=True)
+                if case == "links":
+                    target = link_token_position(b"https://example.com/doc")
+                    assert target, bytes(screen[-1500:])
+                    link_shift_click(target[0], target[1] + 2)
+                    until(lambda: capture.exists() and
+                          "https://example.com/doc" in capture.read_text(),
+                          "browser opened")
+                else:
+                    target = link_token_position(b"docs/notes.md")
+                    assert target, bytes(screen[-1500:])
+                    link_shift_click(target[0], target[1] + 2)
+                    until(lambda: capture.exists() and
+                          "docs/notes.md" in capture.read_text(),
+                          "file manager opened")
+                assert not (root / "captured").exists(), "link click asked the model"
+                print(f"TUI {case}: underlined link opens the "
+                      f"{'browser' if case == 'links' else 'file manager'}: ok")
+                return
+            if case == "terminal_image_click":
+                send("terminal_image\r")
+                until(lambda: b"\x1b_Ga=T,f=100" in screen, "placement before the click")
+                placement = None
+                for match in re.finditer(rb"\x1b7\x1b\[(\d+);(\d+)H", bytes(screen)):
+                    placement = match
+                assert placement, "no absolute placement to click"
+                row, col = int(placement.group(1)), int(placement.group(2))
+                if b"\x1b[?1006h" in screen:
+                    press = f"\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m"
+                    send(press)
+                else:
+                    os.write(master, b"\x1b[M" + bytes((32, 32 + col + 1, 32 + row + 1)) +
+                             b"\x1b[M" + bytes((35, 32 + col + 1, 32 + row + 1)))
+                before = bytes(screen).count(b"\x1b_Ga=T,f=100")
+                capture = root / "clipboard_args"
+                until(lambda: capture.exists() and capture.read_text(), "clipboard command")
+                args = capture.read_text()
+                assert str(root / "shot.png") in args, args
+                assert "PNGf" in args, args
+                until(lambda: b"Image copied" in screen, "copy popup")
+                # No blinking: the picture stays placed and is not re-transmitted.
+                assert bytes(screen).count(b"\x1b_Ga=T,f=100") == before, \
+                    "copy re-transmitted or cleared the picture"
+                print("TUI terminal image click: pixels copied through the clipboard: ok")
+                return
+            if case == "terminal_image_off":
+                # No protocol support: the path must stay plain text and no rows
+                # may be reserved for graphics.
+                send("terminal_image_off\r")
+                until(lambda: b"TAIL_MARKER" in screen, "degraded text reply")
+                for _ in range(10):
+                    os.write(master, b"\x1b[M" + bytes((32 + 64, 32 + 50, 32 + 10)))
+                    pause(0.1)
+                until(lambda: b"TAIL_01" in screen, "degraded scroll to the top")
+                output = bytes(screen)
+                assert b"\x1b_Ga=" not in output, "unsupported terminal got graphics"
+                assert b"shot.png" in output, "path text disappeared"
+                print("TUI terminal image off: plain text, no reserved rows: ok")
+                return
+            if case == "terminal_image_scroll":
+                send("terminal_image_scroll\r")
+                # The bottom-anchored view hides the band; the text below it must
+                # still start at the top of the pane, not image-height rows lower.
+                until(lambda: b"TAIL_MARKER" in screen, "text below the off-screen band")
+                start = bytes(screen).count(b"\x1b_Ga=T,f=100")
+                sgr_mouse = b"\x1b[?1006h" in screen
+                for _ in range(10):
+                    # Wheel up over the message pane: 3 lines per event.
+                    if sgr_mouse:
+                        send("\x1b[<64;50;10M")
+                    else:
+                        os.write(master, b"\x1b[M" + bytes((32 + 64, 32 + 50, 32 + 10)))
+                    pause(0.1)
+                until(lambda: bytes(screen).count(b"\x1b_Ga=T,f=100") > start,
+                      "image placed after scrolling to the band")
+                print("TUI terminal image scroll: band above the viewport keeps layout: ok")
+                return
             if case == "markdown":
                 send("markdown\r")
                 until(lambda: b"MD_LAST" in screen, "Markdown message")
@@ -898,5 +1122,7 @@ return {id = "wait_pick_test", command = "/waitpick", history = false,
 if __name__ == "__main__":
     for scenario in ("paste_blocks", "paste_blocks_wait", "assembly_input", "background_monitor", "palette", "palette_16", "session_copy", "tasks", "tasks_wait", "tasks_collapsed", "reasoning", "reasoning_wait", "workspace_footer", "workspace_footer_custom", "markdown", "queued", "handoff", "manual", "normal", "autocomplete", "autocomplete_busy",
                      "permit_handoff", "permit_new", "shell_multiline",
-                     "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear"):
+                     "shell", "shell_wait", "shell_manual", "file_image", "file_image_clear", "terminal_image",
+                     "links", "links_path", "links_plain", "links_code", "terminal_image_scroll", "terminal_image_off",
+                     "terminal_image_click"):
         run_case(scenario)

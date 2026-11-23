@@ -40,6 +40,8 @@ void popup_show_message_ms(const char *title, const char *text, int is_error,
 int  popup_is_message_active(void);
 void popup_close_message(void);
 int  popup_message_handle_key(int ch);
+/* 1 when the screen cell belongs to the message toast window. */
+int  popup_message_contains(int y, int x);
 void popup_render_message(void);
 
 #endif

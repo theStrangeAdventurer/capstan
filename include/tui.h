@@ -49,6 +49,10 @@ int tui_handle_session_mouse(int y, int x, unsigned long buttons);
 int tui_handle_tasks_key(int ch);
 int tui_handle_tasks_mouse(int y, int x, unsigned long buttons);
 int tui_handle_shell_mouse(int y, int x, int activate);
+/* Copies the clicked image band; 1 when the click belonged to an image. */
+int tui_handle_image_mouse(int y, int x, int activate);
+/* Opens the clicked link span; 1 when the click belonged to a link. */
+int tui_handle_link_mouse(int y, int x, int modifier);
 void tui_paste_clipboard_image(void);
 int tui_handle_input_shortcut(int ch);
 int tui_handle_reasoning_shortcut(int ch);

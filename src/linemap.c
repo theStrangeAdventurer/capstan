@@ -3,9 +3,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Blank rows between the path text and the picture. */
+#define LINEMAP_IMAGE_SPACERS 2
+
 static LineInfo *g_lines = NULL;
 static int g_count = 0;
 static int g_capacity = 0;
+static LinemapImageRows g_image_rows = NULL;
+
+void linemap_set_image_rows(LinemapImageRows rows) { g_image_rows = rows; }
 
 static void linemap_append(size_t msg_index, int byte_start, int byte_end,
                            int char_count, int role) {
@@ -54,6 +60,24 @@ void linemap_build(void **msgs_data, int *msgs_roles, int msgs_count,
                 int char_count = count_line_chars(line_start, line_end);
 
                 linemap_append(i, byte_start, byte_end, char_count, role);
+
+                /* Reserve rows below a whole-line image path, so the image band
+                 * is part of the same line map that drives drawing and scrolling. */
+                if (g_image_rows && byte_end > byte_start &&
+                    (*line_end == '\n' || *line_end == '\0')) {
+                    int rows = g_image_rows(line_start, (size_t)(line_end - line_start));
+                    /* Layout per image: spacer rows, the picture band, then one row
+                     * for the caption under the picture. */
+                    if (rows > 0) {
+                        for (int row = 0; row < LINEMAP_IMAGE_SPACERS; row++)
+                            linemap_append(i, byte_start, byte_end, 0, LINE_IMAGE);
+                        for (int row = 0; row < rows; row++)
+                            linemap_append(i, byte_start, byte_end,
+                                           row == 0 ? rows : 0, LINE_IMAGE);
+                        linemap_append(i, byte_start, byte_end, LINE_IMAGE_CAPTION,
+                                       LINE_IMAGE);
+                    }
+                }
 
                 if (*line_end == '\n') {
                     p = line_end + 1;

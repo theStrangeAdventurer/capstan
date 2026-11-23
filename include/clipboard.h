@@ -22,6 +22,9 @@ unsigned char *clipboard_read_image(size_t *size, char *error,
                                     size_t error_size);
 /* Returns success only after the clipboard command exits successfully. */
 int clipboard_write_text(const char *text);
+/* Copies the image file's pixels as a clipboard image. 0 when the platform
+ * cannot place this MIME type, so the caller can fall back to the path text. */
+int clipboard_copy_image(const char *path, const char *mime);
 char *clipboard_base64_encode(const unsigned char *data, size_t size);
 
 #endif

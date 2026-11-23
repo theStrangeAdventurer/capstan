@@ -15,6 +15,7 @@
 #include "http.h"
 #include "input.h"
 #include "linemap.h"
+#include "links.h"
 #include "markdown.h"
 #include "text_layout.h"
 #include "mode.h"
@@ -26,6 +27,7 @@
 #include "scroll.h"
 #include "session_manager.h"
 #include "start_screen.h"
+#include "terminal_image.h"
 #include "tool_status.h"
 #include "tui_layout.h"
 #include "utils.h"
@@ -34,6 +36,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+/* Spans per message projection; a transcript message rarely holds more. */
+#define LINK_SPAN_LIMIT 64
 
 volatile sig_atomic_t g_tui_exit_signal;
 BufferedPluginResults g_buffered_results = {0};
@@ -735,6 +740,8 @@ static void render_start_screen(WINDOW *win, int height, int width) {
 typedef struct {
   MarkdownView markdown;
   const char *text;
+  LinkSpan *links;
+  int link_count;
 } MessageView;
 static MessageView *g_views;
 static size_t g_view_count;
@@ -777,8 +784,15 @@ static int build_message_views(Messages *messages, int width) {
       views[i].text = views[i].markdown.text;
     else
       views[i].text = text; /* Preserve raw output on allocation/parser failure. */
+    views[i].links = calloc(LINK_SPAN_LIMIT, sizeof(LinkSpan));
+    if (views[i].links)
+      views[i].link_count = links_scan(views[i].text, strlen(views[i].text),
+                                       views[i].links, LINK_SPAN_LIMIT);
   }
-  for (size_t i = 0; i < g_view_count; i++) markdown_free(&g_views[i].markdown);
+  for (size_t i = 0; i < g_view_count; i++) {
+    markdown_free(&g_views[i].markdown);
+    free(g_views[i].links);
+  }
   free(g_views);
   g_views = views;
   g_view_count = messages->size;
@@ -805,7 +819,7 @@ int tui_handle_shell_mouse(int y, int x, int activate) {
     return 0;
   const LineInfo *line = linemap_get(g_shell_top + y - MARGIN - tui_session_height());
   Messages *messages = get_messages();
-  if (!line || line->role == LINE_PADDING || line->msg_index >= messages->size)
+  if (!line || line->role < 0 || line->msg_index >= messages->size)
     return 0;
   Message *message = messages->items[line->msg_index];
   ShellOutput *output = &message->shell_output;
@@ -879,6 +893,133 @@ static void present_frame(int synchronized) {
   }
 }
 
+/* Image bands: linemap reserves the rows, the placement below the frame reuses
+ * the same helper so reservation and drawing always agree. */
+#define TUI_IMAGE_LIMIT 8
+#define TUI_IMAGE_PATH_MAX 1024
+
+static int g_image_text_w = 1;
+static int g_image_max_rows = 1;
+static int g_image_cell_w = 8, g_image_cell_h = 16;
+
+typedef struct {
+  TerminalImage items[TUI_IMAGE_LIMIT];
+  char paths[TUI_IMAGE_LIMIT][TUI_IMAGE_PATH_MAX];
+  int count;
+} ImageOverlays;
+
+static ImageOverlays g_images;
+
+static int image_line_box(const char *line, size_t length, char *path,
+                          size_t path_cap, TerminalImageBox *box) {
+  int width, height;
+  if (!terminal_image_enabled()) return 0;
+  if (!terminal_image_line(line, length, path, path_cap)) return 0;
+  if (!terminal_image_size(path, &width, &height)) return 0;
+  return terminal_image_box(g_image_text_w, g_image_max_rows, g_image_cell_w,
+                            g_image_cell_h, width, height, box);
+}
+
+static int message_image_rows(const char *line, size_t length) {
+  char path[TUI_IMAGE_PATH_MAX];
+  TerminalImageBox box;
+  return image_line_box(line, length, path, sizeof(path), &box) ? box.rows : 0;
+}
+
+/* A band that cannot be placed (partially scrolled, terminal too small) still
+ * says what is there instead of leaving a silent hole. */
+static void render_image_caption(WINDOW *win, int row, const char *line,
+                                size_t length, int width) {
+  char path[TUI_IMAGE_PATH_MAX];
+  int image_w = 0, image_h = 0;
+  if (!terminal_image_line(line, length, path, sizeof(path))) return;
+  if (!terminal_image_size(path, &image_w, &image_h)) return;
+  const char *name = strrchr(path, '/');
+  name = name ? name + 1 : path;
+  char caption[256];
+  snprintf(caption, sizeof(caption), "\xe2\x96\xa3 %s %dx%d", name, image_w, image_h);
+  wattrset(win, dim_gray_attr());
+  mvwadd_clipped(win, row, MSG_PAD_H, caption, width);
+  wattrset(win, A_NORMAL);
+}
+
+static void queue_message_image(const char *line, size_t length, int row, int col) {
+  if (g_images.count >= TUI_IMAGE_LIMIT) return;
+  char path[TUI_IMAGE_PATH_MAX];
+  TerminalImageBox box;
+  if (!image_line_box(line, length, path, sizeof(path), &box)) return;
+  int index = g_images.count++;
+  memcpy(g_images.paths[index], path, strlen(path) + 1);
+  g_images.items[index].row = row;
+  g_images.items[index].col = col;
+  g_images.items[index].path = g_images.paths[index];
+  g_images.items[index].box = box;
+}
+
+/* A click on a placed image copies its pixels; the path is the fallback when the
+ * platform cannot put this format on the clipboard. Only the popup confirms it:
+ * flashing the band hides the picture the user just clicked. */
+int tui_handle_image_mouse(int y, int x, int activate) {
+  if (!activate || popup_is_active() || session_overlay_visible())
+    return 0;
+  int row = y + 1, col = x + 1;
+  for (int i = 0; i < g_images.count; i++) {
+    const TerminalImage *item = &g_images.items[i];
+    if (row < item->row || row >= item->row + item->box.rows || col < item->col ||
+        col >= item->col + item->box.cols)
+      continue;
+    char mime[64];
+    int pixels = terminal_image_mime(item->path, mime, sizeof(mime)) &&
+                 clipboard_copy_image(item->path, mime);
+    int copied = pixels || clipboard_write_text(item->path);
+    popup_show_message_ms("Copied", pixels ? "Image copied" : copied ? "Path copied" :
+                          "Copy failed", 0, 2000);
+    return 1;
+  }
+  return 0;
+}
+
+/* Shift/Ctrl click on an underlined span opens it: web links in the browser,
+ * file paths in the file manager. Wrapped links resolve through the line map, so
+ * any of their physical rows hit the same span. */
+int tui_handle_link_mouse(int y, int x, int modifier) {
+  if (!modifier || popup_is_active() || session_overlay_visible() || !g_views_valid)
+    return 0;
+  int line_index = g_shell_top + y - MARGIN - tui_session_height();
+  const LineInfo *line = linemap_get(line_index);
+  Messages *messages = get_messages();
+  if (!line || line->role < 0 || line->msg_index >= messages->size) return 0;
+  const MessageView *view = &g_views[line->msg_index];
+  if (!view->links || view->link_count <= 0 || !view->text) return 0;
+  int col = x - MARGIN - MSG_PAD_H;
+  if (col < 0) return 0;
+  const char *start = view->text + line->byte_start;
+  size_t span = (size_t)(line->byte_end - line->byte_start);
+  int chars = text_cell_to_char(start, span, col);
+  size_t offset = (size_t)line->byte_start + (size_t)count_visible_chars_to(start, chars);
+  int link = links_find(view->links, view->link_count, offset);
+  if (link < 0) return 0;
+  int literal = view->markdown.text != NULL &&
+                (view->markdown.styles[offset] & MARKDOWN_LITERAL) != 0;
+  if (!links_allowed(&view->links[link], literal)) return 0;
+
+  const LinkSpan *target = &view->links[link];
+  const char *text = view->text + target->start;
+  size_t length = target->end - target->start;
+  char error[64];
+  error[0] = '\0';
+  /* Success needs no toast: the browser or file manager is the feedback, and a
+   * transient popup would swallow the next click. Failures stay visible. */
+  int opened = links_open(text, length, target->kind, app_workdir(), error,
+                          sizeof(error));
+  if (!opened && target->kind == LINK_PATH && text[0] != '/' && text[0] != '~')
+    opened = links_open(text, length, target->kind, app_workspace_root(), error,
+                        sizeof(error));
+  if (!opened)
+    popup_show_message_ms("Link", error[0] ? error : "Cannot open", 1, 4000);
+  return 1;
+}
+
 void render_all(void) {
   terminal_title_update(session_manager_active_title());
   report_agent_state();
@@ -903,38 +1044,52 @@ void render_all(void) {
   msg_h -= g_tasks.height;
 
   g_shell_height = 0;
-  if (msg_h < 1 || inner_w < 3 || text_w < 1)
+  if (msg_h < 1 || inner_w < 3 || text_w < 1) {
+    terminal_image_draw(stdout, NULL, 0);
     return;
+  }
 
   WINDOW *msg_win = newwin(msg_h, inner_w, msg_y, margin);
-  if (!msg_win)
+  if (!msg_win) {
+    terminal_image_draw(stdout, NULL, 0);
     return;
+  }
   werase(msg_win);
 
   Messages *msgs = get_messages();
 
   size_t count = msgs->size ? msgs->size : 1;
   int *line_counts = calloc(count, sizeof(int));
+  int *line_first = calloc(count, sizeof(int));
   const char **msgs_texts = malloc(count * sizeof(const char *));
   int *msgs_roles = malloc(count * sizeof(int));
-  if (!line_counts || !msgs_texts || !msgs_roles || !build_message_views(msgs, text_w)) {
+  if (!line_counts || !line_first || !msgs_texts || !msgs_roles ||
+      !build_message_views(msgs, text_w)) {
     free(line_counts);
+    free(line_first);
     free(msgs_texts);
     free(msgs_roles);
     delwin(msg_win);
+    terminal_image_draw(stdout, NULL, 0);
     return;
   }
   for (size_t i = 0; i < msgs->size; i++) {
     msgs_texts[i] = g_views[i].text;
     msgs_roles[i] = msgs->items[i]->role;
   }
+  terminal_image_cell_size(&g_image_cell_w, &g_image_cell_h);
+  g_image_text_w = text_w;
+  g_image_max_rows = msg_h > 4 ? msg_h - 4 : 1;
+  linemap_set_image_rows(message_image_rows);
   linemap_build(NULL, msgs_roles, (int)msgs->size, msgs_texts, text_w);
   visual_set_texts(msgs_texts, (int)msgs->size);
   free(msgs_roles);
   int total_lines = linemap_count();
   for (int line = 0; line < total_lines; line++) {
     const LineInfo *info = linemap_get(line);
-    if (info->role != LINE_PADDING) line_counts[info->msg_index]++;
+    if (info->role == LINE_PADDING) continue;
+    if (line_counts[info->msg_index] == 0) line_first[info->msg_index] = line;
+    line_counts[info->msg_index]++;
   }
   scroll_update_content(total_lines, msg_h);
   if (g_shell_anchor_top >= 0) {
@@ -985,6 +1140,7 @@ void render_all(void) {
 
   int global_line = 0;
   int win_row = 0;
+  g_images.count = 0;
 
   if (msgs->size == 0) {
     /* Begin timing even in layouts that do not display the wordmark. */
@@ -1016,12 +1172,36 @@ void render_all(void) {
       wattrset(msg_win, A_NORMAL);
 
     const char *display_text = msgs_texts[i];
-    const char *p = display_text;
     int diff_state = 0;
-    const char *logical_line_start = p;
+    int image_band_placed = 0;
+    const char *logical_line_start = display_text;
     int in_tool_status_block = 0;
     for (int l = 0; l < line_counts[i]; l++) {
-      const char *line_end = p + text_line_length(p, text_w);
+      const LineInfo *info = linemap_get(line_first[i] + l);
+      if (!info) break;
+      const char *p = display_text + info->byte_start;
+      const char *line_end = display_text + info->byte_end;
+      if (info->role == LINE_IMAGE) {
+        /* Reserved rows for a rendered image; escape output follows the frame. */
+        if (info->char_count > 0)
+          image_band_placed = win_row + info->char_count <= msg_h;
+        if (global_line >= top_line && win_row < msg_h) {
+          mvwhline(msg_win, win_row, 0, ' ', inner_w);
+          if (info->char_count > 0 && image_band_placed)
+            queue_message_image(p, (size_t)(info->byte_end - info->byte_start),
+                                msg_y + win_row + 1, margin + MSG_PAD_H + 1);
+          /* The caption belongs below the picture, never over it. */
+          else if (info->char_count == LINE_IMAGE_CAPTION && !image_band_placed)
+            render_image_caption(msg_win, win_row, p,
+                                 (size_t)(info->byte_end - info->byte_start), text_w);
+          win_row++;
+        }
+        global_line++;
+        continue;
+      }
+      logical_line_start = p;
+      while (logical_line_start > display_text && logical_line_start[-1] != '\n')
+        logical_line_start--;
 
       int current_diff_state = diff_state;
       int next_diff_state = diff_state;
@@ -1076,16 +1256,26 @@ void render_all(void) {
         if (msg->role == MSG_REVIEW && logical_line_start == display_text)
           wattrset(msg_win, COLOR_PAIR(14));
         int base_attrs = getattrs(msg_win);
+        const LinkSpan *links = g_views[i].links;
+        int link_count = g_views[i].link_count;
         for (const char *run = p; run < line_end;) {
           size_t offset = (size_t)(run - display_text);
           int style = md->text ? md->styles[offset] : 0;
+          int link = links_find(links, link_count, offset);
           const char *end = run + 1;
-          while (end < line_end && (!md->text || md->styles[end - display_text] == style)) end++;
+          while (end < line_end &&
+                 (!md->text || md->styles[end - display_text] == style) &&
+                 links_find(links, link_count, (size_t)(end - display_text)) == link)
+            end++;
           int attrs = base_attrs;
           if (!is_shell_output && !is_tool_status) {
             if (style & MARKDOWN_BOLD) attrs = (attrs & ~A_DIM) | A_BOLD;
             if (style & MARKDOWN_ITALIC) attrs |= A_ITALIC;
           }
+          /* Links stay underlined: terminals cannot report a held Shift. Code
+           * spans only advertise web links, never paths. */
+          if (link >= 0 && links_allowed(&links[link], (style & MARKDOWN_LITERAL) != 0))
+            attrs |= A_UNDERLINE;
           wattrset(msg_win, attrs);
           waddnstr(msg_win, run, (int)(end - run));
           run = end;
@@ -1142,11 +1332,6 @@ void render_all(void) {
         in_tool_status_block = 0;
       }
 
-      if (*line_end == '\n') {
-        line_end++;
-        logical_line_start = line_end;
-      }
-      p = line_end;
       diff_state = next_diff_state;
       global_line++;
     }
@@ -1170,6 +1355,7 @@ void render_all(void) {
   }
 
   free(line_counts);
+  free(line_first);
 
   if (visual_cursor_visible()) {
     int vc_line, vc_col;
@@ -1177,7 +1363,7 @@ void render_all(void) {
     int vis_row = vc_line - top_line;
     if (vis_row >= 0 && vis_row < msg_h) {
       const LineInfo *line = linemap_get(vc_line);
-      if (line && line->role != LINE_PADDING) {
+      if (line && line->role >= 0) {
         const char *text = msgs_texts[line->msg_index] + line->byte_start;
         int cell = text_char_to_cell(text, (size_t)(line->byte_end - line->byte_start), vc_col);
         if (cell < text_w) mvwchgat(msg_win, vis_row, cell + MSG_PAD_H, 1,
@@ -1271,6 +1457,7 @@ void render_all(void) {
   if (!input_win) {
     wnoutrefresh(msg_win);
     present_frame(msgs->size == 0);
+    terminal_image_draw(stdout, NULL, 0);
     delwin(msg_win);
     return;
   }
@@ -1424,6 +1611,10 @@ void render_all(void) {
   popup_render_message();
   popup_render();
   present_frame(msgs->size == 0);
+  /* Overlays and popups own the same cells; do not paint over them. */
+  int image_count = (popup_is_active() || popup_is_message_active() ||
+                     session_overlay_visible()) ? 0 : g_images.count;
+  terminal_image_draw(stdout, g_images.items, image_count);
 
   delwin(msg_win);
   delwin(input_win);

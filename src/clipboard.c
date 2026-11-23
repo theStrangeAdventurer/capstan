@@ -10,12 +10,20 @@
 #include <time.h>
 #include <unistd.h>
 
-static int write_text_command(FILE *input, char *const argv[]) {
-  rewind(input);
+/* Runs a clipboard command with optional stdin data and no terminal output. */
+static int run_command(FILE *input, char *const argv[]) {
   pid_t pid = fork();
   if (pid < 0) return 0;
   if (pid == 0) {
-    if (dup2(fileno(input), STDIN_FILENO) < 0) _exit(127);
+    if (input) {
+      if (dup2(fileno(input), STDIN_FILENO) < 0) _exit(127);
+    } else {
+      int null_in = open("/dev/null", O_RDONLY);
+      if (null_in >= 0) {
+        dup2(null_in, STDIN_FILENO);
+        close(null_in);
+      }
+    }
     int fd = open("/dev/null", O_WRONLY);
     if (fd >= 0) {
       dup2(fd, STDOUT_FILENO);
@@ -29,6 +37,42 @@ static int write_text_command(FILE *input, char *const argv[]) {
   pid_t result;
   do { result = waitpid(pid, &status, 0); } while (result < 0 && errno == EINTR);
   return result == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static int write_text_command(FILE *input, char *const argv[]) {
+  rewind(input);
+  return run_command(input, argv);
+}
+
+int clipboard_copy_image(const char *path, const char *mime) {
+  if (!path || !*path || !mime || !*mime) return 0;
+#ifdef __APPLE__
+  /* AppleScript reads known image classes only; unknown formats fall back. */
+  const char *image_class = !strcmp(mime, "image/png")    ? "PNGf"
+                            : !strcmp(mime, "image/jpeg") ? "JPEG"
+                            : !strcmp(mime, "image/gif")  ? "GIFf"
+                                                          : NULL;
+  if (!image_class) return 0;
+  char statement[256];
+  snprintf(statement, sizeof(statement),
+           "set the clipboard to (read (POSIX file (item 1 of argv)) as \"%s\")",
+           image_class);
+  char *const command[] = {"osascript", "-e", "on run argv", "-e", statement,
+                           "-e", "end run", (char *)path, NULL};
+  return run_command(NULL, command);
+#else
+  if (getenv("WAYLAND_DISPLAY")) {
+    FILE *input = fopen(path, "rb");
+    if (!input) return 0;
+    char *const wayland[] = {"wl-copy", "--type", (char *)mime, NULL};
+    int ok = run_command(input, wayland);
+    fclose(input);
+    if (ok) return 1;
+  }
+  char *const xclip[] = {"xclip", "-selection", "clipboard", "-t", (char *)mime,
+                         "-i", (char *)path, NULL};
+  return run_command(NULL, xclip);
+#endif
 }
 
 int clipboard_write_text(const char *text) {
