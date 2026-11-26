@@ -51,6 +51,88 @@ machine-specific.
 - **Persistent local context.** Workspace sessions, input history, runtime logs,
   and the optional Markdown Wiki stay inspectable on disk.
 
+## Subscriptions
+
+Capstan can run on a **coding subscription** instead of a metered API key. Two
+subscription routes are built in, and `/connect` offers exactly these two in its
+picker:
+
+| Route | Provider ID | What you need | Credential handling |
+|---|---|---|---|
+| OpenCode Go | `opencode_go` | Personal API key created in the OpenCode Console with Go enabled | `/connect` → **OpenCode Go**, or `OPENCODE_GO_API_KEY` |
+| ChatGPT / Codex | `openai_siwc` | Active ChatGPT plan, browser for **Continue with ChatGPT** | `/connect openai_siwc`, then open the shown URL |
+
+Everything below is optional: DeepSeek, OpenRouter, Ollama and other
+OpenAI-compatible endpoints keep working with plain API keys, and existing
+environment- or config-based credentials stay valid.
+
+### OpenCode Go
+
+OpenCode Go is a subscription plan for open coding models; plans and limits are
+listed on the [OpenCode Go page](https://opencode.ai/docs/console/go).
+
+1. Create a personal API key in the [OpenCode Console](https://opencode.ai/console/go)
+   with Go enabled.
+2. Run `capstan` and `/connect`, choose **OpenCode Go**, and paste the key into
+   the masked prompt — or call `/connect opencode_go` directly.
+3. Pick a model with `/models`, or run headless:
+
+   ```sh
+   capstan run --provider opencode_go --model deepseek-v4-pro --prompt "Reply with exactly: ok"
+   ```
+
+Inference goes to the Go text endpoint
+(`https://opencode.ai/inference/go/openai/v1/chat/completions`) and never
+switches to another billing endpoint. Because Go is session-accounted, Capstan
+sends a stable `x-opencode-session` per run (inherited by children and background
+work) plus a `User-Agent` identifying Capstan. Model metadata comes from the
+public Go catalog, so `/models` shows Go models with their context limits and
+reasoning efforts without manual configuration. Your Go account limits, regional
+and privacy restrictions, and Console Extra Usage settings still apply; Capstan
+neither enables nor changes them. For automation, `OPENCODE_GO_API_KEY` or
+`providers.opencode_go.api_key` remain supported. See
+[OpenCode Go](specs/opencode-go.md) and the
+[Go model documentation](https://opencode.ai/docs/console/go.md#models).
+
+### ChatGPT / Codex (Sign in with ChatGPT)
+
+Subscription-backed access uses OpenAI's official **Sign in with ChatGPT** flow
+and the public Responses API — what your ChatGPT plan already covers, as listed
+in [ChatGPT plans](https://chatgpt.com/pricing) and described on
+[Codex in ChatGPT](https://chatgpt.com/codex). No ChatGPT `backend-api`
+endpoint, private OAuth client or partner key is involved.
+
+1. Run `/connect openai_siwc` in the interactive TUI.
+2. Open the displayed **Continue with ChatGPT** URL in your browser and approve
+   the sign-in. The callback listener binds to `127.0.0.1` only, so this needs a
+   local browser session; remote/SSH sign-in is not supported yet.
+3. `/models` lists the models visible to that account; then use Capstan normally.
+4. `/auth` shows saved accounts, `/connect openai_siwc <account-id>` reauthorizes
+   one of them, and `/logout openai_siwc [account-id]` revokes when possible and
+   clears local tokens.
+
+Headless runs reuse a saved connection with `--provider openai_siwc`; CLI
+sign-in itself is not implemented. This route is a **preview**: text and local
+function tools only, attachments are rejected rather than silently dropped,
+sign-in expires after five minutes, explicit reasoning effort requires configured
+`providers.openai_siwc.reasoning_efforts`, and an unconfirmed remote revocation is
+reported as such. The private `openai_codex` plugin is not migrated, aliased or
+removed. See [OpenAI Codex via SIWC](specs/openai-codex.md).
+
+### Where subscription credentials live
+
+`/connect` writes into Capstan's managed store — normally
+`~/.local/state/capstan/credentials/state.json` (or beneath `XDG_STATE_HOME`),
+directory `0700`, files `0600`, with a lock file and atomic replace. It is
+versioned JSON, **not encrypted**, so keep it out of shared backups and
+repositories. Keys are never read from argv, model context, chat history, logs,
+telemetry or shell children; entering a key through the masked prompt cannot
+submit on a pasted newline; `/logout` removes managed credentials and reports
+environment/config values it cannot delete. If an environment variable is set
+for a provider, it keeps precedence on later launches and Capstan warns that it
+will override the saved key. See [Connect](specs/connect.md) for the full
+contract.
+
 ## Quick Start
 
 ### Install a prebuilt binary
@@ -85,6 +167,9 @@ DeepSeek is the built-in default:
 export DEEPSEEK_API_KEY=...
 capstan
 ```
+
+Prefer a subscription over a metered API key? See [Subscriptions](#subscriptions)
+for OpenCode Go and Sign in with ChatGPT.
 
 OpenRouter:
 
