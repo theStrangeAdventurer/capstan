@@ -936,7 +936,9 @@ static void render_image_caption(WINDOW *win, int row, const char *line,
   if (!terminal_image_size(path, &image_w, &image_h)) return;
   const char *name = strrchr(path, '/');
   name = name ? name + 1 : path;
-  char caption[256];
+  /* Sized so a full-length path plus the dimensions cannot truncate: GCC's
+   * -Werror=format-truncation rejects a smaller buffer. */
+  char caption[TUI_IMAGE_PATH_MAX + 32];
   snprintf(caption, sizeof(caption), "\xe2\x96\xa3 %s %dx%d", name, image_w, image_h);
   wattrset(win, dim_gray_attr());
   mvwadd_clipped(win, row, MSG_PAD_H, caption, width);
